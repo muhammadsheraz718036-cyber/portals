@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
-type Field = { name: string; label: string; type: string; required: boolean; options?: string[] };
+type Field = { name: string; label: string; type: string; required: boolean; repeatable?: boolean; options?: string[] };
 
 interface ApprovalType {
   id: string;
@@ -113,10 +113,16 @@ export function AdminApprovalTypes() {
                       {field.type === "select" && (
                         <Input className="col-span-2 text-sm" placeholder="Options (comma separated)" value={field.options?.join(", ") || ""} onChange={e => updateField(idx, { options: e.target.value.split(",").map(s => s.trim()) })} />
                       )}
-                      <label className="flex items-center gap-1.5 col-span-2">
-                        <Checkbox checked={field.required} onCheckedChange={c => updateField(idx, { required: !!c })} />
-                        <span className="text-xs text-muted-foreground">Required</span>
-                      </label>
+                      <div className="col-span-2 flex gap-4">
+                        <label className="flex items-center gap-1.5">
+                          <Checkbox checked={field.required} onCheckedChange={c => updateField(idx, { required: !!c })} />
+                          <span className="text-xs text-muted-foreground">Required</span>
+                        </label>
+                        <label className="flex items-center gap-1.5">
+                          <Checkbox checked={field.repeatable ?? false} onCheckedChange={c => updateField(idx, { repeatable: !!c })} />
+                          <span className="text-xs text-muted-foreground">Repeatable (Line Items)</span>
+                        </label>
+                      </div>
                     </div>
                     <Button variant="ghost" size="sm" onClick={() => removeField(idx)} className="text-destructive hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
                   </div>
@@ -140,7 +146,11 @@ export function AdminApprovalTypes() {
                   <p className="text-xs text-muted-foreground">{type.description}</p>
                   <div className="flex flex-wrap gap-1 mt-2">
                     {type.fields.map(f => (
-                      <Badge key={f.name} variant="outline" className="text-[10px]">{f.label} ({f.type}){f.required ? " *" : ""}</Badge>
+                      <Badge key={f.name} variant="outline" className="text-[10px]">
+                        {f.label} ({f.type})
+                        {f.required ? " *" : ""}
+                        {f.repeatable ? " [Line Items]" : ""}
+                      </Badge>
                     ))}
                   </div>
                 </div>

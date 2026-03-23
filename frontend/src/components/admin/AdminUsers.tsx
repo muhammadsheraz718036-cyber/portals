@@ -203,13 +203,6 @@ export function AdminUsers() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-between rounded-lg border p-3">
-                <div>
-                  <p className="text-sm font-medium">Admin Access</p>
-                  <p className="text-xs text-muted-foreground">Full system access</p>
-                </div>
-                <Switch checked={isAdmin} onCheckedChange={setIsAdmin} />
-              </div>
               {editUser && (
                 <div className="flex items-center justify-between rounded-lg border p-3">
                   <div>

@@ -22,5 +22,6 @@ export type ApprovalFormField = {
   label: string;
   type: string;
   required: boolean;
+  repeatable?: boolean; // Indicates this field supports multiple entries/items
   options?: string[];
 };

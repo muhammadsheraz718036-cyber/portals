@@ -9,6 +9,19 @@ import { requireAuth, requireAdmin, type AuthedRequest } from "../middleware/aut
 
 export const apiRouter = Router();
 
+// Helper function to log audit events
+async function logAudit(userId: string, userName: string, action: string, target: string, details?: string | null) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (user_id, user_name, action, target, details) VALUES ($1, $2, $3, $4, $5)`,
+      [userId, userName, action, target, details ?? null],
+    );
+  } catch (err) {
+    // Log audit errors to console but don't fail the request
+    console.error("Failed to log audit event:", err);
+  }
+}
+
 // --- Public ---
 
 apiRouter.get(
@@ -193,12 +206,22 @@ apiRouter.get(
 apiRouter.post(
   "/departments",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z.object({ name: z.string().min(1), head_name: z.string().nullable().optional() }).parse(req.body);
     const { rows } = await pool.query(
       `INSERT INTO departments (name, head_name) VALUES ($1, $2) RETURNING *`,
       [body.name.trim(), body.head_name ?? null],
     );
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "CREATE",
+      "Department",
+      `Created department: ${body.name}`,
+    );
+    
     res.status(201).json(rows[0]);
   }),
 );
@@ -206,7 +229,7 @@ apiRouter.post(
 apiRouter.patch(
   "/departments/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z.object({ name: z.string().min(1).optional(), head_name: z.string().nullable().optional() }).parse(req.body);
     const parts: string[] = [];
     const vals: unknown[] = [];
@@ -227,6 +250,20 @@ apiRouter.patch(
       vals,
     );
     if (rows.length === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    const changes: string[] = [];
+    if (body.name !== undefined) changes.push(`name: "${body.name}"`);
+    if (body.head_name !== undefined) changes.push(`head_name: "${body.head_name}"`);
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Department",
+      `Updated department ${rows[0].name}: ${changes.join(", ")}`,
+    );
+    
     res.json(rows[0]);
   }),
 );
@@ -234,9 +271,26 @@ apiRouter.patch(
 apiRouter.delete(
   "/departments/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Get department name for audit logging
+    const { rows: dept } = await pool.query(
+      `SELECT name FROM departments WHERE id = $1`,
+      [req.params.id],
+    );
+    const deptName = dept[0]?.name || "Unknown";
+    
     const r = await pool.query(`DELETE FROM departments WHERE id = $1`, [req.params.id]);
     if (r.rowCount === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Department",
+      `Deleted department: ${deptName}`,
+    );
+    
     res.status(204).end();
   }),
 );
@@ -254,7 +308,7 @@ apiRouter.get(
 apiRouter.post(
   "/roles",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z
       .object({
         name: z.string().min(1),
@@ -266,6 +320,16 @@ apiRouter.post(
       `INSERT INTO roles (name, description, permissions) VALUES ($1, $2, $3) RETURNING *`,
       [body.name.trim(), body.description ?? "", body.permissions],
     );
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "CREATE",
+      "Role",
+      `Created role: ${body.name}`,
+    );
+    
     res.status(201).json(rows[0]);
   }),
 );
@@ -273,7 +337,7 @@ apiRouter.post(
 apiRouter.patch(
   "/roles/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z
       .object({
         name: z.string().min(1).optional(),
@@ -301,6 +365,21 @@ apiRouter.patch(
     vals.push(req.params.id);
     const { rows } = await pool.query(`UPDATE roles SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`, vals);
     if (rows.length === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    const changes: string[] = [];
+    if (body.name !== undefined) changes.push(`name: "${body.name}"`);
+    if (body.description !== undefined) changes.push(`description: "${body.description}"`);
+    if (body.permissions !== undefined) changes.push(`permissions updated`);
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Role",
+      `Updated role ${rows[0].name}: ${changes.join(", ")}`,
+    );
+    
     res.json(rows[0]);
   }),
 );
@@ -308,9 +387,26 @@ apiRouter.patch(
 apiRouter.delete(
   "/roles/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Get role name for audit logging
+    const { rows: role } = await pool.query(
+      `SELECT name FROM roles WHERE id = $1`,
+      [req.params.id],
+    );
+    const roleName = role[0]?.name || "Unknown";
+    
     const r = await pool.query(`DELETE FROM roles WHERE id = $1`, [req.params.id]);
     if (r.rowCount === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Role",
+      `Deleted role: ${roleName}`,
+    );
+    
     res.status(204).end();
   }),
 );
@@ -340,6 +436,16 @@ apiRouter.post(
       `INSERT INTO approval_types (name, description, fields, created_by) VALUES ($1, $2, $3::jsonb, $4) RETURNING *`,
       [body.name.trim(), body.description ?? "", JSON.stringify(body.fields), req.auth!.userId],
     );
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "CREATE",
+      "Approval Type",
+      `Created approval type: ${body.name}`,
+    );
+    
     res.status(201).json(rows[0]);
   }),
 );
@@ -347,7 +453,7 @@ apiRouter.post(
 apiRouter.patch(
   "/approval-types/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z
       .object({
         name: z.string().min(1).optional(),
@@ -375,6 +481,21 @@ apiRouter.patch(
     vals.push(req.params.id);
     const { rows } = await pool.query(`UPDATE approval_types SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`, vals);
     if (rows.length === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    const changes: string[] = [];
+    if (body.name !== undefined) changes.push(`name: "${body.name}"`);
+    if (body.description !== undefined) changes.push(`description: "${body.description}"`);
+    if (body.fields !== undefined) changes.push(`fields updated`);
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Approval Type",
+      `Updated approval type ${rows[0].name}: ${changes.join(", ")}`,
+    );
+    
     res.json(rows[0]);
   }),
 );
@@ -382,9 +503,26 @@ apiRouter.patch(
 apiRouter.delete(
   "/approval-types/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Get approval type name for audit logging
+    const { rows: approvalType } = await pool.query(
+      `SELECT name FROM approval_types WHERE id = $1`,
+      [req.params.id],
+    );
+    const approvalTypeName = approvalType[0]?.name || "Unknown";
+    
     const r = await pool.query(`DELETE FROM approval_types WHERE id = $1`, [req.params.id]);
     if (r.rowCount === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Approval Type",
+      `Deleted approval type: ${approvalTypeName}`,
+    );
+    
     res.status(204).end();
   }),
 );
@@ -414,6 +552,16 @@ apiRouter.post(
       `INSERT INTO approval_chains (name, approval_type_id, steps, created_by) VALUES ($1, $2, $3::jsonb, $4) RETURNING *`,
       [body.name.trim(), body.approval_type_id, JSON.stringify(body.steps), req.auth!.userId],
     );
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "CREATE",
+      "Approval Chain",
+      `Created approval chain: ${body.name}`,
+    );
+    
     res.status(201).json(rows[0]);
   }),
 );
@@ -421,7 +569,7 @@ apiRouter.post(
 apiRouter.patch(
   "/approval-chains/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = z
       .object({
         name: z.string().min(1).optional(),
@@ -449,6 +597,21 @@ apiRouter.patch(
     vals.push(req.params.id);
     const { rows } = await pool.query(`UPDATE approval_chains SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`, vals);
     if (rows.length === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    const changes: string[] = [];
+    if (body.name !== undefined) changes.push(`name: "${body.name}"`);
+    if (body.approval_type_id !== undefined) changes.push(`approval_type_id updated`);
+    if (body.steps !== undefined) changes.push(`steps updated`);
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Approval Chain",
+      `Updated approval chain ${rows[0].name}: ${changes.join(", ")}`,
+    );
+    
     res.json(rows[0]);
   }),
 );
@@ -456,9 +619,26 @@ apiRouter.patch(
 apiRouter.delete(
   "/approval-chains/:id",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Get approval chain name for audit logging
+    const { rows: approvalChain } = await pool.query(
+      `SELECT name FROM approval_chains WHERE id = $1`,
+      [req.params.id],
+    );
+    const approvalChainName = approvalChain[0]?.name || "Unknown";
+    
     const r = await pool.query(`DELETE FROM approval_chains WHERE id = $1`, [req.params.id]);
     if (r.rowCount === 0) throw new HttpError(404, "Not found");
+    
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Approval Chain",
+      `Deleted approval chain: ${approvalChainName}`,
+    );
+    
     res.status(204).end();
   }),
 );
@@ -534,6 +714,16 @@ apiRouter.post(
       );
       await client.query("COMMIT");
       const profile = await loadProfileById(id);
+      
+      // Log audit event
+      await logAudit(
+        req.auth!.userId,
+        req.profile!.full_name,
+        "CREATE",
+        "User",
+        `Created user: ${body.email} (${body.full_name})`,
+      );
+      
       res.status(201).json({ id, email: body.email.toLowerCase(), profile });
     } catch (e: unknown) {
       await client.query("ROLLBACK");
@@ -554,7 +744,7 @@ const adminPasswordBody = z.object({
 apiRouter.patch(
   "/admin/users/:userId/password",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = adminPasswordBody.parse(req.body);
     const newHash = await hashPassword(body.new_password);
     const r = await pool.query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`, [
@@ -562,6 +752,22 @@ apiRouter.patch(
       req.params.userId,
     ]);
     if (r.rowCount === 0) throw new HttpError(404, "User not found");
+    
+    // Log audit event
+    const { rows: targetUser } = await pool.query(
+      `SELECT full_name FROM profiles WHERE id = $1`,
+      [req.params.userId],
+    );
+    const targetName = targetUser[0]?.full_name || "Unknown";
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "User",
+      `Reset password for user: ${targetName}`,
+    );
+    
     res.json({ success: true });
   }),
 );
@@ -577,7 +783,7 @@ const updateUserBody = z.object({
 apiRouter.patch(
   "/admin/users/:userId",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const body = updateUserBody.parse(req.body);
     const updates: string[] = [];
     const values: unknown[] = [];
@@ -621,6 +827,24 @@ apiRouter.patch(
     );
 
     if (r.rowCount === 0) throw new HttpError(404, "User not found");
+    
+    // Log audit event
+    const targetUser = r.rows[0];
+    const changes: string[] = [];
+    if (body.full_name !== undefined) changes.push(`full_name: "${body.full_name}"`);
+    if (body.department_id !== undefined) changes.push(`department_id: "${body.department_id}"`);
+    if (body.role_id !== undefined) changes.push(`role_id: "${body.role_id}"`);
+    if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
+    if (body.is_active !== undefined) changes.push(`is_active: ${body.is_active}`);
+    
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "User",
+      `Updated user ${targetUser.full_name}: ${changes.join(", ")}`,
+    );
+    
     res.json({ profile: r.rows[0] });
   }),
 );
@@ -628,10 +852,17 @@ apiRouter.patch(
 apiRouter.delete(
   "/admin/users/:userId",
   requireAdmin,
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: AuthedRequest, res) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // Get user info before deletion for audit logging
+      const { rows: targetUser } = await client.query(
+        `SELECT full_name FROM profiles WHERE id = $1`,
+        [req.params.userId],
+      );
+      const targetName = targetUser[0]?.full_name || "Unknown";
+      
       // Delete approval actions where user acted
       await client.query(`DELETE FROM approval_actions WHERE acted_by = $1`, [req.params.userId]);
       // Delete approval requests initiated by user
@@ -644,6 +875,16 @@ apiRouter.delete(
       // Delete user account
       await client.query(`DELETE FROM users WHERE id = $1`, [req.params.userId]);
       await client.query("COMMIT");
+      
+      // Log audit event
+      await logAudit(
+        req.auth!.userId,
+        req.profile!.full_name,
+        "DELETE",
+        "User",
+        `Deleted user: ${targetName}`,
+      );
+      
       res.json({ success: true });
     } catch (e) {
       await client.query("ROLLBACK");
@@ -807,6 +1048,16 @@ apiRouter.post(
         body.status,
       ],
     );
+    
+    // Log audit event
+    await logAudit(
+      uid,
+      req.profile!.full_name,
+      "CREATE",
+      "Approval Request",
+      `Created approval request: ${rows[0].request_number}`,
+    );
+    
     res.status(201).json(rows[0]);
   }),
 );
@@ -905,6 +1156,15 @@ apiRouter.post(
       `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
       [requestId],
     );
+    
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "APPROVE",
+      "Approval Request",
+      `Approved request: ${updatedRequests[0].request_number}`,
+    );
 
     res.json({ request: updatedRequests[0], actions: updatedActions });
   }),
@@ -982,6 +1242,15 @@ apiRouter.post(
       `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
       [requestId],
     );
+    
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "REJECT",
+      "Approval Request",
+      `Rejected request: ${updatedRequests[0].request_number}`,
+    );
 
     res.json({ request: updatedRequests[0], actions: updatedActions });
   }),
@@ -1055,6 +1324,15 @@ apiRouter.post(
       `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
       [requestId],
     );
+    
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "REQUEST_CHANGES",
+      "Approval Request",
+      `Requested changes on request: ${updatedRequests[0].request_number}`,
+    );
 
     res.json({ request: updatedRequests[0], actions: updatedActions });
   }),
@@ -1106,6 +1384,15 @@ apiRouter.patch(
     const { rows: updatedActions } = await pool.query(
       `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
       [requestId],
+    );
+    
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Approval Request",
+      `Updated request: ${updatedRequests[0].request_number}`,
     );
 
     res.json({ request: updatedRequests[0], actions: updatedActions });

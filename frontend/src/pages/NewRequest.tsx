@@ -8,7 +8,9 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { RichTextEditor } from "@/components/RichTextEditor";
+import { FormFieldInput } from "@/components/FormFieldInput";
+import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
+// import { RichTextEditor } from "@/components/RichTextEditor";
 import type { ApprovalFormField } from "@/lib/constants";
 
 type ChainStep = { order: number; roleName: string; action: string };
@@ -31,7 +33,9 @@ export default function NewRequest() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const [selectedType, setSelectedType] = useState<string>("");
-  const [editorContent, setEditorContent] = useState<string>("");
+  // const [editorContent, setEditorContent] = useState<string>("");
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [items, setItems] = useState<LineItem[]>([]);
   const [types, setTypes] = useState<ApprovalTypeRow[]>([]);
   const [chainsByType, setChainsByType] = useState<Record<string, ChainRow[]>>({});
   const [loading, setLoading] = useState(true);
@@ -90,15 +94,39 @@ export default function NewRequest() {
   const chainList = selectedType ? chainsByType[selectedType] ?? [] : [];
   const chain = chainList[0];
 
+  // Separate repeatable fields (line items) from regular form fields
+  const regularFields = approvalType?.fields.filter((f) => !f.repeatable) ?? [];
+  const repeatableFields = approvalType?.fields.filter((f) => f.repeatable) ?? [];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedType || !chain) {
       toast.error("Select a request type with a configured approval chain.");
       return;
     }
-    if (!editorContent || editorContent === "<p></p>") {
-      toast.error("Please fill in the request content.");
+
+    // Validate required regular fields
+    const missingRegularFields = regularFields.filter(
+      (field) => field.required && (!formValues[field.name] || formValues[field.name].trim() === ""),
+    );
+    if (missingRegularFields.length > 0) {
+      toast.error(`Please fill in required fields: ${missingRegularFields.map((f) => f.label).join(", ")}`);
       return;
+    }
+
+    // Validate required repeatable fields in items
+    if (repeatableFields.some((f) => f.required)) {
+      for (const item of items) {
+        const missingItemFields = repeatableFields.filter(
+          (field) => field.required && (!item[field.name] || String(item[field.name]).trim() === ""),
+        );
+        if (missingItemFields.length > 0) {
+          toast.error(
+            `Please fill in required fields in all line items: ${missingItemFields.map((f) => f.label).join(", ")}`,
+          );
+          return;
+        }
+      }
     }
 
     setSubmitting(true);
@@ -116,7 +144,11 @@ export default function NewRequest() {
         approval_type_id: selectedType,
         approval_chain_id: chain.id,
         department_id: profile?.department_id ?? null,
-        form_data: { content: editorContent } as Record<string, unknown>,
+        form_data: {
+          ...formValues,
+          items: items,
+          // content: editorContent, // Rich text editor content (commented out)
+        } as Record<string, unknown>,
         current_step: 1,
         total_steps: Math.max(totalSteps, 1),
         status: totalSteps > 0 ? "in_progress" : "pending",
@@ -160,7 +192,9 @@ export default function NewRequest() {
               value={selectedType}
               onValueChange={(v) => {
                 setSelectedType(v);
-                setEditorContent("");
+                setFormValues({});
+                setItems([]);
+                // setEditorContent("");
               }}
             >
               <SelectTrigger>
@@ -182,38 +216,54 @@ export default function NewRequest() {
           <>
             <Card className="border">
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Request Content</CardTitle>
+                <CardTitle className="text-base">Request Details</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-6">
                 {approvalType.description && (
                   <div className="bg-muted/50 border rounded-md p-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Instructions</p>
                     <p className="text-sm text-foreground">{approvalType.description}</p>
                   </div>
                 )}
-                {approvalType.fields.length > 0 && (
-                  <div className="bg-primary/5 border border-primary/20 rounded-md p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-primary mb-2">Required Information</p>
-                    <ul className="text-sm space-y-1 list-disc list-inside text-foreground">
-                      {approvalType.fields.map((field) => (
-                        <li key={field.name}>
-                          <span className="font-medium">{field.label}</span>
-                          {field.required && <span className="text-destructive ml-1">*</span>}
-                          {field.type === "select" && field.options?.length ? (
-                            <span className="text-muted-foreground ml-1">(Options: {field.options.join(", ")})</span>
-                          ) : null}
-                        </li>
+
+                {/* Form Fields */}
+                {regularFields.length > 0 && (
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-foreground">Request Information</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {regularFields.map((field) => (
+                        <div key={field.name}>
+                          <FormFieldInput
+                            field={field}
+                            value={formValues[field.name] ?? ""}
+                            onChange={(value) => setFormValues((prev) => ({ ...prev, [field.name]: value }))}
+                          />
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
-                <RichTextEditor
-                  content={editorContent}
-                  onChange={setEditorContent}
-                  placeholder="Compose your request here..."
-                />
+
+                {/* Rich Text Editor - Commented Out */}
+                {/* 
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Additional Details</h3>
+                  <RichTextEditor
+                    content={editorContent}
+                    onChange={setEditorContent}
+                    placeholder="Compose your request here..."
+                  />
+                </div>
+                */}
               </CardContent>
             </Card>
+
+            {/* Line Items Manager */}
+            <LineItemsManager 
+              items={items} 
+              onItemsChange={setItems}
+              repeatableFields={repeatableFields}
+            />
 
             {chain ? (
               <Card className="border">
@@ -229,7 +279,7 @@ export default function NewRequest() {
                         </div>
                         <div>
                           <span className="font-medium">{step.roleName}</span>
-                          <span className="text-muted-foreground ml-2">— {step.action}</span>
+                          <span className="text-muted-foreground ml-2">{step.action? "-" : step.action}</span>
                         </div>
                       </div>
                     ))}

@@ -251,9 +251,13 @@ export default function RequestDetail() {
     ? (request!.approval_types!.fields as unknown as ApprovalFormField[])
     : [];
 
+  const regularFields = fields.filter((f) => !f.repeatable);
+  const repeatableFields = fields.filter((f) => f.repeatable);
+
   const formData = (request?.form_data as Record<string, unknown>) ?? {};
+  const items = Array.isArray(formData.items) ? formData.items : [];
   const richContent = typeof formData.content === "string" ? formData.content : null;
-  const formEntries = richContent ? [] : Object.entries(formData);
+  const formEntries = Object.entries(formData).filter(([key]) => key !== "items" && key !== "content");
 
   if (loading) {
     return (
@@ -322,33 +326,72 @@ export default function RequestDetail() {
 
           <Card className="border no-print">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">{richContent ? "Request Content" : "Form Data"}</CardTitle>
+              <CardTitle className="text-base">Form Data</CardTitle>
             </CardHeader>
             <CardContent>
-              {richContent ? (
-                <div
-                  className="prose prose-sm max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
-                  dangerouslySetInnerHTML={{ __html: richContent }}
-                />
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                  {formEntries.map(([key, value]) => {
-                    const field = fields.find((f) => f.name === key);
-                    return (
-                      <div key={key}>
-                        <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">{field?.label || key}</p>
-                        <p className="font-medium">{value === null || value === undefined ? "—" : String(value)}</p>
-                      </div>
-                    );
-                  })}
-                  {formEntries.length === 0 && <p className="text-sm text-muted-foreground">No form data</p>}
-                </div>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                {formEntries.map(([key, value]) => {
+                  const field = fields.find((f) => f.name === key);
+                  return (
+                    <div key={key}>
+                      <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">{field?.label || key}</p>
+                      <p className="font-medium">{value === null || value === undefined ? "—" : String(value)}</p>
+                    </div>
+                  );
+                })}
+                {formEntries.length === 0 && <p className="text-sm text-muted-foreground">No form data</p>}
+              </div>
             </CardContent>
           </Card>
 
+          {/* Line Items Section */}
+          {items.length > 0 && repeatableFields.length > 0 && (
+            <Card className="border no-print">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Entries</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        {repeatableFields.map((field) => (
+                          <th
+                            key={field.name}
+                            className={`text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide ${
+                              field.type === "number" ? "text-right" : ""
+                            }`}
+                          >
+                            {field.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {items.map((item: any, idx: number) => (
+                        <tr key={idx}>
+                          {repeatableFields.map((field) => {
+                            const value = item[field.name] ?? "";
+                            return (
+                              <td
+                                key={`${idx}-${field.name}`}
+                                className={`px-4 py-3 ${field.type === "number" ? "text-right" : ""}`}
+                              >
+                                {value === null || value === undefined || value === "" ? "—" : String(value)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <Card className="border-0 shadow-none print-only" id="print-letter" style={{ display: "none" }}>
-            <CardContent className="p-8 relative">
+            <CardContent className="p-8 relative" style={{ fontSize: "12pt" }}>
               {/* Watermark - Request ID */}
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] rotate-[-35deg]">
                 <span className="text-[6rem] font-bold tracking-widest text-foreground whitespace-nowrap select-none">
@@ -393,6 +436,44 @@ export default function RequestDetail() {
                         </p>
                       );
                     })}
+                  </div>
+                )}
+                {/* Line Items Table for Letter */}
+                {items.length > 0 && repeatableFields.length > 0 && (
+                  <div className="my-4">
+                    <p className="font-bold text-xs mb-2">Entries:</p>
+                    <table className="w-full text-[11px] border-collapse">
+                      <thead>
+                        <tr>
+                          {repeatableFields.map((field) => (
+                            <th
+                              key={field.name}
+                              className={`border border-foreground p-1 font-semibold bg-muted ${
+                                field.type === "number" ? "text-right" : "text-left"
+                              }`}
+                            >
+                              {field.label}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item: any, idx: number) => (
+                          <tr key={idx}>
+                            {repeatableFields.map((field) => (
+                              <td
+                                key={`${idx}-${field.name}`}
+                                className={`border border-foreground p-1 ${
+                                  field.type === "number" ? "text-right" : "text-left"
+                                }`}
+                              >
+                                {item[field.name] ?? "—"}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
                 <p className="text-xs leading-relaxed">I kindly request your prompt review and approval of this request.</p>
