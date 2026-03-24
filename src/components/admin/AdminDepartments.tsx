@@ -1,0 +1,110 @@
+import { useState, useEffect } from "react";
+import { Plus, Edit, Trash2, Users } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
+
+interface Department {
+  id: string;
+  name: string;
+  head_name: string | null;
+}
+
+export function AdminDepartments() {
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDept, setEditDept] = useState<Department | null>(null);
+  const [name, setName] = useState("");
+  const [head, setHead] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const fetchDepartments = async () => {
+    try {
+      const data = await api.departments.list();
+      setDepartments((data as Department[]) || []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load");
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchDepartments(); }, []);
+
+  const openCreate = () => { setEditDept(null); setName(""); setHead(""); setDialogOpen(true); };
+  const openEdit = (d: Department) => { setEditDept(d); setName(d.name); setHead(d.head_name || ""); setDialogOpen(true); };
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    try {
+      if (editDept) {
+        await api.departments.update(editDept.id, { name, head_name: head || null });
+        toast.success("Department updated");
+      } else {
+        await api.departments.create({ name, head_name: head || null });
+        toast.success("Department created");
+      }
+      setDialogOpen(false);
+      fetchDepartments();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.departments.delete(id);
+      toast.success("Deleted");
+      fetchDepartments();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{departments.length} departments</p>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" /> Add Department</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>{editDept ? "Edit" : "Create"} Department</DialogTitle></DialogHeader>
+            <div className="space-y-4 mt-4">
+              <div className="space-y-1.5"><Label>Department Name</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Department Head</Label><Input value={head} onChange={e => setHead(e.target.value)} /></div>
+              <Button onClick={handleSave} className="w-full">{editDept ? "Update" : "Create"}</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      {loading ? (
+        <p className="text-sm text-muted-foreground text-center py-8">Loading...</p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {departments.map(dept => (
+            <Card key={dept.id} className="border">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">{dept.name}</h3>
+                    {dept.head_name && <p className="text-xs text-muted-foreground mt-0.5">Head: {dept.head_name}</p>}
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(dept)}><Edit className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(dept.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          {departments.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No departments yet.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
