@@ -23,7 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 
-*.env
+# Environment variables - never commit .env files
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
 
-# allow .env.example
+# allow .env.example files for documentation
 !.env.example
+!.env.*.example

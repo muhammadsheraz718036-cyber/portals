@@ -1,8 +1,14 @@
 import type { Config } from "tailwindcss";
+import tailwindAnimatePlugin from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
-  content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
+  content: [
+    "./pages/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./app/**/*.{ts,tsx}",
+    "./src/**/*.{ts,tsx}",
+  ],
   prefix: "",
   theme: {
     container: {
@@ -14,8 +20,8 @@ export default {
     },
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        document: ['Libre Baskerville', 'Georgia', 'serif'],
+        sans: ["Inter", "system-ui", "sans-serif"],
+        document: ["Libre Baskerville", "Georgia", "serif"],
       },
       colors: {
         border: "hsl(var(--border))",
@@ -101,5 +107,5 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindAnimatePlugin],
 } satisfies Config;

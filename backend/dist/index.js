@@ -11,11 +11,26 @@ function isPgError(err) {
 async function main() {
     await verifyDatabaseReady();
     const app = express();
+    // CORS configuration - restrict in production
     app.use(cors({
-        origin: process.env.CORS_ORIGIN || true,
+        origin: process.env.CORS_ORIGIN || "http://localhost:5173",
         credentials: true,
+        methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+        maxAge: 86400, // 24 hours
     }));
+    // Request size limit
     app.use(express.json({ limit: "2mb" }));
+    // Security: Prevent parameter pollution
+    app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+    // Security: Set X-Content-Type-Options to prevent MIME sniffing
+    app.use((req, res, next) => {
+        res.set("X-Content-Type-Options", "nosniff");
+        res.set("X-Frame-Options", "DENY");
+        res.set("X-XSS-Protection", "1; mode=block");
+        res.set("Referrer-Policy", "strict-origin-when-cross-origin");
+        next();
+    });
     app.get("/health", (_req, res) => {
         res.json({ ok: true });
     });
@@ -44,12 +59,21 @@ async function main() {
                 res.status(400).json({ error: "Duplicate value violates a unique constraint." });
                 return;
             }
-            console.error(err);
-            res.status(500).json({ error: err.message || "Database error" });
+            console.error("Database error:", err);
+            // Don't leak database errors in production
+            const msg = process.env.NODE_ENV === "development"
+                ? err.message || "Database error"
+                : "An unexpected error occurred";
+            res.status(500).json({ error: msg });
             return;
         }
-        console.error(err);
-        res.status(500).json({ error: "Internal server error" });
+        console.error("Unhandled error:", err);
+        // Don't leak error details in production
+        res.status(500).json({
+            error: process.env.NODE_ENV === "development"
+                ? String(err)
+                : "Internal server error"
+        });
     });
     const port = Number(process.env.PORT) || 4000;
     app.listen(port, () => {

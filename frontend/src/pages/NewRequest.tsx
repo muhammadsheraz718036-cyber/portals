@@ -18,24 +18,12 @@ import { useCompany } from "@/contexts/CompanyContext";
 import { FormFieldInput } from "@/components/FormFieldInput";
 import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import { RichTextEditor } from "@/components/RichTextEditor";
-import type { ApprovalFormField } from "@/lib/constants";
-
-type ChainStep = { order: number; roleName: string; action: string };
-
-type ApprovalTypeRow = {
-  id: string;
-  name: string;
-  description: string | null;
-  fields: ApprovalFormField[];
-  page_layout?: string;
-};
-
-type ChainRow = {
-  id: string;
-  name: string;
-  approval_type_id: string | null;
-  steps: ChainStep[];
-};
+import type {
+  ApprovalFormField,
+  ApprovalTypeRow,
+  ChainRow,
+  ChainStep,
+} from "@/lib/constants";
 
 export default function NewRequest() {
   const navigate = useNavigate();
@@ -61,8 +49,8 @@ export default function NewRequest() {
       setLoading(true);
       try {
         const [rawTypes, chains] = await Promise.all([
-          api.approvalTypes.list() as Promise<any[]>,
-          api.approvalChains.list() as Promise<any[]>,
+          api.approvalTypes.list() as Promise<ApprovalTypeRow[]>,
+          api.approvalChains.list() as Promise<ChainRow[]>,
         ]);
 
         if (cancelled) return;
@@ -75,7 +63,7 @@ export default function NewRequest() {
         );
 
         const map: Record<string, ChainRow[]> = {};
-        for (const c of chains as any[]) {
+        for (const c of chains as ChainRow[]) {
           const tid = c.approval_type_id;
           if (!tid) continue;
           if (!map[tid]) map[tid] = [];
@@ -107,10 +95,9 @@ export default function NewRequest() {
   const chainList = selectedType ? (chainsByType[selectedType] ?? []) : [];
   const chain = chainList[0];
 
-  // Separate repeatable fields (line items) from regular form fields
-  const regularFields = approvalType?.fields.filter((f) => !f.repeatable) ?? [];
-  const repeatableFields =
-    approvalType?.fields.filter((f) => f.repeatable) ?? [];
+  // All fields are now repeatable (line items)
+  const regularFields: ApprovalFormField[] = [];
+  const repeatableFields = approvalType?.fields ?? [];
 
   const companyName = settings?.company_name || "COMPANY NAME";
 
@@ -121,20 +108,7 @@ export default function NewRequest() {
       return;
     }
 
-    // Validate required regular fields
-    const missingRegularFields = regularFields.filter(
-      (field) =>
-        field.required &&
-        (!formValues[field.name] || formValues[field.name].trim() === ""),
-    );
-    if (missingRegularFields.length > 0) {
-      toast.error(
-        `Please fill in required fields: ${missingRegularFields.map((f) => f.label).join(", ")}`,
-      );
-      return;
-    }
-
-    // Validate required repeatable fields in items
+    // Validate required fields in items (all fields are now repeatable)
     if (repeatableFields.some((f) => f.required)) {
       for (const item of items) {
         const missingItemFields = repeatableFields.filter(
@@ -277,67 +251,6 @@ export default function NewRequest() {
                   </div>
                 )}
 
-                {/* Form Fields - Grouped by group property */}
-                {regularFields.length > 0 && (
-                  <div className="space-y-4">
-                    {(() => {
-                      // Group fields by their group property
-                      const groups = Array.from(
-                        new Set(regularFields.map((f) => f.group || "General")),
-                      ).sort();
-
-                      return (
-                        <div className="space-y-6">
-                          {groups.map((group) => {
-                            const groupFields = regularFields.filter(
-                              (f) => (f.group || "General") === group,
-                            );
-
-                            return (
-                              <div key={group}>
-                                {group !== "General" && (
-                                  <h3 className="text-sm font-semibold text-foreground mb-3">
-                                    {group}
-                                  </h3>
-                                )}
-                                {group === "General" && (
-                                  <h3 className="text-sm font-semibold text-foreground mb-3">
-                                    Request Information
-                                  </h3>
-                                )}
-                                <div
-                                  className={
-                                    group !== "General"
-                                      ? "border rounded-lg p-4 bg-muted/30 space-y-4"
-                                      : "space-y-4"
-                                  }
-                                >
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {groupFields.map((field) => (
-                                      <div key={field.name}>
-                                        <FormFieldInput
-                                          field={field}
-                                          value={formValues[field.name] ?? ""}
-                                          onChange={(value) =>
-                                            setFormValues((prev) => ({
-                                              ...prev,
-                                              [field.name]: value,
-                                            }))
-                                          }
-                                        />
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-
                 {/* Pre-Comments (Salutation) */}
                 <div className="space-y-2 border-t pt-4">
                   <label className="block text-sm font-medium text-foreground">
@@ -413,13 +326,13 @@ export default function NewRequest() {
                     className="relative w-full"
                     style={{
                       fontFamily: "Arial, sans-serif",
-                      fontSize: "12px",
+                      fontSize: "16px",
                       display: "flex",
                       flexDirection: "column",
                       minHeight: "100%",
                       height: "100%",
                       width: "100%",
-                      padding: "0.825in",
+                      padding: "0.5in",
                       boxSizing: "border-box",
                       overflow: "hidden",
                     }}
@@ -489,64 +402,6 @@ export default function NewRequest() {
                           />
                         ) : null}
 
-                        {(() => {
-                          // Group fields by their group property for preview
-                          const groups = Array.from(
-                            new Set(
-                              regularFields.map((f) => f.group || "General"),
-                            ),
-                          ).sort();
-
-                          return (
-                            <div className="space-y-3">
-                              {groups.map((group) => (
-                                <div key={group}>
-                                  {group !== "General" && (
-                                    <h3
-                                      className="font-semibold text-sm mb-2"
-                                      style={{ fontSize: "14px" }}
-                                    >
-                                      {group}
-                                    </h3>
-                                  )}
-                                  <div
-                                    className={
-                                      group === "General"
-                                        ? "pl-3 border-l-2 border-muted space-y-1"
-                                        : "space-y-1"
-                                    }
-                                  >
-                                    {regularFields
-                                      .filter(
-                                        (f) => (f.group || "General") === group,
-                                      )
-                                      .map((field) => {
-                                        const raw =
-                                          formValues[field.name] ?? "";
-                                        const display =
-                                          field.type === "checkbox"
-                                            ? raw === "true"
-                                              ? "Yes"
-                                              : "—"
-                                            : String(raw ?? "").trim() || "—";
-
-                                        return (
-                                          <p
-                                            key={field.name}
-                                            style={{ fontSize: "14px" }}
-                                          >
-                                            <strong>{field.label}:</strong>{" "}
-                                            {display}
-                                          </p>
-                                        );
-                                      })}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })()}
-
                         {repeatableFields.length > 0 && (
                           <div className="space-y-6 my-4">
                             {Array.from(
@@ -573,11 +428,13 @@ export default function NewRequest() {
                                 if (groupFields.length === 0) return null;
 
                                 return (
-                                  <div key={group} className="space-y-2">
+                                  <div
+                                    key={group}
+                                    className="border rounded p-3 bg-muted/10"
+                                  >
                                     <h3 className="text-sm font-semibold mb-2">
                                       {group}
                                     </h3>
-
                                     {groupItems.length === 0 ? (
                                       <p className="text-sm text-muted-foreground py-2">
                                         No entries for this group.
@@ -585,49 +442,49 @@ export default function NewRequest() {
                                     ) : (
                                       <table
                                         className="w-full border-collapse"
-                                        style={{ fontSize: "14px" }}
+                                        style={{ fontSize: "12px" }}
                                       >
                                         <thead>
                                           <tr>
                                             {groupFields.map((field) => (
                                               <th
-                                                key={field.name}
-                                                className={`border border-foreground p-2 font-semibold bg-muted ${
-                                                  field.type === "number"
-                                                    ? "text-right"
-                                                    : "text-left"
-                                                }`}
+                                                key={`${group}-${field.name}-header`}
+                                                className="border border-foreground p-2 bg-muted font-semibold text-center"
                                               >
-                                                {field.label}
+                                                {field.label || field.name}
                                               </th>
                                             ))}
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {groupItems.map((item) => (
-                                            <tr key={item.id}>
-                                              {groupFields.map((field) => {
-                                                const val = (
-                                                  item as Record<
-                                                    string,
-                                                    unknown
-                                                  >
-                                                )[field.name];
-                                                return (
-                                                  <td
-                                                    key={`${item.id}-${field.name}`}
-                                                    className={`border border-foreground p-2 ${
-                                                      field.type === "number"
-                                                        ? "text-right"
-                                                        : "text-left"
-                                                    }`}
-                                                  >
-                                                    {String(val ?? "—")}
-                                                  </td>
-                                                );
-                                              })}
-                                            </tr>
-                                          ))}
+                                          {groupItems.map(
+                                            (item, idx: number) => (
+                                              <tr key={idx}>
+                                                {groupFields.map((field) => {
+                                                  const val = item[field.name];
+                                                  let displayValue = val ?? "—";
+
+                                                  if (
+                                                    field.type === "checkbox"
+                                                  ) {
+                                                    displayValue =
+                                                      val === "true"
+                                                        ? "Yes"
+                                                        : "—";
+                                                  }
+
+                                                  return (
+                                                    <td
+                                                      key={`${idx}-${field.name}`}
+                                                      className="border border-foreground p-2 text-center"
+                                                    >
+                                                      {displayValue}
+                                                    </td>
+                                                  );
+                                                })}
+                                              </tr>
+                                            ),
+                                          )}
                                         </tbody>
                                       </table>
                                     )}
@@ -649,19 +506,30 @@ export default function NewRequest() {
                         ) : null}
                       </div>
 
-                      <div className="mt-6">
-                        <p
-                          className="font-bold mt-6"
-                          style={{ fontSize: "14px" }}
-                        >
-                          {profile?.full_name ?? ""}
-                        </p>
-                        <p
-                          className="text-muted-foreground"
-                          style={{ fontSize: "13px" }}
-                        >
-                          {companyName ?? ""}
-                        </p>
+                      <div className="mt-12 flex justify-end">
+                        <div className="text-left w-full max-w-[210px]">
+                          <p className="font-bold" style={{ fontSize: "14px" }}>
+                            {profile?.full_name ?? ""}
+                          </p>
+                          <p
+                            className="text-muted-foreground"
+                            style={{ fontSize: "13px" }}
+                          >
+                            {profile?.role_name || "No Role Assigned"}
+                          </p>
+                          <p
+                            className="text-muted-foreground"
+                            style={{ fontSize: "13px" }}
+                          >
+                            {profile?.department_name ?? ""}
+                          </p>
+                          <p
+                            className="text-muted-foreground"
+                            style={{ fontSize: "13px" }}
+                          >
+                            {companyName ?? ""}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>

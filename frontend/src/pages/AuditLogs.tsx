@@ -63,7 +63,7 @@ export default function AuditLogs() {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [hasAuditAccess]);
 
   const actions = [...new Set(logs.map((l) => l.action))];
 

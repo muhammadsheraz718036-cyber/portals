@@ -1885,11 +1885,31 @@ apiRouter.patch(
         [JSON.stringify(body.form_data), requestId],
       );
 
-      // Reset the changes_requested action back to pending
-      await pool.query(
-        `UPDATE approval_actions SET status = 'pending' WHERE request_id = $1 AND status = 'changes_requested'`,
+      // Find the step_order of the changes_requested action
+      const { rows: changedActionRows } = await pool.query(
+        `SELECT step_order FROM approval_actions WHERE request_id = $1 AND status = 'changes_requested' LIMIT 1`,
         [requestId],
       );
+
+      if (changedActionRows.length > 0) {
+        const changedStepOrder = changedActionRows[0].step_order;
+
+        // Reset only the changes_requested action back to pending and clear metadata
+        await pool.query(
+          `UPDATE approval_actions 
+           SET status = 'pending', acted_by = NULL, comment = NULL, acted_at = NULL 
+           WHERE request_id = $1 AND status = 'changes_requested'`,
+          [requestId],
+        );
+
+        // Set all subsequent steps back to waiting to reset any partial progress
+        await pool.query(
+          `UPDATE approval_actions 
+           SET status = 'waiting', acted_by = NULL, comment = NULL, acted_at = NULL 
+           WHERE request_id = $1 AND step_order > $2`,
+          [requestId, changedStepOrder],
+        );
+      }
 
       const { rows: updatedActions } = await pool.query(
         `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
@@ -1902,7 +1922,7 @@ apiRouter.patch(
         req.profile!.full_name,
         "UPDATE",
         "Approval Request",
-        `Updated request: ${updatedRequests[0].request_number}`,
+        `Updated request after changes requested: ${updatedRequests[0].request_number}`,
       );
 
       res.json({ request: updatedRequests[0], actions: updatedActions });
@@ -1963,9 +1983,10 @@ apiRouter.get(
 
 async function loadProfileById(id: string) {
   const { rows } = await pool.query(
-    `SELECT p.id, p.full_name, p.email, p.department_id, p.role_id, p.is_admin, p.is_active, p.created_at, p.updated_at, p.failed_login_attempts, p.is_locked, p.locked_at, p.last_failed_login_at, r.permissions
+    `SELECT p.id, p.full_name, p.email, p.department_id, p.role_id, p.is_admin, p.is_active, p.created_at, p.updated_at, p.failed_login_attempts, p.is_locked, p.locked_at, p.last_failed_login_at, r.permissions, r.name as role_name, d.name as department_name
      FROM profiles p
      LEFT JOIN roles r ON p.role_id = r.id
+     LEFT JOIN departments d ON p.department_id = d.id
      WHERE p.id = $1`,
     [id],
   );

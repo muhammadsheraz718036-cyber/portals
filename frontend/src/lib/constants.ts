@@ -70,7 +70,34 @@ export type ApprovalFormField = {
   label: string;
   type: string;
   required: boolean;
-  repeatable?: boolean; // Indicates this field supports multiple entries/items
   options?: string[];
   group?: string; // Field group for organizing into separate sections
+};
+
+export type ApprovalTypeRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  fields: ApprovalFormField[];
+  page_layout?: string;
+};
+
+export type ChainStep = {
+  order: number;
+  roleName: string;
+  action: string;
+};
+
+export type ChainRow = {
+  id: string;
+  name: string;
+  approval_type_id: string | null;
+  steps: ChainStep[];
+};
+
+export type Role = {
+  id: string;
+  name: string;
+  description?: string;
+  permissions?: string[];
 };

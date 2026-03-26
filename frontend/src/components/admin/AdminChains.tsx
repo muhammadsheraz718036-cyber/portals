@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/lib/api";
+import { ChainRow, ApprovalTypeRow, Role } from "@/lib/constants";
 import { toast } from "sonner";
 
 type Step = { order: number; roleName: string; action: string };
@@ -60,9 +61,9 @@ export function AdminChains() {
   const fetchData = async () => {
     try {
       const [chainsRaw, typesRaw, rolesRaw] = await Promise.all([
-        api.approvalChains.list() as Promise<any[]>,
-        api.approvalTypes.list() as Promise<any[]>,
-        api.roles.list() as Promise<any[]>,
+        api.approvalChains.list() as Promise<ChainRow[]>,
+        api.approvalTypes.list() as Promise<ApprovalTypeRow[]>,
+        api.roles.list() as Promise<Role[]>,
       ]);
       setChains((chainsRaw || []).map((c) => ({ ...c, steps: c.steps || [] })));
       setApprovalTypes(

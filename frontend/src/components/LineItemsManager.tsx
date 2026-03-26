@@ -8,6 +8,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Plus, Trash2 } from "lucide-react";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -49,7 +51,7 @@ export function LineItemsManager({
     repeatableFields
       .filter((field) => (field.group || "General") === group)
       .forEach((field) => {
-        newItem[field.name] = field.type === "number" ? 0 : "";
+        newItem[field.name] = "";
       });
 
     onItemsChange([...items, newItem]);
@@ -77,7 +79,7 @@ export function LineItemsManager({
     item: LineItem,
     itemId: string,
   ) => {
-    const value = item[field.name] ?? (field.type === "number" ? 0 : "");
+    const value = item[field.name] ?? "";
     const stringValue = String(value || "");
     const numberValue = Number(value || 0);
 
@@ -93,9 +95,36 @@ export function LineItemsManager({
               updateItem(
                 itemId,
                 field.name,
-                e.target.value ? Number(e.target.value) : 0,
+                e.target.value === "" ? "" : Number(e.target.value),
               )
             }
+            onFocus={(e) => {
+              // Auto-clear common default values when user focuses
+              const currentValue = e.target.value;
+              if (
+                currentValue === "0" ||
+                currentValue === "000" ||
+                currentValue === "0000" ||
+                currentValue === "00000"
+              ) {
+                updateItem(itemId, field.name, "");
+              }
+            }}
+            onKeyDown={(e) => {
+              // Also clear on first keystroke if still showing defaults
+              const currentValue = e.currentTarget.value;
+              if (
+                (currentValue === "0" ||
+                  currentValue === "000" ||
+                  currentValue === "0000" ||
+                  currentValue === "00000") &&
+                e.key !== "Backspace" &&
+                e.key !== "Delete" &&
+                e.key !== "Tab"
+              ) {
+                updateItem(itemId, field.name, "");
+              }
+            }}
             className="w-full bg-background border-0 px-2 focus-visible:ring-0"
           />
         );
@@ -137,6 +166,43 @@ export function LineItemsManager({
             className="bg-background border-0 px-2 focus-visible:ring-0"
             rows={2}
           />
+        );
+
+      case "checkbox":
+        return (
+          <div className="flex items-center justify-center">
+            <Checkbox
+              checked={value === "true"}
+              onCheckedChange={(checked) =>
+                updateItem(itemId, field.name, checked ? "true" : "")
+              }
+            />
+          </div>
+        );
+
+      case "radio":
+        return (
+          <RadioGroup
+            value={String(value)}
+            onValueChange={(v) => updateItem(itemId, field.name, v)}
+          >
+            <div className="flex flex-wrap gap-2">
+              {field.options?.map((option) => (
+                <div key={option} className="flex items-center space-x-1">
+                  <RadioGroupItem
+                    value={option}
+                    id={`${itemId}_${field.name}_${option}`}
+                  />
+                  <label
+                    htmlFor={`${itemId}_${field.name}_${option}`}
+                    className="text-xs cursor-pointer"
+                  >
+                    {option}
+                  </label>
+                </div>
+              ))}
+            </div>
+          </RadioGroup>
         );
 
       default:

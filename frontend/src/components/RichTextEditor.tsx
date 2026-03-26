@@ -124,8 +124,11 @@ export function RichTextEditor({
 
   // Update editor content when content prop changes
   useEffect(() => {
-    if (editor && content !== editor.getHTML()) {
-      editor.commands.setContent(content);
+    if (editor && content !== undefined && content !== null) {
+      const currentContent = editor.getHTML();
+      if (currentContent !== content) {
+        editor.commands.setContent(content);
+      }
     }
   }, [editor, content]);
 

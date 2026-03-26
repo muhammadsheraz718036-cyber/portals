@@ -23,6 +23,7 @@ import {
 import { Checkbox as CheckboxInput } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { ApprovalTypeRow } from "@/lib/constants";
 import { toast } from "sonner";
 
 type Field = {
@@ -30,7 +31,6 @@ type Field = {
   label: string;
   type: string;
   required: boolean;
-  repeatable?: boolean;
   options?: string[];
   group?: string; // Group/section name for organizing fields
 };
@@ -60,7 +60,7 @@ export function AdminApprovalTypes() {
 
   const fetchTypes = async () => {
     try {
-      const data = (await api.approvalTypes.list()) as any[];
+      const data = (await api.approvalTypes.list()) as ApprovalTypeRow[];
       setTypes((data || []).map((d) => ({ ...d, fields: d.fields || [] })));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load");
@@ -502,19 +502,6 @@ export function AdminApprovalTypes() {
                                         Required
                                       </span>
                                     </label>
-                                    <label className="flex items-center gap-1.5">
-                                      <CheckboxInput
-                                        checked={field.repeatable ?? false}
-                                        onCheckedChange={(c) =>
-                                          updateField(actualIndex, {
-                                            repeatable: !!c,
-                                          })
-                                        }
-                                      />
-                                      <span className="text-xs text-muted-foreground">
-                                        Repeatable (Line Items)
-                                      </span>
-                                    </label>
                                   </div>
                                 </div>
                                 <Button
@@ -568,7 +555,6 @@ export function AdminApprovalTypes() {
                         className="text-[10px]"
                       >
                         {f.label} ({f.type}){f.required ? " *" : ""}
-                        {f.repeatable ? " [Line Items]" : ""}
                       </Badge>
                     ))}
                   </div>
