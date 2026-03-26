@@ -181,37 +181,28 @@ export default function RequestDetail() {
       ? `Request_${request.request_number}`
       : "Request_Letter",
     pageStyle: `
-      @page { size: ${pageSize}; margin: 0in; }
-      html, body { margin: 0 !important; padding: 0 !important; }
-      body { display: flex; justify-content: center; align-items: flex-start; }
-      body * { visibility: hidden !important; }
-      #print-letter, #print-letter * { visibility: visible !important; }
+      @page {
+        size: ${isLandscape ? "landscape" : "portrait"};
+        margin: 0;
+      }
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
       #print-letter {
         display: block !important;
-        position: relative !important;
-        left: auto !important;
-        top: auto !important;
-        transform: none !important;
-        width: ${pageWidth} !important;
-        height: ${pageHeight} !important;
+        width: 100% !important;
+        height: 100% !important;
         margin: 0 !important;
+        padding: 0 !important;
         box-sizing: border-box !important;
         overflow: hidden !important;
       }
-      #print-letter > div {
-        position: relative !important;
-        top: auto !important;
-        left: auto !important;
-        width: 100% !important;
-        height: 100% !important;
-        padding: 0 !important;
-        box-sizing: border-box !important;
-      }
       #print-letter table { width: 100% !important; table-layout: auto !important; }
       #print-letter table td, #print-letter table th { word-break: break-word !important; }
-      @media print {
-        .no-print { display: none !important; }
-      }
+      .no-print { display: none !important; }
     `,
   });
 
@@ -458,10 +449,8 @@ export default function RequestDetail() {
               const pageLayout =
                 request.approval_types?.page_layout || "portrait";
               // Standard US Letter size (inches)
-              const pageWidth =
-                pageLayout === "portrait" ? "8.5in" : "11in";
-              const pageHeight =
-                pageLayout === "portrait" ? "11in" : "8.5in";
+              const pageWidth = pageLayout === "portrait" ? "8.5in" : "11in";
+              const pageHeight = pageLayout === "portrait" ? "11in" : "8.5in";
               const pageOrientation =
                 pageLayout === "portrait" ? "portrait" : "landscape";
 
@@ -470,7 +459,7 @@ export default function RequestDetail() {
                   className="relative w-full"
                   style={{
                     fontFamily: "Arial, sans-serif",
-                    fontSize: "16px",
+                    fontSize: "12px",
                     display: "flex",
                     flexDirection: "column",
                     minHeight: "100%",
@@ -538,7 +527,7 @@ export default function RequestDetail() {
                         className="my-3 prose max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
                         style={{
                           fontFamily: "Arial, sans-serif",
-                          fontSize: "16px",
+                          fontSize: "12px",
                         }}
                         dangerouslySetInnerHTML={{ __html: richContent }}
                       />
@@ -547,56 +536,176 @@ export default function RequestDetail() {
                         {preComments && (
                           <div
                             style={{
-                              fontSize: "14px",
+                              fontSize: "12px",
                               fontFamily: "Arial, sans-serif",
                             }}
                             dangerouslySetInnerHTML={{ __html: preComments }}
                           />
                         )}
-                        <div className="pl-3 border-l-2 border-muted space-y-1">
-                          {formEntries.map(([key, value]) => {
-                            const field = fields.find((f) => f.name === key);
-                            return (
-                              <p key={key} style={{ fontSize: "14px" }}>
-                                <strong>{field?.label || key}:</strong>{" "}
-                                {String(value ?? "")}
-                              </p>
+                        {(() => {
+                          // Group fields by their group property
+                          const groups = Array.from(
+                            new Set(
+                              regularFields.map((f) => f.group || "General"),
+                            ),
+                          ).sort((a, b) => {
+                            if (a === "General") return -1;
+                            if (b === "General") return 1;
+                            return a.localeCompare(b);
+                          });
+
+                          const groupedFields = groups.reduce<
+                            Record<string, typeof regularFields>
+                          >((acc, group) => {
+                            acc[group] = regularFields.filter(
+                              (f) => (f.group || "General") === group,
                             );
-                          })}
-                        </div>
-                        {items.length > 0 && repeatableFields.length > 0 && (
-                          <div className="my-4">
-                            <table
-                              className="w-full border-collapse"
-                              style={{ fontSize: "14px" }}
-                            >
-                              <thead>
-                                <tr>
-                                  {repeatableFields.map((field) => (
-                                    <th
-                                      key={field.name}
-                                      className={`border border-foreground p-2 font-semibold bg-muted ${field.type === "number" ? "text-right" : "text-left"}`}
+                            return acc;
+                          }, {});
+
+                          return (
+                            <div className="space-y-6">
+                              {groups.map((group) => {
+                                const groupFields = groupedFields[group] || [];
+                                if (groupFields.length === 0) return null;
+
+                                return (
+                                  <div key={group} className="space-y-2">
+                                    <h3 className="font-semibold text-sm mb-1">
+                                      {group}
+                                    </h3>
+
+                                    <table
+                                      className="w-full border-collapse"
+                                      style={{ fontSize: "12px" }}
                                     >
-                                      {field.label}
-                                    </th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {items.map((item: any, idx: number) => (
-                                  <tr key={idx}>
-                                    {repeatableFields.map((field) => (
-                                      <td
-                                        key={`${idx}-${field.name}`}
-                                        className={`border border-foreground p-2 ${field.type === "number" ? "text-right" : "text-left"}`}
+                                      <thead>
+                                        <tr>
+                                          {groupFields.map((field) => (
+                                            <th
+                                              key={field.name}
+                                              className="border border-foreground p-2 bg-muted font-semibold"
+                                            >
+                                              {field.label || field.name}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        <tr>
+                                          {groupFields.map((field) => {
+                                            const rawValue =
+                                              formData[field.name];
+                                            const displayValue =
+                                              field.type === "checkbox"
+                                                ? String(rawValue) === "true"
+                                                  ? "Yes"
+                                                  : "—"
+                                                : String(
+                                                    rawValue ?? "",
+                                                  ).trim() || "—";
+
+                                            return (
+                                              <td
+                                                key={`${group}-${field.name}-value`}
+                                                className="border border-foreground p-2"
+                                              >
+                                                {displayValue}
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                        {repeatableFields.length > 0 && (
+                          <div className="space-y-6 my-4">
+                            {Array.from(
+                              new Set(
+                                repeatableFields.map(
+                                  (f) => f.group || "General",
+                                ),
+                              ),
+                            )
+                              .sort((a, b) => {
+                                if (a === "General") return -1;
+                                if (b === "General") return 1;
+                                return a.localeCompare(b);
+                              })
+                              .map((group) => {
+                                const groupFields = repeatableFields.filter(
+                                  (f) => (f.group || "General") === group,
+                                );
+                                const groupItems = items.filter(
+                                  (item: any) =>
+                                    String(item.__group || "General") === group,
+                                );
+
+                                if (groupFields.length === 0) return null;
+
+                                return (
+                                  <div
+                                    key={group}
+                                    className="border rounded p-3 bg-muted/10"
+                                  >
+                                    <h3 className="text-sm font-semibold mb-2">
+                                      {group}
+                                    </h3>
+                                    {groupItems.length === 0 ? (
+                                      <p className="text-sm text-muted-foreground py-2">
+                                        No entries for this group.
+                                      </p>
+                                    ) : (
+                                      <table
+                                        className="w-full border-collapse"
+                                        style={{ fontSize: "14px" }}
                                       >
-                                        {item[field.name] ?? "—"}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                                        <thead>
+                                          <tr>
+                                            {groupFields.map((field) => (
+                                              <th
+                                                key={field.name}
+                                                className={`border border-foreground p-2 font-semibold bg-muted ${
+                                                  field.type === "number"
+                                                    ? "text-right"
+                                                    : "text-left"
+                                                }`}
+                                              >
+                                                {field.label}
+                                              </th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {groupItems.map(
+                                            (item: any, idx: number) => (
+                                              <tr key={idx}>
+                                                {groupFields.map((field) => (
+                                                  <td
+                                                    key={`${idx}-${field.name}`}
+                                                    className={`border border-foreground p-2 ${
+                                                      field.type === "number"
+                                                        ? "text-right"
+                                                        : "text-left"
+                                                    }`}
+                                                  >
+                                                    {item[field.name] ?? "—"}
+                                                  </td>
+                                                ))}
+                                              </tr>
+                                            ),
+                                          )}
+                                        </tbody>
+                                      </table>
+                                    )}
+                                  </div>
+                                );
+                              })}
                           </div>
                         )}
                         {postComments && (
@@ -646,31 +755,19 @@ export default function RequestDetail() {
               return (
                 <>
                   {/* Print version (hidden on screen) */}
-                  <Card
-                    className={`border-0 shadow-none print-only ${
-                      pageOrientation === "landscape"
-                        ? "print-landscape"
-                        : "print-portrait"
-                    }`}
+                  <div
+                    className="print-only"
                     id="print-letter"
                     ref={printLetterRef}
                     style={{
                       display: "none",
+                      width: "100%",
+                      height: "100%",
+                      boxSizing: "border-box",
                     }}
                   >
-                    <CardContent
-                      className="p-4"
-                      style={{
-                        width: pageWidth,
-                        height: pageHeight,
-                        margin: "0 auto",
-                        display: "flex",
-                        flexDirection: "column",
-                      }}
-                    >
-                      {letterContent}
-                    </CardContent>
-                  </Card>
+                    {letterContent}
+                  </div>
 
                   {/* On-screen preview */}
                   <Card className="border no-print">

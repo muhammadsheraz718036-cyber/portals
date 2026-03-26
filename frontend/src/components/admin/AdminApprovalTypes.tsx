@@ -32,6 +32,7 @@ type Field = {
   required: boolean;
   repeatable?: boolean;
   options?: string[];
+  group?: string; // Group/section name for organizing fields
 };
 type PageLayout = "portrait" | "landscape";
 
@@ -54,6 +55,8 @@ export function AdminApprovalTypes() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("fields");
   const [draggedFieldIdx, setDraggedFieldIdx] = useState<number | null>(null);
+  const [groups, setGroups] = useState<string[]>(["General"]); // Default group
+  const [newGroupName, setNewGroupName] = useState("");
 
   const fetchTypes = async () => {
     try {
@@ -75,6 +78,8 @@ export function AdminApprovalTypes() {
     setDescription("");
     setFields([]);
     setPageLayout("portrait");
+    setGroups(["General"]);
+    setNewGroupName("");
     setActiveTab("fields");
     setDialogOpen(true);
   };
@@ -84,6 +89,12 @@ export function AdminApprovalTypes() {
     setDescription(t.description);
     setFields(t.fields);
     setPageLayout((t.page_layout as PageLayout) || "portrait");
+    // Extract unique groups from fields
+    const uniqueGroups = Array.from(
+      new Set(t.fields.map((f) => f.group || "General")),
+    );
+    setGroups(uniqueGroups.length > 0 ? uniqueGroups : ["General"]);
+    setNewGroupName("");
     setActiveTab("fields");
     setDialogOpen(true);
   };
@@ -91,12 +102,47 @@ export function AdminApprovalTypes() {
   const addField = () =>
     setFields([
       ...fields,
-      { name: `field_${Date.now()}`, label: "", type: "text", required: false },
+      {
+        name: `field_${Date.now()}`,
+        label: "",
+        type: "text",
+        required: false,
+        group: groups[0] || "General",
+      },
     ]);
   const updateField = (idx: number, updates: Partial<Field>) =>
     setFields(fields.map((f, i) => (i === idx ? { ...f, ...updates } : f)));
   const removeField = (idx: number) =>
     setFields(fields.filter((_, i) => i !== idx));
+
+  const addGroup = () => {
+    if (!newGroupName.trim()) {
+      toast.error("Group name cannot be empty");
+      return;
+    }
+    if (groups.includes(newGroupName)) {
+      toast.error("Group already exists");
+      return;
+    }
+    const groupNameToAdd = newGroupName;
+    setGroups([...groups, newGroupName]);
+    setNewGroupName("");
+    toast.success(`Group "${groupNameToAdd}" created`);
+  };
+
+  const removeGroup = (groupName: string) => {
+    // Don't allow removing if fields still use this group
+    const fieldsInGroup = fields.filter(
+      (f) => (f.group || "General") === groupName,
+    );
+    if (fieldsInGroup.length > 0) {
+      toast.error(
+        "Cannot remove group with fields. Move or delete fields first.",
+      );
+      return;
+    }
+    setGroups(groups.filter((g) => g !== groupName));
+  };
 
   const handleDragStartField = (idx: number) => {
     setDraggedFieldIdx(idx);
@@ -245,6 +291,69 @@ export function AdminApprovalTypes() {
                   </Select>
                 </div>
                 <div className="space-y-3">
+                  <div>
+                    <Label>Field Groups</Label>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Organize fields into separate sections. Create groups,
+                      then assign fields to them.
+                    </p>
+
+                    <div className="bg-muted/30 rounded-lg p-3 mb-3 border border-muted">
+                      <p className="text-xs font-medium mb-2">
+                        Create a new group:
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="e.g., Personal Info, Company Details"
+                          value={newGroupName}
+                          onChange={(e) => setNewGroupName(e.target.value)}
+                          className="text-sm"
+                          onKeyPress={(e) => {
+                            if (e.key === "Enter") addGroup();
+                          }}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={addGroup}
+                          className="gap-1 whitespace-nowrap"
+                        >
+                          <Plus className="h-3 w-3" /> Add
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Press Enter or click Add. Repeat to create more groups.
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium mb-2">
+                        Available groups:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {groups.map((group) => (
+                          <Badge
+                            key={group}
+                            variant={
+                              group === "General" ? "default" : "outline"
+                            }
+                            className="flex items-center gap-1 px-2 py-1"
+                          >
+                            {group}
+                            {group !== "General" && (
+                              <button
+                                onClick={() => removeGroup(group)}
+                                className="ml-1 text-xs hover:text-destructive"
+                                title="Remove group"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                   <div className="flex items-center justify-between">
                     <Label>Form Fields</Label>
                     <Button
@@ -256,102 +365,163 @@ export function AdminApprovalTypes() {
                       <Plus className="h-3 w-3" /> Add Field
                     </Button>
                   </div>
-                  {fields.map((field, idx) => (
-                    <div
-                      key={idx}
-                      draggable
-                      onDragStart={() => handleDragStartField(idx)}
-                      onDragOver={handleDragOverField}
-                      onDrop={() => handleDropField(idx)}
-                      className={`flex items-start gap-2 p-3 border rounded bg-muted/30 cursor-move transition-opacity ${
-                        draggedFieldIdx === idx ? "opacity-50" : ""
-                      }`}
-                    >
-                      <GripVertical className="h-4 w-4 text-muted-foreground mt-2 flex-shrink-0" />
-                      <div className="flex-1 grid grid-cols-2 gap-2">
-                        <Input
-                          placeholder="Field label"
-                          value={field.label}
-                          onChange={(e) =>
-                            updateField(idx, { label: e.target.value })
-                          }
-                          className="text-sm"
-                        />
-                        <Select
-                          value={field.type}
-                          onValueChange={(v) => updateField(idx, { type: v })}
+                  <div className="space-y-4 max-h-80 overflow-y-auto">
+                    {groups.map((group) => {
+                      const groupFields = fields.filter(
+                        (f) => (f.group || "General") === group,
+                      );
+                      if (groupFields.length === 0) return null;
+
+                      return (
+                        <div
+                          key={group}
+                          className="space-y-2 pb-4 border-b last:border-b-0"
                         >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="text">Text</SelectItem>
-                            <SelectItem value="number">Number</SelectItem>
-                            <SelectItem value="email">Email</SelectItem>
-                            <SelectItem value="textarea">Textarea</SelectItem>
-                            <SelectItem value="date">Date</SelectItem>
-                            <SelectItem value="select">
-                              Select Dropdown
-                            </SelectItem>
-                            <SelectItem value="radio">Radio Buttons</SelectItem>
-                            <SelectItem value="checkbox">Checkbox</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {(field.type === "select" ||
-                          field.type === "radio") && (
-                          <Input
-                            className="col-span-2 text-sm"
-                            placeholder="Options (comma separated)"
-                            value={field.options?.join(", ") || ""}
-                            onChange={(e) =>
-                              updateField(idx, {
-                                options: e.target.value
-                                  .split(",")
-                                  .map((s) => s.trim()),
-                              })
-                            }
-                          />
-                        )}
-                        <div className="col-span-2 flex gap-4">
-                          <label className="flex items-center gap-1.5">
-                            <CheckboxInput
-                              checked={field.required}
-                              onCheckedChange={(c) =>
-                                updateField(idx, { required: !!c })
-                              }
-                            />
-                            <span className="text-xs text-muted-foreground">
-                              Required
-                            </span>
-                          </label>
-                          <label className="flex items-center gap-1.5">
-                            <CheckboxInput
-                              checked={field.repeatable ?? false}
-                              onCheckedChange={(c) =>
-                                updateField(idx, { repeatable: !!c })
-                              }
-                            />
-                            <span className="text-xs text-muted-foreground">
-                              Repeatable (Line Items)
-                            </span>
-                          </label>
+                          <h4 className="text-xs font-semibold text-muted-foreground uppercase">
+                            {group}
+                          </h4>
+                          {groupFields.map((field, groupIdx) => {
+                            const actualIndex = fields.indexOf(field);
+                            return (
+                              <div
+                                key={actualIndex}
+                                draggable
+                                onDragStart={() =>
+                                  handleDragStartField(actualIndex)
+                                }
+                                onDragOver={handleDragOverField}
+                                onDrop={() => handleDropField(actualIndex)}
+                                className={`flex items-start gap-2 p-3 border rounded bg-muted/30 cursor-move transition-opacity ${
+                                  draggedFieldIdx === actualIndex
+                                    ? "opacity-50"
+                                    : ""
+                                }`}
+                              >
+                                <GripVertical className="h-4 w-4 text-muted-foreground mt-2 flex-shrink-0" />
+                                <div className="flex-1 grid grid-cols-3 gap-2">
+                                  <Input
+                                    placeholder="Field label"
+                                    value={field.label}
+                                    onChange={(e) =>
+                                      updateField(actualIndex, {
+                                        label: e.target.value,
+                                      })
+                                    }
+                                    className="text-sm"
+                                  />
+                                  <Select
+                                    value={field.group || "General"}
+                                    onValueChange={(v) =>
+                                      updateField(actualIndex, { group: v })
+                                    }
+                                  >
+                                    <SelectTrigger className="text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {groups.map((g) => (
+                                        <SelectItem key={g} value={g}>
+                                          {g}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <Select
+                                    value={field.type}
+                                    onValueChange={(v) =>
+                                      updateField(actualIndex, { type: v })
+                                    }
+                                  >
+                                    <SelectTrigger className="text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="text">Text</SelectItem>
+                                      <SelectItem value="number">
+                                        Number
+                                      </SelectItem>
+                                      <SelectItem value="email">
+                                        Email
+                                      </SelectItem>
+                                      <SelectItem value="textarea">
+                                        Textarea
+                                      </SelectItem>
+                                      <SelectItem value="date">Date</SelectItem>
+                                      <SelectItem value="select">
+                                        Select Dropdown
+                                      </SelectItem>
+                                      <SelectItem value="radio">
+                                        Radio Buttons
+                                      </SelectItem>
+                                      <SelectItem value="checkbox">
+                                        Checkbox
+                                      </SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  {(field.type === "select" ||
+                                    field.type === "radio") && (
+                                    <Input
+                                      className="col-span-3 text-sm"
+                                      placeholder="Options (comma separated)"
+                                      value={field.options?.join(", ") || ""}
+                                      onChange={(e) =>
+                                        updateField(actualIndex, {
+                                          options: e.target.value
+                                            .split(",")
+                                            .map((s) => s.trim()),
+                                        })
+                                      }
+                                    />
+                                  )}
+                                  <div className="col-span-3 flex gap-4">
+                                    <label className="flex items-center gap-1.5">
+                                      <CheckboxInput
+                                        checked={field.required}
+                                        onCheckedChange={(c) =>
+                                          updateField(actualIndex, {
+                                            required: !!c,
+                                          })
+                                        }
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        Required
+                                      </span>
+                                    </label>
+                                    <label className="flex items-center gap-1.5">
+                                      <CheckboxInput
+                                        checked={field.repeatable ?? false}
+                                        onCheckedChange={(c) =>
+                                          updateField(actualIndex, {
+                                            repeatable: !!c,
+                                          })
+                                        }
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        Repeatable (Line Items)
+                                      </span>
+                                    </label>
+                                  </div>
+                                </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => removeField(actualIndex)}
+                                  className="text-destructive hover:text-destructive"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            );
+                          })}
                         </div>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeField(idx)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-                  {fields.length === 0 && (
-                    <p className="text-xs text-muted-foreground text-center py-4">
-                      No fields added yet.
-                    </p>
-                  )}
+                      );
+                    })}
+                    {fields.length === 0 && (
+                      <p className="text-xs text-muted-foreground text-center py-4">
+                        No fields added yet.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </TabsContent>
             </Tabs>
