@@ -1,5 +1,13 @@
 import { useState, useEffect } from "react";
-import { Plus, Edit, Trash2, UserCheck, UserX } from "lucide-react";
+import {
+  Plus,
+  Edit,
+  Trash2,
+  UserCheck,
+  UserX,
+  Unlock,
+  Key,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +40,8 @@ interface Profile {
   role_id: string | null;
   is_admin: boolean;
   is_active: boolean;
+  is_locked?: boolean;
+  failed_login_attempts?: number;
 }
 
 interface Department {
@@ -62,6 +72,8 @@ export function AdminUsers() {
   const [roleId, setRoleId] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [isActive, setIsActive] = useState(true);
+  const [changePassword, setChangePassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
 
   const hasAdminConsoleAccess =
     currentUser?.is_admin ||
@@ -102,6 +114,8 @@ export function AdminUsers() {
     setRoleId("");
     setIsAdmin(false);
     setIsActive(true);
+    setChangePassword(false);
+    setNewPassword("");
     setDialogOpen(true);
   };
 
@@ -114,6 +128,8 @@ export function AdminUsers() {
     setRoleId(user.role_id || "");
     setIsAdmin(user.is_admin);
     setIsActive(user.is_active);
+    setChangePassword(false);
+    setNewPassword("");
     setDialogOpen(true);
   };
 
@@ -128,6 +144,11 @@ export function AdminUsers() {
       return;
     }
 
+    if (editUser && changePassword && !newPassword.trim()) {
+      toast.error("New password is required");
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (editUser) {
@@ -139,6 +160,12 @@ export function AdminUsers() {
           is_admin: isAdmin,
           is_active: isActive,
         });
+
+        // Change password if requested
+        if (changePassword && newPassword.trim()) {
+          await api.admin.resetUserPassword(editUser.id, newPassword);
+        }
+
         toast.success("User updated successfully");
       } else {
         // Create new user
@@ -160,20 +187,15 @@ export function AdminUsers() {
     setSubmitting(false);
   };
 
-  const handleDelete = async (userId: string) => {
-    if (
-      !confirm(
-        "Are you sure you want to delete this user? This will also remove their approval requests.",
-      )
-    ) {
-      return;
-    }
+  const handleUnlock = async (userId: string) => {
     try {
-      await api.admin.deleteUser(userId);
-      toast.success("User deleted successfully");
+      await api.admin.updateUser(userId, { unlock_account: true });
+      toast.success("Account unlocked successfully");
       fetchData();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete user");
+      toast.error(
+        err instanceof Error ? err.message : "Failed to unlock account",
+      );
     }
   };
 
@@ -290,6 +312,36 @@ export function AdminUsers() {
                   <Switch checked={isActive} onCheckedChange={setIsActive} />
                 </div>
               )}
+              {editUser && (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium flex items-center gap-2">
+                        <Key className="h-4 w-4" />
+                        Change Password
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Set a new password for this user
+                      </p>
+                    </div>
+                    <Switch
+                      checked={changePassword}
+                      onCheckedChange={setChangePassword}
+                    />
+                  </div>
+                  {changePassword && (
+                    <div className="space-y-1.5">
+                      <Label>New Password</Label>
+                      <Input
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Minimum 6 characters"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
               <Button
                 onClick={handleSave}
                 className="w-full"
@@ -339,6 +391,11 @@ export function AdminUsers() {
                           Inactive
                         </Badge>
                       )}
+                      {u.is_locked && (
+                        <Badge variant="destructive" className="text-[10px]">
+                          Locked
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground">{u.email}</p>
                     <div className="flex gap-2 mt-1">
@@ -352,6 +409,16 @@ export function AdminUsers() {
                   </div>
                 </div>
                 <div className="flex gap-1 flex-shrink-0 ml-2">
+                  {u.is_locked && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleUnlock(u.id)}
+                      title="Unlock account"
+                    >
+                      <Unlock className="h-4 w-4 text-orange-600" />
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>
                     <Edit className="h-4 w-4" />
                   </Button>

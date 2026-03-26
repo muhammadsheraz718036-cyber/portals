@@ -103,23 +103,62 @@ apiRouter.post(
       id: string;
       password_hash: string;
       email: string;
-    }>(`SELECT id, password_hash, email FROM users WHERE email = $1`, [
-      body.email.toLowerCase(),
-    ]);
+      is_locked: boolean;
+      failed_login_attempts: number;
+    }>(
+      `SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts
+        FROM users u
+        JOIN profiles p ON u.id = p.id
+        WHERE u.email = $1`,
+      [body.email.toLowerCase()],
+    );
     if (rows.length === 0) {
       throw new HttpError(401, "Invalid email or password");
     }
-    const ok = await verifyPassword(body.password, rows[0].password_hash);
+
+    const user = rows[0];
+
+    // Check if account is locked
+    if (user.is_locked) {
+      throw new HttpError(
+        423,
+        "Account is locked due to too many failed login attempts. Please contact an administrator.",
+      );
+    }
+
+    const ok = await verifyPassword(body.password, user.password_hash);
     if (!ok) {
+      // Increment failed login attempts
+      await pool.query(
+        `UPDATE profiles SET
+          failed_login_attempts = failed_login_attempts + 1,
+          last_failed_login_at = now(),
+          is_locked = CASE WHEN failed_login_attempts + 1 >= 3 THEN true ELSE false END,
+          locked_at = CASE WHEN failed_login_attempts + 1 >= 3 THEN now() ELSE locked_at END
+         WHERE id = $1`,
+        [user.id],
+      );
       throw new HttpError(401, "Invalid email or password");
     }
-    const id = rows[0].id;
-    const token = signToken({ sub: id, email: rows[0].email });
+
+    // Reset failed login attempts on successful login
+    await pool.query(
+      `UPDATE profiles SET
+        failed_login_attempts = 0,
+        last_failed_login_at = null,
+        is_locked = false,
+        locked_at = null
+       WHERE id = $1`,
+      [user.id],
+    );
+
+    const id = user.id;
+    const token = signToken({ sub: id, email: user.email });
     const profile = await loadProfileById(id);
     if (!profile) {
       throw new HttpError(401, "Profile missing");
     }
-    res.json({ token, user: { id, email: rows[0].email }, profile });
+    res.json({ token, user: { id, email: user.email }, profile });
   }),
 );
 
@@ -978,21 +1017,11 @@ apiRouter.get(
   "/profiles/:id",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const idsParam = req.query.ids;
-    if (!idsParam || typeof idsParam !== "string") {
-      res.json({});
-      return;
+    const profile = await loadProfileById(req.params.id);
+    if (!profile) {
+      throw new HttpError(404, "Profile not found");
     }
-    const ids = idsParam.split(",").filter(Boolean);
-    if (ids.length === 0) {
-      res.json({});
-      return;
-    }
-    const { rows } = await pool.query<{ id: string; full_name: string }>(
-      `SELECT id, full_name FROM profiles WHERE id = ANY($1::uuid[])`,
-      [ids],
-    );
-    res.json(Object.fromEntries(rows.map((r) => [r.id, r.full_name])));
+    res.json(profile);
   }),
 );
 
@@ -1146,6 +1175,7 @@ const updateUserBody = z.object({
   role_id: z.string().uuid().nullable().optional(),
   is_admin: z.boolean().optional(),
   is_active: z.boolean().optional(),
+  unlock_account: z.boolean().optional(),
 });
 
 apiRouter.patch(
@@ -1172,7 +1202,10 @@ apiRouter.patch(
       // Get the target user's current permissions
       const { rows: targetUserRows } = await pool.query<{
         permissions: string[];
-      }>(`SELECT permissions FROM profiles WHERE id = $1`, [req.params.userId]);
+      }>(
+        `SELECT r.permissions FROM profiles p LEFT JOIN roles r ON p.role_id = r.id WHERE p.id = $1`,
+        [req.params.userId],
+      );
 
       if (targetUserRows.length > 0) {
         const targetUserPermissions = targetUserRows[0].permissions || [];
@@ -1221,6 +1254,12 @@ apiRouter.patch(
       values.push(body.is_active);
       paramIdx++;
     }
+    if (body.unlock_account === true) {
+      updates.push(`is_locked = false`);
+      updates.push(`failed_login_attempts = 0`);
+      updates.push(`locked_at = null`);
+      updates.push(`last_failed_login_at = null`);
+    }
 
     if (updates.length === 0) {
       throw new HttpError(400, "No fields to update");
@@ -1246,6 +1285,7 @@ apiRouter.patch(
     if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
     if (body.is_active !== undefined)
       changes.push(`is_active: ${body.is_active}`);
+    if (body.unlock_account === true) changes.push(`unlocked account`);
 
     await logAudit(
       req.auth!.userId,
@@ -1923,7 +1963,7 @@ apiRouter.get(
 
 async function loadProfileById(id: string) {
   const { rows } = await pool.query(
-    `SELECT p.id, p.full_name, p.email, p.department_id, p.role_id, p.is_admin, p.is_active, p.created_at, p.updated_at, r.permissions
+    `SELECT p.id, p.full_name, p.email, p.department_id, p.role_id, p.is_admin, p.is_active, p.created_at, p.updated_at, p.failed_login_attempts, p.is_locked, p.locked_at, p.last_failed_login_at, r.permissions
      FROM profiles p
      LEFT JOIN roles r ON p.role_id = r.id
      WHERE p.id = $1`,

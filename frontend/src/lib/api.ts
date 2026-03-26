@@ -246,6 +246,7 @@ export const api = {
         role_id?: string | null;
         is_admin?: boolean;
         is_active?: boolean;
+        unlock_account?: boolean;
       },
     ) =>
       request<{ profile: Profile }>(`/api/admin/users/${userId}`, {
