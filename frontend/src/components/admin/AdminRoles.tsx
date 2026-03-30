@@ -17,7 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { allPermissions } from "@/lib/constants";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/auth-hooks";
 
 interface Role {
   id: string;

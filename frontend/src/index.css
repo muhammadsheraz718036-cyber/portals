@@ -102,9 +102,15 @@
     table-layout: auto;
   }
 
-  #root table td,
-  #root table th {
+  #root table td {
     word-break: break-word;
+  }
+
+  #root table th {
+    /* Allow wrapping between words, but avoid splitting words in the middle */
+    white-space: normal;
+    word-break: keep-all;
+    overflow-wrap: normal;
   }
 }
 

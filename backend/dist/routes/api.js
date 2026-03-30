@@ -869,7 +869,15 @@ apiRouter.get("/approval-requests", requireAuth, asyncHandler(async (req, res) =
     const roleId = req.profile.role_id;
     const { rows } = await pool.query(`SELECT ar.*,
         json_build_object('name', at.name) AS approval_types,
-        json_build_object('name', d.name) AS departments
+        json_build_object('name', d.name) AS departments,
+        (ar.initiator_id = $2) AS is_initiator,
+        EXISTS (
+          SELECT 1 FROM approval_actions aa
+          JOIN roles r ON r.name = aa.role_name
+          WHERE aa.request_id = ar.id
+          AND r.id = $3
+          AND aa.status IN ('pending', 'waiting')
+        ) AS needs_approval
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id

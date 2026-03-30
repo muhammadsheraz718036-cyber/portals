@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { useAuth } from "@/contexts/auth-hooks";
 import type { RequestStatus } from "@/lib/constants";
 
 type RequestRow = {
@@ -19,65 +28,174 @@ type RequestRow = {
   initiator_id: string;
   approval_types: { name: string } | null;
   departments: { name: string } | null;
+  is_initiator: boolean;
+  needs_approval: boolean;
 };
 
 export default function Approvals() {
   const navigate = useNavigate();
+  const { user, isAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [rows, setRows] = useState<RequestRow[]>([]);
-  const [names, setNames] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    let cancelled = false;
+  const { data: rows = [], isLoading: loading } = useQuery({
+    queryKey: ["approval-requests"],
+    queryFn: async () => {
+      const data = await api.approvalRequests.list();
+      return data as RequestRow[];
+    },
+  });
 
-    async function load() {
-      setLoading(true);
-      try {
-        const data = await api.approvalRequests.list();
-        if (cancelled) return;
-        const list = data as RequestRow[];
-        setRows(list);
-        const ids = [...new Set(list.map((r) => r.initiator_id))];
-        if (ids.length > 0) {
-          const map = await api.profiles.lookupNames(ids);
-          if (!cancelled) setNames(map);
-        } else {
-          setNames({});
-        }
-      } catch {
-        if (!cancelled) {
-          setRows([]);
-          setNames({});
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
+  const { data: names = {} } = useQuery({
+    queryKey: ["profile-names", rows.map(r => r.initiator_id)],
+    queryFn: async () => {
+      const ids = [...new Set(rows.map((r) => r.initiator_id))];
+      if (ids.length === 0) return {};
+      return await api.profiles.lookupNames(ids);
+    },
+    enabled: rows.length > 0,
+  });
 
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const segregated = useMemo(() => {
+    const myRequests = rows.filter((r) => r.is_initiator);
+    const approvalRequests = rows.filter((r) => r.needs_approval);
+    const allOther = rows.filter((r) => !r.is_initiator && !r.needs_approval);
+    return { myRequests, approvalRequests, allOther };
+  }, [rows]);
 
   const filtered = useMemo(() => {
-    return rows.filter((r) => {
-      if (statusFilter !== "all" && r.status !== statusFilter) return false;
-      const initiator = names[r.initiator_id] ?? "";
-      const typeName = r.approval_types?.name ?? "";
-      if (
-        search &&
-        !r.request_number.toLowerCase().includes(search.toLowerCase()) &&
-        !typeName.toLowerCase().includes(search.toLowerCase()) &&
-        !initiator.toLowerCase().includes(search.toLowerCase())
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [rows, statusFilter, search, names]);
+    const applyFilters = (list: RequestRow[]) =>
+      list.filter((r) => {
+        if (statusFilter !== "all" && r.status !== statusFilter) return false;
+        const initiator = names[r.initiator_id] ?? "";
+        const typeName = r.approval_types?.name ?? "";
+        if (
+          search &&
+          !r.request_number.toLowerCase().includes(search.toLowerCase()) &&
+          !typeName.toLowerCase().includes(search.toLowerCase()) &&
+          !initiator.toLowerCase().includes(search.toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+    return {
+      myRequests: applyFilters(segregated.myRequests),
+      approvalRequests: applyFilters(segregated.approvalRequests),
+      allOther: applyFilters(segregated.allOther),
+    };
+  }, [segregated, statusFilter, search, names]);
+
+  const renderTable = (requests: RequestRow[]) => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b bg-muted/30">
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Request ID
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Type
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Initiator
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Department
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Status
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Progress
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+              Date
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {requests.map((req) => (
+            <tr
+              key={req.id}
+              className="hover:bg-muted/30 cursor-pointer transition-snappy"
+              onClick={() => navigate(`/approvals/${req.id}`)}
+            >
+              <td className="px-4 py-3 font-medium text-primary">
+                {req.request_number}
+              </td>
+              <td className="px-4 py-3">{req.approval_types?.name ?? "—"}</td>
+              <td className="px-4 py-3">{names[req.initiator_id] ?? "—"}</td>
+              <td className="px-4 py-3 text-muted-foreground">
+                {req.departments?.name ?? "—"}
+              </td>
+              <td className="px-4 py-3">
+                <StatusBadge status={req.status} />
+              </td>
+              <td className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full"
+                      style={{
+                        width: `${req.total_steps ? (req.current_step / req.total_steps) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {req.current_step}/{req.total_steps}
+                  </span>
+                </div>
+              </td>
+              <td className="px-4 py-3 text-muted-foreground text-xs">
+                {new Date(req.created_at).toLocaleDateString()}
+              </td>
+            </tr>
+          ))}
+          {requests.length === 0 && (
+            <tr>
+              <td
+                colSpan={7}
+                className="px-4 py-12 text-center text-muted-foreground"
+              >
+                No requests found
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderGroupedTable = (requests: RequestRow[]) => {
+    const grouped = requests.reduce(
+      (acc, req) => {
+        const dept = req.departments?.name ?? "No Department";
+        if (!acc[dept]) acc[dept] = [];
+        acc[dept].push(req);
+        return acc;
+      },
+      {} as Record<string, RequestRow[]>,
+    );
+
+    return (
+      <div className="space-y-6">
+        {Object.entries(grouped).map(([dept, reqs]) => (
+          <div key={dept}>
+            <h3 className="text-lg font-semibold mb-3">{dept}</h3>
+            {renderTable(reqs)}
+          </div>
+        ))}
+        {requests.length === 0 && (
+          <div className="text-center text-muted-foreground py-12">
+            No requests found
+          </div>
+        )}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -91,8 +209,10 @@ export default function Approvals() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">My Approvals</h1>
-          <p className="text-sm text-muted-foreground mt-1">View and manage approval requests</p>
+          <h1 className="text-2xl font-bold text-foreground">Approvals</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            View and manage approval requests
+          </p>
         </div>
         <Button onClick={() => navigate("/approvals/new")} className="gap-2">
           <Plus className="h-4 w-4" />
@@ -127,61 +247,37 @@ export default function Approvals() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/30">
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Request ID</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Type</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Initiator</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Department</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Progress</th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {filtered.map((req) => (
-                  <tr
-                    key={req.id}
-                    className="hover:bg-muted/30 cursor-pointer transition-snappy"
-                    onClick={() => navigate(`/approvals/${req.id}`)}
-                  >
-                    <td className="px-4 py-3 font-medium text-primary">{req.request_number}</td>
-                    <td className="px-4 py-3">{req.approval_types?.name ?? "—"}</td>
-                    <td className="px-4 py-3">{names[req.initiator_id] ?? "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{req.departments?.name ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={req.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full"
-                            style={{
-                              width: `${req.total_steps ? (req.current_step / req.total_steps) * 100 : 0}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {req.current_step}/{req.total_steps}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{new Date(req.created_at).toLocaleDateString()}</td>
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
-                      No requests found
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <Tabs defaultValue={isAdmin ? "approval" : "my"} className="w-full">
+            <TabsList className="grid w-full grid-cols-2 lg:grid-cols-3">
+              {isAdmin ? (
+                <>
+                  <TabsTrigger value="approval">
+                    Requests to Approve
+                  </TabsTrigger>
+                  <TabsTrigger value="my">My Requests</TabsTrigger>
+                  <TabsTrigger value="other">All Other Requests</TabsTrigger>
+                </>
+              ) : (
+                <>
+                  <TabsTrigger value="my">My Requests</TabsTrigger>
+                  <TabsTrigger value="approval">
+                    Requests to Approve
+                  </TabsTrigger>
+                </>
+              )}
+            </TabsList>
+            <TabsContent value="my" className="mt-0">
+              {renderTable(filtered.myRequests)}
+            </TabsContent>
+            <TabsContent value="approval" className="mt-0">
+              {renderTable(filtered.approvalRequests)}
+            </TabsContent>
+            {isAdmin && (
+              <TabsContent value="other" className="mt-0">
+                {renderGroupedTable(filtered.allOther)}
+              </TabsContent>
+            )}
+          </Tabs>
         </CardContent>
       </Card>
     </div>

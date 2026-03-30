@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useReactToPrint } from "react-to-print";
 import {
   ArrowLeft,
@@ -25,8 +26,8 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
-import { useCompany } from "@/contexts/CompanyContext";
-import { useAuth } from "@/contexts/AuthContext";
+import { useCompany } from "@/contexts/company-hooks";
+import { useAuth } from "@/contexts/auth-hooks";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -92,77 +93,56 @@ const uuidRe =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function RequestDetail() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { settings } = useCompany();
-  const { user, profile } = useAuth();
-  const [request, setRequest] = useState<RequestRow | null>(null);
-  const [actions, setActions] = useState<ActionRow[]>([]);
-  const [initiatorName, setInitiatorName] = useState("");
-  const [initiatorRole, setInitiatorRole] = useState("");
-  const [actorNames, setActorNames] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const { profile, user } = useAuth();
+  const queryClient = useQueryClient();
   const [actioning, setActioning] = useState(false);
-  const [showRequestChangesDialog, setShowRequestChangesDialog] =
-    useState(false);
+  const [showRequestChangesDialog, setShowRequestChangesDialog] = useState(false);
   const [changesComment, setChangesComment] = useState("");
   const [showUpdateForm, setShowUpdateForm] = useState(false);
-  const [updatingFormData, setUpdatingFormData] = useState<
-    Record<string, unknown>
-  >({});
+  const [updatingFormData, setUpdatingFormData] = useState<Record<string, unknown>>({});
+  const printLetterRef = useRef<HTMLDivElement>(null);
 
-  const printLetterRef = useRef<HTMLDivElement | null>(null);
+  const { data: requestData, isLoading: loading, error: notFound } = useQuery({
+    queryKey: ["approval-request", id],
+    queryFn: async () => {
+      if (!id) throw new Error("No ID provided");
+      let resolvedId = id;
+      if (!uuidRe.test(id)) {
+        const r = await api.approvalRequests.resolveNumber(id);
+        resolvedId = r.id;
+      }
+      const data = await api.approvalRequests.get(resolvedId);
+      return data;
+    },
+    enabled: !!id,
+  });
 
-  const companyName = settings?.company_name || "COMPANY NAME";
+  const request = requestData?.request as RequestRow | undefined;
+  const actions = (requestData?.actions ?? []) as ActionRow[];
+  const actorNames = requestData?.actorNames ?? {};
+
+  const { data: initiatorProfile } = useQuery({
+    queryKey: ["profile", request?.initiator_id],
+    queryFn: () => api.profiles.get(request!.initiator_id),
+    enabled: !!request?.initiator_id,
+  });
+
+  const [initiatorName, setInitiatorName] = useState("");
+  const [initiatorRole, setInitiatorRole] = useState("");
 
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      setNotFound(false);
-      try {
-        let resolvedId = id;
-        if (!uuidRe.test(id)) {
-          const r = await api.approvalRequests.resolveNumber(id);
-          resolvedId = r.id;
-        }
-        const data = await api.approvalRequests.get(resolvedId);
-        if (cancelled) return;
-        const row = data.request as RequestRow;
-        setRequest(row);
-        setInitiatorName(row.initiator?.full_name ?? "");
-
-        // Fetch initiator's profile to get role
-        try {
-          const initiatorProfile = await api.profiles.get(row.initiator_id);
-          if (initiatorProfile?.role_name) {
-            setInitiatorRole(initiatorProfile.role_name);
-          }
-        } catch {
-          setInitiatorRole("");
-        }
-
-        setActions((data.actions ?? []) as ActionRow[]);
-        setActorNames(data.actorNames ?? {});
-      } catch {
-        if (!cancelled) {
-          setNotFound(true);
-          setRequest(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    if (request?.initiator?.full_name) {
+      setInitiatorName(request.initiator.full_name);
     }
+    if (initiatorProfile?.role_name) {
+      setInitiatorRole(initiatorProfile.role_name);
+    }
+  }, [request, initiatorProfile]);
 
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
+  const { settings } = useCompany();
+  const companyName = settings?.company_name || "ApprovalHub";
   const pageLayout = request?.approval_types?.page_layout || "portrait";
   const isLandscape = pageLayout !== "portrait";
   // Standard US Letter size
@@ -188,16 +168,44 @@ export default function RequestDetail() {
       }
       #print-letter {
         display: block !important;
-        width: 100% !important;
-        height: 100% !important;
+        width: ${pageWidth} !important;
+        height: ${pageHeight} !important;
         margin: 0 !important;
         padding: 0 !important;
         box-sizing: border-box !important;
         overflow: hidden !important;
+        page-break-inside: avoid !important;
+        page-break-before: avoid !important;
+        page-break-after: avoid !important;
+      }
+      #print-letter > div {
+        width: 100% !important;
+        height: 100% !important;
+        margin: 0 !important;
+        padding: 1in !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+      }
+      #print-letter .relative {
+        height: auto !important;
+        min-height: auto !important;
+        flex: 1 !important;
+        page-break-inside: avoid !important;
+      }
+      #print-letter * {
+        page-break-inside: avoid !important;
+        page-break-before: avoid !important;
+        page-break-after: avoid !important;
       }
       #print-letter table { width: 100% !important; table-layout: auto !important; }
       #print-letter table td, #print-letter table th { word-break: break-word !important; }
       .no-print { display: none !important; }
+      * {
+        -webkit-print-color-adjust: exact !important;
+        color-adjust: exact !important;
+      }
     `,
   });
 
@@ -205,11 +213,15 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      const data = (await api.approvalRequests.approve(request.id, {
+      await api.approvalRequests.approve(request.id, {
         comment: "",
-      })) as unknown as { request: RequestRow; actions: ActionRow[] };
-      setRequest(data.request);
-      setActions(data.actions ?? []);
+      });
+      
+      // Invalidate queries to refresh data across the app
+      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
+      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
+      
       toast.success("Request approved successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to approve request");
@@ -222,11 +234,15 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      const data = (await api.approvalRequests.reject(request.id, {
+      await api.approvalRequests.reject(request.id, {
         comment: "",
-      })) as unknown as { request: RequestRow; actions: ActionRow[] };
-      setRequest(data.request);
-      setActions(data.actions ?? []);
+      });
+      
+      // Invalidate queries to refresh data across the app
+      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
+      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
+      
       toast.success("Request rejected successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reject request");
@@ -239,11 +255,15 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      const data = (await api.approvalRequests.requestChanges(request.id, {
+      await api.approvalRequests.requestChanges(request.id, {
         comment: changesComment,
-      })) as unknown as { request: RequestRow; actions: ActionRow[] };
-      setRequest(data.request);
-      setActions(data.actions ?? []);
+      });
+      
+      // Invalidate queries to refresh data across the app
+      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
+      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
+      
       setShowRequestChangesDialog(false);
       setChangesComment("");
       toast.success("Changes requested successfully");
@@ -258,11 +278,15 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      const data = (await api.approvalRequests.update(request.id, {
+      await api.approvalRequests.update(request.id, {
         form_data: updatingFormData,
-      })) as unknown as { request: RequestRow; actions: ActionRow[] };
-      setRequest(data.request);
-      setActions(data.actions ?? []);
+      });
+      
+      // Invalidate queries to refresh data across the app
+      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
+      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
+      
       setShowUpdateForm(false);
       setUpdatingFormData({});
       toast.success("Request updated and resubmitted successfully");
@@ -831,8 +855,8 @@ export default function RequestDetail() {
                     ref={printLetterRef}
                     style={{
                       display: "none",
-                      width: "100%",
-                      height: "100%",
+                      width: pageWidth,
+                      height: pageHeight,
                       boxSizing: "border-box",
                     }}
                   >

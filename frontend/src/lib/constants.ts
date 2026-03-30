@@ -80,6 +80,8 @@ export type ApprovalTypeRow = {
   description: string | null;
   fields: ApprovalFormField[];
   page_layout?: string;
+  pre_salutation?: string | null;
+  post_salutation?: string | null;
 };
 
 export type ChainStep = {

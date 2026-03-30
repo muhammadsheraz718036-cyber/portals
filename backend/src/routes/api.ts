@@ -685,15 +685,19 @@ apiRouter.post(
         description: z.string().optional(),
         fields: z.array(z.any()),
         page_layout: z.enum(["portrait", "landscape"]).optional(),
+        pre_salutation: z.string().nullable().optional(),
+        post_salutation: z.string().nullable().optional(),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, created_by) VALUES ($1, $2, $3::jsonb, $4, $5) RETURNING *`,
+      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7) RETURNING *`,
       [
         body.name.trim(),
         body.description ?? "",
         JSON.stringify(body.fields),
         body.page_layout ?? "portrait",
+        body.pre_salutation ?? null,
+        body.post_salutation ?? null,
         req.auth!.userId,
       ],
     );
@@ -731,6 +735,8 @@ apiRouter.patch(
         description: z.string().optional(),
         fields: z.array(z.any()).optional(),
         page_layout: z.enum(["portrait", "landscape"]).optional(),
+        pre_salutation: z.string().nullable().optional(),
+        post_salutation: z.string().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -752,6 +758,14 @@ apiRouter.patch(
       parts.push(`page_layout = $${n++}`);
       vals.push(body.page_layout);
     }
+    if (body.pre_salutation !== undefined) {
+      parts.push(`pre_salutation = $${n++}`);
+      vals.push(body.pre_salutation);
+    }
+    if (body.post_salutation !== undefined) {
+      parts.push(`post_salutation = $${n++}`);
+      vals.push(body.post_salutation);
+    }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
     vals.push(req.params.id);
@@ -769,6 +783,10 @@ apiRouter.patch(
     if (body.fields !== undefined) changes.push(`fields updated`);
     if (body.page_layout !== undefined)
       changes.push(`page_layout: "${body.page_layout}"`);
+    if (body.pre_salutation !== undefined)
+      changes.push(`pre_salutation updated`);
+    if (body.post_salutation !== undefined)
+      changes.push(`post_salutation updated`);
 
     await logAudit(
       req.auth!.userId,
@@ -1376,7 +1394,15 @@ apiRouter.get(
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object('name', at.name) AS approval_types,
-        json_build_object('name', d.name) AS departments
+        json_build_object('name', d.name) AS departments,
+        (ar.initiator_id = $2) AS is_initiator,
+        EXISTS (
+          SELECT 1 FROM approval_actions aa
+          JOIN roles r ON r.name = aa.role_name
+          WHERE aa.request_id = ar.id
+          AND r.id = $3
+          AND aa.status IN ('pending', 'waiting')
+        ) AS needs_approval
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
@@ -1411,7 +1437,7 @@ apiRouter.get(
     const roleId = req.profile!.role_id;
     const { rows } = await pool.query(
       `SELECT ar.*,
-        json_build_object('name', at.name, 'description', at.description, 'fields', at.fields) AS approval_types,
+        json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
         json_build_object('name', d.name) AS departments,
         json_build_object('full_name', ip.full_name) AS initiator
       FROM approval_requests ar

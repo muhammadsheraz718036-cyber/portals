@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { useCompany } from "@/contexts/CompanyContext";
-import { useAuth } from "@/contexts/AuthContext";
+import { useCompany } from "@/contexts/company-hooks";
+import { useAuth } from "@/contexts/auth-hooks";
 import { toast } from "sonner";
-import { Building2, KeyRound, Loader2 } from "lucide-react";
+import { Building2, Loader2 } from "lucide-react";
 
 export function AdminSettings() {
   const { settings, refetch } = useCompany();
@@ -15,11 +15,6 @@ export function AdminSettings() {
   const [companyName, setCompanyName] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -45,37 +40,6 @@ export function AdminSettings() {
       toast.error(e instanceof Error ? e.message : "Save failed");
     }
     setSaving(false);
-  };
-
-  const handleResetPassword = async () => {
-    if (!newPassword || newPassword.length < 6) {
-      toast.error("New password must be at least 6 characters");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error("Passwords do not match");
-      return;
-    }
-    if (!currentPassword) {
-      toast.error("Current password is required");
-      return;
-    }
-    setResetting(true);
-    try {
-      await api.auth.updatePassword({
-        new_password: newPassword,
-        current_password: currentPassword,
-      });
-      toast.success("Password updated successfully");
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err: unknown) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to reset password",
-      );
-    }
-    setResetting(false);
   };
 
   return (
@@ -129,54 +93,6 @@ export function AdminSettings() {
           </Button>
         </CardContent>
       </Card>
-
-      {isAdmin && (
-        <Card className="border">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <KeyRound className="h-4 w-4" /> Change Admin Password
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Current Password</Label>
-              <Input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Enter your current password"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>New Password</Label>
-              <Input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Minimum 6 characters"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Confirm New Password</Label>
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm new password"
-              />
-            </div>
-            <Button
-              onClick={handleResetPassword}
-              disabled={resetting}
-              variant="outline"
-              className="gap-2"
-            >
-              {resetting && <Loader2 className="h-4 w-4 animate-spin" />}
-              Update Password
-            </Button>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

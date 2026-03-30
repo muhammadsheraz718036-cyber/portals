@@ -8,8 +8,8 @@ import {
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
-import { useCompany } from "@/contexts/CompanyContext";
+import { useAuth } from "@/contexts/auth-hooks";
+import { useCompany } from "@/contexts/company-hooks";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -17,12 +17,14 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarFooter,
-  useSidebar,
 } from "@/components/ui/sidebar";
+import { useSidebar } from "@/components/ui/sidebar-hooks";
 
 export function AppSidebar() {
   const { state } = useSidebar();

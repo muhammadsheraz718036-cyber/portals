@@ -6,7 +6,7 @@ import { AdminApprovalTypes } from "@/components/admin/AdminApprovalTypes";
 import { AdminChains } from "@/components/admin/AdminChains";
 import { AdminUsers } from "@/components/admin/AdminUsers";
 import { AdminSettings } from "@/components/admin/AdminSettings";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/auth-hooks";
 import { Navigate } from "react-router-dom";
 
 export default function AdminConsole() {

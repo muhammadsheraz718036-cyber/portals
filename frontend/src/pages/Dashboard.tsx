@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, CheckCircle, XCircle, Clock, ArrowRight, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/auth-hooks";
 import type { RequestStatus } from "@/lib/constants";
 
 type RequestRow = {
@@ -31,41 +32,24 @@ type AuditRow = {
 export default function Dashboard() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
-  const [requests, setRequests] = useState<RequestRow[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditRow[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
+  const { data: requests = [], isLoading: loading } = useQuery({
+    queryKey: ["approval-requests"],
+    queryFn: async () => {
+      const data = await api.approvalRequests.list();
+      return data as RequestRow[];
+    },
+  });
 
-    async function load() {
-      setLoading(true);
-      try {
-        const reqData = await api.approvalRequests.list();
-        if (!cancelled) setRequests((reqData as RequestRow[]) ?? []);
-      } catch {
-        if (!cancelled) setRequests([]);
-      }
-
-      if (isAdmin) {
-        try {
-          const logData = await api.auditLogs.list();
-          if (!cancelled) setAuditLogs((logData as AuditRow[]).slice(0, 5));
-        } catch {
-          if (!cancelled) setAuditLogs([]);
-        }
-      } else if (!cancelled) {
-        setAuditLogs([]);
-      }
-
-      if (!cancelled) setLoading(false);
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAdmin]);
+  const { data: auditLogs = [] } = useQuery({
+    queryKey: ["audit-logs"],
+    queryFn: async () => {
+      if (!isAdmin) return [];
+      const data = await api.auditLogs.list();
+      return (data as AuditRow[]).slice(0, 5);
+    },
+    enabled: isAdmin,
+  });
 
   const stats = useMemo(() => {
     const total = requests.length;

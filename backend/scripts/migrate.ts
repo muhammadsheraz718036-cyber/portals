@@ -52,9 +52,18 @@ async function run() {
     await client.query(passwordMigration);
 
     console.log("✓ Migration completed successfully!");
+    console.log("✓ Password lockout columns on profiles (or already present)");
+
     console.log(
-      "✓ Password lockout columns on profiles (or already present)",
+      "Running migration: Add salutation columns to approval_types...",
     );
+    const salutationMigration = readFileSync(
+      join(__dirname, "../sql/add-salutations.sql"),
+      "utf8",
+    );
+    await client.query(salutationMigration);
+
+    console.log("✓ Salutation columns added to approval_types table");
   } catch (err) {
     console.error("Migration failed:", err);
     process.exit(1);

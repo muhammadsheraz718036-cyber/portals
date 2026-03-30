@@ -1,19 +1,12 @@
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
+import { CompanyContext, type CompanyContextType } from "./company-context";
 
 interface CompanySettings {
   id: string;
   company_name: string;
   logo_url: string | null;
 }
-
-interface CompanyContextType {
-  settings: CompanySettings | null;
-  loading: boolean;
-  refetch: () => Promise<void>;
-}
-
-const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 
 export function CompanyProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<CompanySettings | null>(null);
@@ -49,8 +42,3 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useCompany() {
-  const ctx = useContext(CompanyContext);
-  if (!ctx) throw new Error("useCompany must be used within CompanyProvider");
-  return ctx;
-}

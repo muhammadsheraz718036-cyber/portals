@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -9,7 +10,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Plus, Trash2 } from "lucide-react";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -182,27 +182,29 @@ export function LineItemsManager({
 
       case "radio":
         return (
-          <RadioGroup
-            value={String(value)}
-            onValueChange={(v) => updateItem(itemId, field.name, v)}
-          >
-            <div className="flex flex-wrap gap-2">
-              {field.options?.map((option) => (
-                <div key={option} className="flex items-center space-x-1">
-                  <RadioGroupItem
-                    value={option}
-                    id={`${itemId}_${field.name}_${option}`}
-                  />
-                  <label
-                    htmlFor={`${itemId}_${field.name}_${option}`}
-                    className="text-xs cursor-pointer"
-                  >
-                    {option}
-                  </label>
-                </div>
-              ))}
-            </div>
-          </RadioGroup>
+          <div className="flex flex-wrap gap-2">
+            {field.options?.map((option) => (
+              <div key={option} className="flex items-center space-x-1">
+                <input
+                  type="radio"
+                  id={`${itemId}_${field.name}_${option}`}
+                  name={`${itemId}_${field.name}`}
+                  value={option}
+                  checked={String(value) === option}
+                  onChange={(e) =>
+                    updateItem(itemId, field.name, e.target.value)
+                  }
+                  className="h-3 w-3"
+                />
+                <Label
+                  htmlFor={`${itemId}_${field.name}_${option}`}
+                  className="text-xs cursor-pointer"
+                >
+                  {option}
+                </Label>
+              </div>
+            ))}
+          </div>
         );
 
       default:
@@ -265,7 +267,7 @@ export function LineItemsManager({
                             {groupFields.map((field) => (
                               <th
                                 key={`${group}-${field.name}`}
-                                className={`text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide ${
+                                className={`text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap ${
                                   field.type === "number" ? "text-right" : ""
                                 }`}
                               >
@@ -277,7 +279,7 @@ export function LineItemsManager({
                                 )}
                               </th>
                             ))}
-                            <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide w-12">
+                            <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide w-12 whitespace-nowrap">
                               Action
                             </th>
                           </tr>

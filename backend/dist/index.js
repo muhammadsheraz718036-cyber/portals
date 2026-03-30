@@ -6,7 +6,10 @@ import { verifyDatabaseReady } from "./verifyDb.js";
 import { apiRouter } from "./routes/api.js";
 import { HttpError } from "./httpError.js";
 function isPgError(err) {
-    return typeof err === "object" && err !== null && "code" in err && typeof err.code === "string";
+    return (typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        typeof err.code === "string");
 }
 async function main() {
     await verifyDatabaseReady();
@@ -41,7 +44,9 @@ async function main() {
             return;
         }
         if (err instanceof ZodError) {
-            res.status(400).json({ error: err.flatten().fieldErrors, message: err.message });
+            res
+                .status(400)
+                .json({ error: err.flatten().fieldErrors, message: err.message });
             return;
         }
         if (isPgError(err)) {
@@ -52,11 +57,17 @@ async function main() {
                 return;
             }
             if (err.code === "23503") {
-                res.status(400).json({ error: "Invalid reference: related row does not exist (foreign key)." });
+                res
+                    .status(400)
+                    .json({
+                    error: "Invalid reference: related row does not exist (foreign key).",
+                });
                 return;
             }
             if (err.code === "23505") {
-                res.status(400).json({ error: "Duplicate value violates a unique constraint." });
+                res
+                    .status(400)
+                    .json({ error: "Duplicate value violates a unique constraint." });
                 return;
             }
             console.error("Database error:", err);
@@ -72,7 +83,7 @@ async function main() {
         res.status(500).json({
             error: process.env.NODE_ENV === "development"
                 ? String(err)
-                : "Internal server error"
+                : "Internal server error",
         });
     });
     const port = Number(process.env.PORT) || 4000;

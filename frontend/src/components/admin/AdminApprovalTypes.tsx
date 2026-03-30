@@ -42,6 +42,8 @@ interface ApprovalType {
   description: string;
   fields: Field[];
   page_layout?: string;
+  pre_salutation?: string;
+  post_salutation?: string;
 }
 
 export function AdminApprovalTypes() {
@@ -57,6 +59,8 @@ export function AdminApprovalTypes() {
   const [draggedFieldIdx, setDraggedFieldIdx] = useState<number | null>(null);
   const [groups, setGroups] = useState<string[]>(["General"]); // Default group
   const [newGroupName, setNewGroupName] = useState("");
+  const [preSalutation, setPreSalutation] = useState("");
+  const [postSalutation, setPostSalutation] = useState("");
 
   const fetchTypes = async () => {
     try {
@@ -80,6 +84,8 @@ export function AdminApprovalTypes() {
     setPageLayout("portrait");
     setGroups(["General"]);
     setNewGroupName("");
+    setPreSalutation("");
+    setPostSalutation("");
     setActiveTab("fields");
     setDialogOpen(true);
   };
@@ -89,6 +95,8 @@ export function AdminApprovalTypes() {
     setDescription(t.description);
     setFields(t.fields);
     setPageLayout((t.page_layout as PageLayout) || "portrait");
+    setPreSalutation(t.pre_salutation || "");
+    setPostSalutation(t.post_salutation || "");
     // Extract unique groups from fields
     const uniqueGroups = Array.from(
       new Set(t.fields.map((f) => f.group || "General")),
@@ -201,6 +209,8 @@ export function AdminApprovalTypes() {
           description,
           fields: cleanFields,
           page_layout: pageLayout,
+          pre_salutation: preSalutation || null,
+          post_salutation: postSalutation || null,
         });
         toast.success("Updated");
       } else {
@@ -209,6 +219,8 @@ export function AdminApprovalTypes() {
           description,
           fields: cleanFields,
           page_layout: pageLayout,
+          pre_salutation: preSalutation || null,
+          post_salutation: postSalutation || null,
         });
         toast.success("Created");
       }
@@ -236,6 +248,8 @@ export function AdminApprovalTypes() {
         description: type.description,
         fields: type.fields.map((f) => ({ ...f })),
         page_layout: type.page_layout,
+        pre_salutation: type.pre_salutation,
+        post_salutation: type.post_salutation,
       });
       toast.success("Approval type duplicated");
       fetchTypes();
@@ -267,8 +281,9 @@ export function AdminApprovalTypes() {
               onValueChange={setActiveTab}
               className="w-full mt-4"
             >
-              <TabsList className="grid w-full grid-cols-1">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="fields">Form Fields</TabsTrigger>
+                <TabsTrigger value="salutations">Salutations</TabsTrigger>
               </TabsList>
               <TabsContent value="fields" className="space-y-4 mt-4">
                 <div className="space-y-1.5">
@@ -524,6 +539,34 @@ export function AdminApprovalTypes() {
                       </p>
                     )}
                   </div>
+                </div>
+              </TabsContent>
+              <TabsContent value="salutations" className="space-y-4 mt-4">
+                <div className="space-y-1.5">
+                  <Label>Pre-Salutation (Optional)</Label>
+                  <Textarea
+                    value={preSalutation}
+                    onChange={(e) => setPreSalutation(e.target.value)}
+                    placeholder="e.g., Dear [Recipient],&#10;&#10;I hope this message finds you well..."
+                    rows={4}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default greeting text that will appear before the form data
+                    in approval requests.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Post-Salutation (Optional)</Label>
+                  <Textarea
+                    value={postSalutation}
+                    onChange={(e) => setPostSalutation(e.target.value)}
+                    placeholder="e.g., Thank you for your attention to this matter.&#10;&#10;Best regards,&#10;[Your Name]"
+                    rows={4}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default closing text that will appear after the form data in
+                    approval requests.
+                  </p>
                 </div>
               </TabsContent>
             </Tabs>

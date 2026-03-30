@@ -13,8 +13,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
-import { useCompany } from "@/contexts/CompanyContext";
+import { useAuth } from "@/contexts/auth-hooks";
+import { useCompany } from "@/contexts/company-hooks";
 import { FormFieldInput } from "@/components/FormFieldInput";
 import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import { RichTextEditor } from "@/components/RichTextEditor";
@@ -91,6 +91,14 @@ export default function NewRequest() {
     };
   }, []);
 
+  useEffect(() => {
+    const approvalType = types.find((t) => t.id === selectedType);
+    if (approvalType) {
+      setPreComments(approvalType.pre_salutation || "");
+      setPostComments(approvalType.post_salutation || "");
+    }
+  }, [selectedType, types]);
+
   const approvalType = types.find((t) => t.id === selectedType);
   const chainList = selectedType ? (chainsByType[selectedType] ?? []) : [];
   const chain = chainList[0];
@@ -111,7 +119,11 @@ export default function NewRequest() {
     // Validate required fields in items (all fields are now repeatable)
     if (repeatableFields.some((f) => f.required)) {
       for (const item of items) {
-        const missingItemFields = repeatableFields.filter(
+        // Get fields applicable to this item's group
+        const itemFields = repeatableFields.filter(
+          (field) => (field.group || "General") === (item.__group || "General"),
+        );
+        const missingItemFields = itemFields.filter(
           (field) =>
             field.required &&
             (!item[field.name] || String(item[field.name]).trim() === ""),
@@ -126,14 +138,15 @@ export default function NewRequest() {
     }
 
     // Validate required comments
-    if (!preComments || preComments.trim() === "") {
-      toast.error("Pre-salutation is required");
-      return;
-    }
-    if (!postComments || postComments.trim() === "") {
-      toast.error("Closing remarks are required");
-      return;
-    }
+    // Pre and post salutations are now optional
+    // if (!preComments || preComments.trim() === "") {
+    //   toast.error("Pre-salutation is required");
+    //   return;
+    // }
+    // if (!postComments || postComments.trim() === "") {
+    //   toast.error("Closing remarks are required");
+    //   return;
+    // }
 
     setSubmitting(true);
     if (!user) {
@@ -254,7 +267,7 @@ export default function NewRequest() {
                 {/* Pre-Comments (Salutation) */}
                 <div className="space-y-2 border-t pt-4">
                   <label className="block text-sm font-medium text-foreground">
-                    Pre-Salutation <span className="text-destructive">*</span>
+                    Pre-Salutation
                   </label>
                   <RichTextEditor
                     content={preComments}
@@ -296,7 +309,7 @@ export default function NewRequest() {
                 <CardContent>
                   <div className="space-y-2">
                     <label className="block text-sm font-medium text-foreground">
-                      Post-Comments <span className="text-destructive">*</span>
+                      Post-Comments
                     </label>
                     <RichTextEditor
                       content={postComments}
