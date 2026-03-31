@@ -629,9 +629,9 @@ export default function NewRequest() {
             <Button
               type="submit"
               className="gap-2"
-              disabled={submitting || !chain}
+              disabled={createMutation.isPending || !chain}
             >
-              {submitting ? (
+              {createMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Send className="h-4 w-4" />

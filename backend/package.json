@@ -8,8 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:schema": "tsx scripts/apply-schema.ts",
-    "db:migrate": "tsx scripts/migrate.ts",
-    "db:migrate:attachments": "psql $DATABASE_URL -f sql/add-file-attachments.sql"
+    "db:migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
     "@types/multer": "^2.1.0",

@@ -76,7 +76,6 @@ export function AdminApprovalTypes() {
   const [pageLayout, setPageLayout] = useState<PageLayout>("portrait");
   const [allowAttachments, setAllowAttachments] = useState(false);
   const [attachmentFields, setAttachmentFields] = useState<AttachmentField[]>([]);
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("fields");
   const [draggedFieldIdx, setDraggedFieldIdx] = useState<number | null>(null);
   const [groups, setGroups] = useState<string[]>(["General"]); // Default group
@@ -85,7 +84,7 @@ export function AdminApprovalTypes() {
   const [postSalutation, setPostSalutation] = useState("");
 
   // React Query hooks
-  const { data: types = [], isLoading: loading } = useApprovalTypes();
+  const { data: types = [], isLoading: isLoadingTypes } = useApprovalTypes();
   const createMutation = useCreateApprovalType();
   const updateMutation = useUpdateApprovalType();
   const deleteMutation = useDeleteApprovalType();
@@ -771,7 +770,7 @@ export function AdminApprovalTypes() {
           </DialogContent>
         </Dialog>
       </div>
-      {loading ? (
+      {isLoadingTypes ? (
         <p className="text-sm text-muted-foreground text-center py-8">
           Loading...
         </p>
