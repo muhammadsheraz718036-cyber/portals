@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Applies incremental SQL migrations (page layout, password lockout columns, etc.).
+ * Applies all SQL migrations in order.
  * Run after schema or when pulling updates: npm run db:migrate
  */
 
@@ -24,48 +24,72 @@ if (!url) {
 
 const client = new pg.Client({ connectionString: url });
 
+// List of all migration files in order
+const migrations = [
+  { name: "page_layout", file: "add-page-layout.sql" },
+  { name: "password_management", file: "add-password-management.sql" },
+  { name: "salutations", file: "add-salutations.sql" },
+  { name: "file_attachments", file: "add-file-attachments.sql" },
+];
+
 async function run() {
   try {
     await client.connect();
-    console.log(
-      "Running migration: Add page_layout column to approval_types...",
-    );
+    console.log("🚀 Running all migrations...\n");
 
-    // Read and execute the migration
-    const migration = readFileSync(
-      join(__dirname, "../sql/add-page-layout.sql"),
-      "utf8",
-    );
-    await client.query(migration);
+    // Create migration log table if it doesn't exist
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS migration_log (
+          id SERIAL PRIMARY KEY,
+          migration_name VARCHAR(255) NOT NULL,
+          executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(migration_name)
+      );
+    `);
 
-    console.log(
-      "✓ page_layout column added to approval_types table (or already exists)",
-    );
+    for (const migration of migrations) {
+      console.log(`📋 Running migration: ${migration.name}...`);
+      
+      // Check if migration already ran
+      const result = await client.query(
+        "SELECT migration_name FROM migration_log WHERE migration_name = $1",
+        [migration.name]
+      );
+      
+      if (result.rows.length > 0) {
+        console.log(`⏭️  Migration ${migration.name} already executed, skipping...\n`);
+        continue;
+      }
 
-    console.log(
-      "Running migration: Add password management columns to profiles...",
-    );
-    const passwordMigration = readFileSync(
-      join(__dirname, "../sql/add-password-management.sql"),
-      "utf8",
-    );
-    await client.query(passwordMigration);
+      // Read and execute the migration
+      const migrationSQL = readFileSync(
+        join(__dirname, `../sql/${migration.file}`),
+        "utf8",
+      );
+      await client.query(migrationSQL);
 
-    console.log("✓ Migration completed successfully!");
-    console.log("✓ Password lockout columns on profiles (or already present)");
+      // Record that migration was executed
+      await client.query(
+        "INSERT INTO migration_log (migration_name) VALUES ($1)",
+        [migration.name]
+      );
 
-    console.log(
-      "Running migration: Add salutation columns to approval_types...",
-    );
-    const salutationMigration = readFileSync(
-      join(__dirname, "../sql/add-salutations.sql"),
-      "utf8",
-    );
-    await client.query(salutationMigration);
+      console.log(`✅ Migration ${migration.name} completed successfully!\n`);
+    }
 
-    console.log("✓ Salutation columns added to approval_types table");
+    console.log("🎉 All migrations completed successfully!");
+    console.log("📊 Migration summary:");
+    
+    const summary = await client.query(
+      "SELECT migration_name, executed_at FROM migration_log ORDER BY executed_at"
+    );
+    
+    summary.rows.forEach((row) => {
+      console.log(`   ✓ ${row.migration_name} (${new Date(row.executed_at).toLocaleDateString()})`);
+    });
+
   } catch (err) {
-    console.error("Migration failed:", err);
+    console.error("❌ Migration failed:", err);
     process.exit(1);
   } finally {
     await client.end();

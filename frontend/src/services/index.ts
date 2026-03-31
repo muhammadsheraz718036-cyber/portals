@@ -12,6 +12,7 @@ export { ProfileService } from './profiles/ProfileService';
 export { AdminService } from './admin/AdminService';
 export { CompanyService } from './company/CompanyService';
 export { AuditService } from './audit/AuditService';
+export { RequestAttachmentService } from './requestAttachments/RequestAttachmentService';
 
 // Type exports
 export * from './types';
@@ -27,6 +28,7 @@ import { ProfileService } from './profiles/ProfileService';
 import { AdminService } from './admin/AdminService';
 import { CompanyService } from './company/CompanyService';
 import { AuditService } from './audit/AuditService';
+import { RequestAttachmentService } from './requestAttachments/RequestAttachmentService';
 
 export const services = {
   auth: new AuthService(),
@@ -39,4 +41,5 @@ export const services = {
   admin: new AdminService(),
   company: new CompanyService(),
   audit: new AuditService(),
+  requestAttachments: new RequestAttachmentService(),
 } as const;

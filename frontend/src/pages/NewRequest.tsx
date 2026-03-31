@@ -12,84 +12,46 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { 
+  useApprovalTypes, 
+  useApprovalChains, 
+  useCreateApprovalRequest,
+  useApprovalTypeAttachments,
+  useUploadRequestAttachments
+} from "@/hooks/services";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
 import { FormFieldInput } from "@/components/FormFieldInput";
 import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import { RichTextEditor } from "@/components/RichTextEditor";
+import { FileUpload } from "@/components/FileUpload";
 import type {
   ApprovalFormField,
   ApprovalTypeRow,
   ChainRow,
   ChainStep,
 } from "@/lib/constants";
+import type { ApprovalTypeAttachment } from "@/services/types";
 
 export default function NewRequest() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const { settings } = useCompany();
   const [selectedType, setSelectedType] = useState<string>("");
-  // const [editorContent, setEditorContent] = useState<string>("");
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [items, setItems] = useState<LineItem[]>([]);
   const [preComments, setPreComments] = useState<string>("");
   const [postComments, setPostComments] = useState<string>("");
-  const [types, setTypes] = useState<ApprovalTypeRow[]>([]);
-  const [chainsByType, setChainsByType] = useState<Record<string, ChainRow[]>>(
-    {},
-  );
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [attachmentFiles, setAttachmentFiles] = useState<Record<string, File[]>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      try {
-        const [rawTypes, chains] = await Promise.all([
-          api.approvalTypes.list() as Promise<ApprovalTypeRow[]>,
-          api.approvalChains.list() as Promise<ChainRow[]>,
-        ]);
-
-        if (cancelled) return;
-
-        setTypes(
-          rawTypes.map((t) => ({
-            ...t,
-            fields: Array.isArray(t.fields) ? t.fields : [],
-          })),
-        );
-
-        const map: Record<string, ChainRow[]> = {};
-        for (const c of chains as ChainRow[]) {
-          const tid = c.approval_type_id;
-          if (!tid) continue;
-          if (!map[tid]) map[tid] = [];
-          map[tid].push({
-            id: c.id,
-            name: c.name,
-            approval_type_id: c.approval_type_id,
-            steps: Array.isArray(c.steps) ? c.steps : [],
-          });
-        }
-        setChainsByType(map);
-      } catch {
-        if (!cancelled) {
-          setTypes([]);
-          setChainsByType({});
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // React Query hooks
+  const { data: types = [], isLoading: loading } = useApprovalTypes();
+  const { data: chains = [] } = useApprovalChains();
+  const createMutation = useCreateApprovalRequest();
+  const uploadMutation = useUploadRequestAttachments();
+  
+  // Get attachment configurations for selected type
+  const { data: attachmentConfigs = [] } = useApprovalTypeAttachments(selectedType);
 
   useEffect(() => {
     const approvalType = types.find((t) => t.id === selectedType);
@@ -100,7 +62,7 @@ export default function NewRequest() {
   }, [selectedType, types]);
 
   const approvalType = types.find((t) => t.id === selectedType);
-  const chainList = selectedType ? (chainsByType[selectedType] ?? []) : [];
+  const chainList = selectedType ? chains.filter((c) => c.approval_type_id === selectedType) : [];
   const chain = chainList[0];
 
   // All fields are now repeatable (line items)
@@ -114,6 +76,19 @@ export default function NewRequest() {
     if (!selectedType || !chain) {
       toast.error("Select a request type with a configured approval chain.");
       return;
+    }
+
+    // Validate required attachments
+    for (const config of attachmentConfigs) {
+      const files = attachmentFiles[config.field_name] || [];
+      if (config.required && files.length === 0) {
+        toast.error(`${config.label} is required`);
+        return;
+      }
+      if (files.length > config.max_files) {
+        toast.error(`${config.label}: Maximum ${config.max_files} files allowed`);
+        return;
+      }
     }
 
     // Validate required fields in items (all fields are now repeatable)
@@ -137,21 +112,8 @@ export default function NewRequest() {
       }
     }
 
-    // Validate required comments
-    // Pre and post salutations are now optional
-    // if (!preComments || preComments.trim() === "") {
-    //   toast.error("Pre-salutation is required");
-    //   return;
-    // }
-    // if (!postComments || postComments.trim() === "") {
-    //   toast.error("Closing remarks are required");
-    //   return;
-    // }
-
-    setSubmitting(true);
     if (!user) {
       toast.error("You must be signed in.");
-      setSubmitting(false);
       return;
     }
 
@@ -159,7 +121,7 @@ export default function NewRequest() {
     const totalSteps = steps.length;
 
     try {
-      await api.approvalRequests.create({
+      const requestData = await createMutation.mutateAsync({
         approval_type_id: selectedType,
         approval_chain_id: chain.id,
         department_id: profile?.department_id ?? null,
@@ -168,21 +130,38 @@ export default function NewRequest() {
           items: items,
           pre_comments: preComments,
           post_comments: postComments,
-          // content: editorContent, // Rich text editor content (commented out)
         } as Record<string, unknown>,
         current_step: 1,
         total_steps: Math.max(totalSteps, 1),
         status: totalSteps > 0 ? "in_progress" : "pending",
       });
+
+      // Upload files after request is created
+      const uploadPromises: Promise<unknown>[] = [];
+      for (const config of attachmentConfigs) {
+        const files = attachmentFiles[config.field_name] || [];
+        if (files.length > 0) {
+          uploadPromises.push(
+            uploadMutation.mutateAsync({
+              requestId: requestData.id,
+              fieldName: config.field_name,
+              files,
+            })
+          );
+        }
+      }
+
+      if (uploadPromises.length > 0) {
+        await Promise.all(uploadPromises);
+        toast.success("Request submitted with attachments");
+      } else {
+        toast.success("Request submitted");
+      }
+
+      navigate("/approvals");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to submit");
-      setSubmitting(false);
-      return;
     }
-
-    toast.success("Request submitted");
-    navigate("/approvals");
-    setSubmitting(false);
   };
 
   if (loading) {
@@ -223,6 +202,7 @@ export default function NewRequest() {
                 setItems([]);
                 setPreComments("");
                 setPostComments("");
+                setAttachmentFiles({});
                 // setEditorContent("");
               }}
             >
@@ -299,6 +279,35 @@ export default function NewRequest() {
               onItemsChange={setItems}
               repeatableFields={repeatableFields}
             />
+
+            {/* File Attachments */}
+            {attachmentConfigs.length > 0 && (
+              <Card className="border">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">File Attachments</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {attachmentConfigs.map((config) => (
+                    <FileUpload
+                      key={config.field_name}
+                      fieldName={config.field_name}
+                      label={config.label}
+                      required={config.required}
+                      maxFiles={config.max_files}
+                      maxSizeMB={config.max_file_size_mb}
+                      allowedExtensions={config.allowed_extensions}
+                      value={attachmentFiles[config.field_name] || []}
+                      onChange={(files) => 
+                        setAttachmentFiles(prev => ({
+                          ...prev,
+                          [config.field_name]: files
+                        }))
+                      }
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Post-Comments (Closing Remarks) */}
             {(regularFields.length > 0 || repeatableFields.length > 0) && (

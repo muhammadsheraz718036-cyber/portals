@@ -9,3 +9,4 @@ export * from './useProfiles';
 export * from './useAdmin';
 export * from './useCompany';
 export * from './useAudit';
+export * from './useRequestAttachments';

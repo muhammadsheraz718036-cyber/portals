@@ -329,3 +329,5 @@ export const api = {
       >("/api/audit-logs"),
   },
 };
+
+export { request };

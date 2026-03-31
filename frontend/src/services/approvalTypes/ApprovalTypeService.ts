@@ -2,9 +2,12 @@ import { BaseService } from '../base/BaseService';
 import { 
   ApprovalType, 
   CreateApprovalTypeRequest, 
-  UpdateApprovalTypeRequest 
+  UpdateApprovalTypeRequest,
+  ApprovalTypeAttachment,
+  CreateApprovalTypeAttachmentRequest,
+  UpdateApprovalTypeAttachmentRequest
 } from '../types';
-import { api } from '../../lib/api';
+import { api, request } from '../../lib/api';
 
 export class ApprovalTypeService extends BaseService {
   async list(): Promise<ApprovalType[]> {
@@ -40,5 +43,38 @@ export class ApprovalTypeService extends BaseService {
     return this.handleRequest(async () => {
       await api.approvalTypes.delete(id);
     });
+  }
+
+  // File attachment methods
+  async getAttachments(approvalTypeId: string): Promise<ApprovalTypeAttachment[]> {
+    return this.handleRequest(() => 
+      request<ApprovalTypeAttachment[]>(`/api/approval-types/${approvalTypeId}/attachments`)
+    );
+  }
+
+  async createAttachment(approvalTypeId: string, data: CreateApprovalTypeAttachmentRequest): Promise<ApprovalTypeAttachment> {
+    return this.handleRequest(() => 
+      request<ApprovalTypeAttachment>(`/api/approval-types/${approvalTypeId}/attachments`, {
+        method: 'POST',
+        body: JSON.stringify(data)
+      })
+    );
+  }
+
+  async updateAttachment(approvalTypeId: string, attachmentId: string, data: UpdateApprovalTypeAttachmentRequest): Promise<ApprovalTypeAttachment> {
+    return this.handleRequest(() => 
+      request<ApprovalTypeAttachment>(`/api/approval-types/${approvalTypeId}/attachments/${attachmentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      })
+    );
+  }
+
+  async deleteAttachment(approvalTypeId: string, attachmentId: string): Promise<void> {
+    return this.handleRequest(() => 
+      request(`/api/approval-types/${approvalTypeId}/attachments/${attachmentId}`, {
+        method: 'DELETE'
+      })
+    );
   }
 }

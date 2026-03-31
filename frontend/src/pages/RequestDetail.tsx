@@ -11,6 +11,9 @@ import {
   SkipForward,
   Loader2,
   Edit2,
+  Download,
+  Trash2,
+  Paperclip,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,10 +30,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { useCompany } from "@/contexts/company-hooks";
 import { useAuth } from "@/contexts/auth-hooks";
-import { useApprovalRequest, useProfile, useApproveRequest, useRejectRequest, useRequestChanges, useUpdateApprovalRequest, useResolveRequestNumber } from "@/hooks/services";
+import { 
+  useApprovalRequest, 
+  useProfile, 
+  useApproveRequest, 
+  useRejectRequest, 
+  useRequestChanges, 
+  useUpdateApprovalRequest, 
+  useResolveRequestNumber,
+  useRequestAttachments,
+  useDownloadAttachment,
+  useDeleteRequestAttachment
+} from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
 import type { LineItem } from "@/components/LineItemsManager";
+import type { RequestAttachment } from "@/services/types";
 
 const actionIcons: Record<string, React.ReactNode> = {
   Approved: <CheckCircle className="h-5 w-5 text-success" />,
@@ -109,6 +124,9 @@ export default function RequestDetail() {
   const updateRequestMutation = useUpdateApprovalRequest();
   
   const { data: requestData, isLoading: loading, error: notFound } = useApprovalRequest(id || "");
+  const { data: attachments = [] } = useRequestAttachments(id || "");
+  const downloadMutation = useDownloadAttachment();
+  const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
   const actions = (requestData?.actions ?? []) as ActionRow[];
@@ -250,6 +268,51 @@ export default function RequestDetail() {
     } finally {
       setActioning(false);
     }
+  };
+
+  const handleDownloadFile = async (attachment: RequestAttachment) => {
+    try {
+      const blob = await downloadMutation.mutateAsync(attachment.id);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = attachment.original_filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success(`Downloaded ${attachment.original_filename}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to download file");
+    }
+  };
+
+  const handleDeleteFile = async (attachment: RequestAttachment) => {
+    if (!confirm(`Are you sure you want to delete ${attachment.original_filename}?`)) {
+      return;
+    }
+
+    try {
+      await deleteMutation.mutateAsync(attachment.id);
+      toast.success(`Deleted ${attachment.original_filename}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete file");
+    }
+  };
+
+  const canDeleteFiles = () => {
+    // Only initiator can delete files, and only if request is pending/in_progress
+    if (!request || !user) return false;
+    return request.initiator_id === user.id && 
+           (request.status === "pending" || request.status === "in_progress");
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   // Check if user can approve: they must have the role of the first pending action
@@ -966,6 +1029,68 @@ export default function RequestDetail() {
               )}
             </CardContent>
           </Card>
+
+          {/* File Attachments */}
+          {attachments.length > 0 && (
+            <Card className="border no-print">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Paperclip className="h-4 w-4" />
+                  File Attachments
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {attachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border"
+                    >
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="flex-shrink-0">
+                          <div className="w-8 h-8 bg-blue-100 rounded flex items-center justify-center">
+                            <Paperclip className="h-4 w-4 text-blue-600" />
+                          </div>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            {attachment.original_filename}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span>{formatFileSize(attachment.file_size_bytes)}</span>
+                            <span>•</span>
+                            <span>{attachment.field_label || attachment.field_name}</span>
+                            <span>•</span>
+                            <span>{new Date(attachment.created_at!).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDownloadFile(attachment)}
+                          className="text-blue-600 hover:text-blue-700"
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        {canDeleteFiles() && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteFile(attachment)}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 

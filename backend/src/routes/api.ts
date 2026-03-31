@@ -10,6 +10,8 @@ import {
   requireAdmin,
   type AuthedRequest,
 } from "../middleware/auth.js";
+import { upload, deleteUploadedFile, validateFileSize, getMimeType } from "../fileUpload.js";
+import path from "path";
 
 export const apiRouter = Router();
 
@@ -687,10 +689,11 @@ apiRouter.post(
         page_layout: z.enum(["portrait", "landscape"]).optional(),
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
+        allow_attachments: z.boolean().default(false),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7) RETURNING *`,
+      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8) RETURNING *`,
       [
         body.name.trim(),
         body.description ?? "",
@@ -698,6 +701,7 @@ apiRouter.post(
         body.page_layout ?? "portrait",
         body.pre_salutation ?? null,
         body.post_salutation ?? null,
+        body.allow_attachments,
         req.auth!.userId,
       ],
     );
@@ -737,6 +741,7 @@ apiRouter.patch(
         page_layout: z.enum(["portrait", "landscape"]).optional(),
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
+        allow_attachments: z.boolean().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -765,6 +770,10 @@ apiRouter.patch(
     if (body.post_salutation !== undefined) {
       parts.push(`post_salutation = $${n++}`);
       vals.push(body.post_salutation);
+    }
+    if (body.allow_attachments !== undefined) {
+      parts.push(`allow_attachments = $${n++}`);
+      vals.push(body.allow_attachments);
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -832,6 +841,456 @@ apiRouter.delete(
       "DELETE",
       "Approval Type",
       `Deleted approval type: ${approvalTypeName}`,
+    );
+
+    res.status(204).end();
+  }),
+);
+
+// File attachments for approval types
+apiRouter.get(
+  "/approval-types/:id/attachments",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const { rows } = await pool.query(
+      `SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 ORDER BY field_name`,
+      [req.params.id]
+    );
+    res.json(rows);
+  }),
+);
+
+apiRouter.post(
+  "/approval-types/:id/attachments",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const body = z
+      .object({
+        field_name: z.string().min(1),
+        label: z.string().min(1),
+        required: z.boolean().default(false),
+        max_file_size_mb: z.number().min(1).max(100).default(10),
+        allowed_extensions: z.array(z.string()).default(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png']),
+        max_files: z.number().min(1).max(10).default(1),
+      })
+      .parse(req.body);
+
+    const { rows } = await pool.query(
+      `INSERT INTO approval_type_attachments (approval_type_id, field_name, label, required, max_file_size_mb, allowed_extensions, max_files) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.params.id, body.field_name, body.label, body.required, body.max_file_size_mb, body.allowed_extensions, body.max_files]
+    );
+
+    // Update approval type to indicate it allows attachments
+    await pool.query(
+      `UPDATE approval_types SET allow_attachments = true, updated_at = now() WHERE id = $1`,
+      [req.params.id]
+    );
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "CREATE",
+      "Approval Type Attachment",
+      `Added attachment field: ${body.label} to approval type`,
+    );
+
+    res.status(201).json(rows[0]);
+  }),
+);
+
+apiRouter.patch(
+  "/approval-types/:typeId/attachments/:id",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const body = z
+      .object({
+        label: z.string().min(1).optional(),
+        required: z.boolean().optional(),
+        max_file_size_mb: z.number().min(1).max(100).optional(),
+        allowed_extensions: z.array(z.string()).optional(),
+        max_files: z.number().min(1).max(10).optional(),
+      })
+      .parse(req.body);
+
+    const parts: string[] = [];
+    const vals: unknown[] = [];
+    let n = 1;
+
+    if (body.label !== undefined) {
+      parts.push(`label = $${n++}`);
+      vals.push(body.label);
+    }
+    if (body.required !== undefined) {
+      parts.push(`required = $${n++}`);
+      vals.push(body.required);
+    }
+    if (body.max_file_size_mb !== undefined) {
+      parts.push(`max_file_size_mb = $${n++}`);
+      vals.push(body.max_file_size_mb);
+    }
+    if (body.allowed_extensions !== undefined) {
+      parts.push(`allowed_extensions = $${n++}`);
+      vals.push(body.allowed_extensions);
+    }
+    if (body.max_files !== undefined) {
+      parts.push(`max_files = $${n++}`);
+      vals.push(body.max_files);
+    }
+
+    if (parts.length === 0) throw new HttpError(400, "No fields to update");
+    parts.push(`updated_at = now()`);
+    vals.push(req.params.id);
+
+    const { rows } = await pool.query(
+      `UPDATE approval_type_attachments SET ${parts.join(", ")} WHERE id = $${n} AND approval_type_id = $${n + 1} RETURNING *`,
+      [...vals, req.params.typeId]
+    );
+
+    if (rows.length === 0) throw new HttpError(404, "Not found");
+
+    res.json(rows[0]);
+  }),
+);
+
+apiRouter.delete(
+  "/approval-types/:typeId/attachments/:id",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    // Get attachment info for audit logging
+    const { rows: attachment } = await pool.query(
+      `SELECT label FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
+      [req.params.id, req.params.typeId]
+    );
+    const attachmentLabel = attachment[0]?.label || "Unknown";
+
+    const r = await pool.query(
+      `DELETE FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
+      [req.params.id, req.params.typeId]
+    );
+
+    if (r.rowCount === 0) throw new HttpError(404, "Not found");
+
+    // Check if this was the last attachment field for this approval type
+    const { rows: remaining } = await pool.query(
+      `SELECT COUNT(*)::int as count FROM approval_type_attachments WHERE approval_type_id = $1`,
+      [req.params.typeId]
+    );
+
+    if (remaining[0].count === 0) {
+      await pool.query(
+        `UPDATE approval_types SET allow_attachments = false, updated_at = now() WHERE id = $1`,
+        [req.params.typeId]
+      );
+    }
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Approval Type Attachment",
+      `Deleted attachment field: ${attachmentLabel}`,
+    );
+
+    res.status(204).end();
+  }),
+);
+
+// File upload endpoint for requests
+apiRouter.post(
+  "/requests/:id/attachments",
+  requireAuth,
+  upload.array('files', 5), // Allow up to 5 files
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const requestId = req.params.id;
+    const fieldName = req.body.field_name;
+    const files = req.files as Express.Multer.File[];
+
+    if (!fieldName) {
+      throw new HttpError(400, "field_name is required");
+    }
+
+    if (!files || files.length === 0) {
+      throw new HttpError(400, "No files uploaded");
+    }
+
+    // Get the request and verify user has access
+    const { rows: requests } = await pool.query(
+      `SELECT ar.*, at.allow_attachments FROM approval_requests ar 
+       JOIN approval_types at ON ar.approval_type_id = at.id 
+       WHERE ar.id = $1`,
+      [requestId]
+    );
+
+    if (requests.length === 0) {
+      throw new HttpError(404, "Request not found");
+    }
+
+    const request = requests[0];
+    const userId = req.auth!.userId;
+
+    // Check if user can upload files (initiator or admin)
+    const isAdmin = req.profile?.is_admin;
+    if (request.initiator_id !== userId && !isAdmin) {
+      throw new HttpError(403, "You can only upload files to your own requests");
+    }
+
+    if (!request.allow_attachments) {
+      throw new HttpError(400, "This approval type does not allow file attachments");
+    }
+
+    // Get attachment configuration for this field
+    const { rows: attachmentConfig } = await pool.query(
+      `SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 AND field_name = $2`,
+      [request.approval_type_id, fieldName]
+    );
+
+    if (attachmentConfig.length === 0) {
+      throw new HttpError(400, "Invalid attachment field");
+    }
+
+    const config = attachmentConfig[0];
+
+    // Validate file count
+    if (files.length > config.max_files) {
+      throw new HttpError(400, `Maximum ${config.max_files} files allowed`);
+    }
+
+    // Validate each file
+    for (const file of files) {
+      // Validate file size
+      if (!validateFileSize(file.size, config.max_file_size_mb)) {
+        throw new HttpError(400, `File ${file.originalname} exceeds maximum size of ${config.max_file_size_mb}MB`);
+      }
+
+      // Validate file extension
+      const ext = path.extname(file.originalname).toLowerCase().slice(1);
+      if (!config.allowed_extensions.includes(ext)) {
+        throw new HttpError(400, `File type .${ext} not allowed for field ${fieldName}`);
+      }
+    }
+
+    // Insert file records into database
+    const insertedFiles = [];
+    for (const file of files) {
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO request_attachments (request_id, approval_type_attachment_id, field_name, original_filename, stored_filename, file_path, file_size_bytes, mime_type, uploaded_by) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          requestId,
+          config.id,
+          fieldName,
+          file.originalname,
+          file.filename,
+          file.path,
+          file.size,
+          file.mimetype || getMimeType(file.filename),
+          userId
+        ]
+      );
+      insertedFiles.push(inserted[0]);
+    }
+
+    // Update request to indicate it has attachments
+    await pool.query(
+      `UPDATE approval_requests SET has_attachments = true, updated_at = now() WHERE id = $1`,
+      [requestId]
+    );
+
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "UPLOAD",
+      "Request Attachments",
+      `Uploaded ${files.length} file(s) to request ${requestId}`,
+    );
+
+    res.status(201).json(insertedFiles);
+  }),
+);
+
+// Get attachments for a request
+apiRouter.get(
+  "/requests/:id/attachments",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const requestId = req.params.id;
+    const userId = req.auth!.userId;
+
+    // Get the request and verify user has access
+    const { rows: requests } = await pool.query(
+      `SELECT * FROM approval_requests WHERE id = $1`,
+      [requestId]
+    );
+
+    if (requests.length === 0) {
+      throw new HttpError(404, "Request not found");
+    }
+
+    const request = requests[0];
+    const isAdmin = req.profile?.is_admin;
+
+    // Check if user can view attachments (initiator or admin)
+    if (request.initiator_id !== userId && !isAdmin) {
+      throw new HttpError(403, "You can only view attachments for your own requests");
+    }
+
+    const { rows } = await pool.query(
+      `SELECT ra.*, ata.label as field_label FROM request_attachments ra 
+       JOIN approval_type_attachments ata ON ra.approval_type_attachment_id = ata.id 
+       WHERE ra.request_id = $1 ORDER BY ra.created_at`,
+      [requestId]
+    );
+
+    res.json(rows);
+  }),
+);
+
+// Download a file attachment
+apiRouter.get(
+  "/attachments/:id/download",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const attachmentId = req.params.id;
+    const userId = req.auth!.userId;
+
+    // Get attachment and request info
+    const { rows: attachments } = await pool.query(
+      `SELECT ra.*, ar.initiator_id FROM request_attachments ra 
+       JOIN approval_requests ar ON ra.request_id = ar.id 
+       WHERE ra.id = $1`,
+      [attachmentId]
+    );
+
+    if (attachments.length === 0) {
+      throw new HttpError(404, "Attachment not found");
+    }
+
+    const attachment = attachments[0];
+    const isAdmin = req.profile?.is_admin;
+
+    // Check if user can download attachment (initiator or admin)
+    if (attachment.initiator_id !== userId && !isAdmin) {
+      throw new HttpError(403, "You can only download attachments for your own requests");
+    }
+
+    // Set headers for file download
+    res.setHeader('Content-Disposition', `attachment; filename="${attachment.original_filename}"`);
+    res.setHeader('Content-Type', attachment.mime_type);
+
+    // Send file
+    res.sendFile(attachment.file_path, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to download file' });
+        }
+      }
+    });
+  }),
+);
+
+// Delete a file attachment
+apiRouter.delete(
+  "/attachments/:id",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const attachmentId = req.params.id;
+    const userId = req.auth!.userId;
+
+    // Get attachment and request info
+    const { rows: attachments } = await pool.query(
+      `SELECT ra.*, ar.initiator_id, ar.status FROM request_attachments ra 
+       JOIN approval_requests ar ON ra.request_id = ar.id 
+       WHERE ra.id = $1`,
+      [attachmentId]
+    );
+
+    if (attachments.length === 0) {
+      throw new HttpError(404, "Attachment not found");
+    }
+
+    const attachment = attachments[0];
+    const isAdmin = req.profile?.is_admin;
+
+    // Check if user can delete attachment (initiator or admin, and only if request is still pending)
+    if (attachment.initiator_id !== userId && !isAdmin) {
+      throw new HttpError(403, "You can only delete attachments for your own requests");
+    }
+
+    if (attachment.status !== 'pending' && attachment.status !== 'in_progress') {
+      throw new HttpError(400, "Cannot delete attachments for requests that are already approved or rejected");
+    }
+
+    // Delete file from storage
+    await deleteUploadedFile(attachment.file_path);
+
+    // Delete from database
+    await pool.query(`DELETE FROM request_attachments WHERE id = $1`, [attachmentId]);
+
+    // Check if request has any remaining attachments
+    const { rows: remaining } = await pool.query(
+      `SELECT COUNT(*)::int as count FROM request_attachments WHERE request_id = $1`,
+      [attachment.request_id]
+    );
+
+    if (remaining[0].count === 0) {
+      await pool.query(
+        `UPDATE approval_requests SET has_attachments = false, updated_at = now() WHERE id = $1`,
+        [attachment.request_id]
+      );
+    }
+
+    // Log audit event
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Request Attachment",
+      `Deleted file: ${attachment.original_filename}`,
     );
 
     res.status(204).end();

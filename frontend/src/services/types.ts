@@ -64,8 +64,37 @@ export interface ApprovalType {
   description?: string;
   fields: unknown[];
   page_layout?: string;
+  allow_attachments?: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ApprovalTypeAttachment {
+  id: string;
+  approval_type_id: string;
+  field_name: string;
+  label: string;
+  required: boolean;
+  max_file_size_mb: number;
+  allowed_extensions: string[];
+  max_files: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RequestAttachment {
+  id: string;
+  request_id: string;
+  approval_type_attachment_id: string;
+  field_name: string;
+  field_label?: string;
+  original_filename: string;
+  stored_filename: string;
+  file_path: string;
+  file_size_bytes: number;
+  mime_type: string;
+  uploaded_by: string;
+  created_at?: string;
 }
 
 export interface ApprovalChain {
@@ -90,6 +119,7 @@ export interface ApprovalRequest {
   initiator?: { full_name: string };
   approval_types?: unknown;
   departments?: unknown;
+  has_attachments?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -139,6 +169,9 @@ export interface CreateApprovalTypeRequest {
   description?: string;
   fields: unknown[];
   page_layout?: string;
+  pre_salutation?: string | null;
+  post_salutation?: string | null;
+  allow_attachments?: boolean;
 }
 
 export interface UpdateApprovalTypeRequest {
@@ -146,6 +179,26 @@ export interface UpdateApprovalTypeRequest {
   description?: string;
   fields?: unknown[];
   page_layout?: string;
+  pre_salutation?: string | null;
+  post_salutation?: string | null;
+  allow_attachments?: boolean;
+}
+
+export interface CreateApprovalTypeAttachmentRequest {
+  field_name: string;
+  label: string;
+  required?: boolean;
+  max_file_size_mb?: number;
+  allowed_extensions?: string[];
+  max_files?: number;
+}
+
+export interface UpdateApprovalTypeAttachmentRequest {
+  label?: string;
+  required?: boolean;
+  max_file_size_mb?: number;
+  allowed_extensions?: string[];
+  max_files?: number;
 }
 
 export interface CreateApprovalChainRequest {
