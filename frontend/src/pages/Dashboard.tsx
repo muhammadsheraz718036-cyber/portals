@@ -23,7 +23,7 @@ type RequestRow = {
   total_steps: number;
   created_at: string;
   initiator_id: string;
-  approval_types: { name: string } | null | unknown;
+  approval_types: { name: string } | null;
 };
 
 type AuditRow = {
@@ -39,10 +39,13 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
 
-  const { data: requests = [], isLoading: loading } = useApprovalRequests();
-
+  const { data: requests = [], isLoading: loading } = useApprovalRequests() as { data: RequestRow[], isLoading: boolean };
   const { data: auditLogs = [] } = useAuditLogs();
-  const filteredAuditLogs = isAdmin ? auditLogs.slice(0, 5) : [];
+  
+  // Memoize filtered audit logs to prevent unnecessary recalculations
+  const filteredAuditLogs = useMemo(() => {
+    return isAdmin ? auditLogs.slice(0, 5) : [];
+  }, [auditLogs, isAdmin]);
 
   const stats = useMemo(() => {
     const total = requests.length;

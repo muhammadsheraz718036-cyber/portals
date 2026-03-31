@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useReactToPrint } from "react-to-print";
 import {
@@ -73,6 +73,25 @@ function iconKeyForAction(status: string): keyof typeof actionIcons {
   }
 }
 
+const getActionLabel = (action: ActionRow) => {
+  switch (action.status) {
+    case 'approved':
+      return 'Approved';
+    case 'rejected':
+      return 'Rejected';
+    case 'changes_requested':
+      return 'Changes Requested';
+    case 'skipped':
+      return 'Skipped';
+    case 'pending':
+      return 'Pending Approval';
+    case 'waiting':
+      return 'Waiting';
+    default:
+      return 'Waiting';
+  }
+};
+
 type RequestRow = {
   id: string;
   request_number: string;
@@ -88,6 +107,7 @@ type RequestRow = {
     description: string | null;
     fields: unknown;
     page_layout?: string;
+    allow_attachments: boolean;
   } | null;
   departments: { name: string } | null;
 };
@@ -124,13 +144,19 @@ export default function RequestDetail() {
   const updateRequestMutation = useUpdateApprovalRequest();
   
   const { data: requestData, isLoading: loading, error: notFound } = useApprovalRequest(id || "");
-  const { data: attachments = [] } = useRequestAttachments(id || "");
   const downloadMutation = useDownloadAttachment();
   const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
-  const actions = (requestData?.actions ?? []) as ActionRow[];
+  const actions = useMemo(() => (requestData?.actions ?? []) as ActionRow[], [requestData?.actions]);
   const actorNames = requestData?.actorNames ?? {};
+
+  // Only fetch attachments if the request type supports them
+  const supportsAttachments = request?.approval_types?.allow_attachments === true;
+  
+  const { data: attachments = [] } = useRequestAttachments(
+    supportsAttachments && id ? id : ""
+  );
 
   const { data: initiatorProfile } = useProfile(request?.initiator_id || "");
 
@@ -154,6 +180,30 @@ export default function RequestDetail() {
   const pageWidth = isLandscape ? "11in" : "8.5in";
   const pageHeight = isLandscape ? "8.5in" : "11in";
   const pageSize = isLandscape ? "11in 8.5in" : "8.5in 11in";
+
+  // Group actions by step_order to show history
+  const groupedActions = useMemo(() => {
+    const groups: Record<number, ActionRow[]> = {};
+    actions.forEach(action => {
+      if (!groups[action.step_order]) {
+        groups[action.step_order] = [];
+      }
+      groups[action.step_order].push(action);
+    });
+    return groups;
+  }, [actions]);
+
+  // Get the most recent action for each step to determine current status
+  const currentActions = useMemo(() => {
+    const latest: Record<number, ActionRow> = {};
+    actions.forEach(action => {
+      if (!latest[action.step_order] || 
+          new Date(action.created_at) > new Date(latest[action.step_order].created_at)) {
+        latest[action.step_order] = action;
+      }
+    });
+    return Object.values(latest).sort((a, b) => a.step_order - b.step_order);
+  }, [actions]);
 
   const handlePrint = useReactToPrint({
     contentRef: printLetterRef,
@@ -244,6 +294,13 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
+      // Check if user has permission to request changes
+      const canRequestChanges = profile?.role_name === request.current_step_role;
+      
+      if (!canRequestChanges) {
+        throw new Error("You do not have permission to request changes for this step");
+      }
+      
       await requestChangesMutation.mutateAsync({ id: request.id, data: { comment: changesComment } });
       setShowRequestChangesDialog(false);
       setChangesComment("");
@@ -259,6 +316,14 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
+      // Check if user is the request initiator or an admin
+      const isInitiator = user?.id === request.initiator_id;
+      const isAdmin = profile?.is_admin || false;
+      
+      if (!isInitiator && !isAdmin) {
+        throw new Error("Only the request initiator or an admin can update this request");
+      }
+      
       await updateRequestMutation.mutateAsync({ id: request.id, data: { form_data: updatingFormData } });
       setShowUpdateForm(false);
       setUpdatingFormData({});
@@ -652,7 +717,7 @@ export default function RequestDetail() {
                                       return (
                                         <div
                                           key={group}
-                                          className="border rounded p-3 bg-muted/10"
+                                          className="p-3"
                                         >
                                           <h3 className="text-sm font-semibold mb-2">
                                             {group}
@@ -764,7 +829,7 @@ export default function RequestDetail() {
                                     return (
                                       <div
                                         key={group}
-                                        className="border rounded p-3 bg-muted/10"
+                                        className="p-3"
                                       >
                                         <h3 className="text-sm font-semibold mb-2">
                                           {group}
@@ -835,7 +900,7 @@ export default function RequestDetail() {
                         )}
                       </div>
                     )}
-                    <div className="mt-12 flex justify-end">
+                    <div className="mt-12 flex justify-start">
                       <div className="text-left w-full max-w-[210px]">
                         <p className="font-bold" style={{ fontSize: "14px" }}>
                           {initiatorName}
@@ -918,15 +983,18 @@ export default function RequestDetail() {
             </CardHeader>
             <CardContent>
               <div className="space-y-0">
-                {actions.map((step, idx) => {
+                {currentActions.map((step, idx) => {
                   const iconKey = iconKeyForAction(step.status);
+                  const stepHistory = groupedActions[step.step_order] || [];
+                  const hasHistory = stepHistory.length > 1;
+                  
                   return (
-                    <div key={step.id} className="flex gap-3">
+                    <div key={`${step.step_order}-${step.id}`} className="flex gap-3">
                       <div className="flex flex-col items-center">
                         <div className="flex-shrink-0">
                           {actionIcons[iconKey] || actionIcons.Waiting}
                         </div>
-                        {idx < actions.length - 1 && (
+                        {idx < currentActions.length - 1 && (
                           <div className="w-px h-full min-h-[40px] bg-border my-1" />
                         )}
                       </div>
@@ -951,6 +1019,42 @@ export default function RequestDetail() {
                           <p className="text-xs text-foreground mt-1 bg-muted/50 rounded px-2 py-1">
                             &quot;{step.comment}&quot;
                           </p>
+                        )}
+                        
+                        {/* Show history for this step */}
+                        {hasHistory && (
+                          <div className="mt-3 border-t pt-3">
+                            <p className="text-xs font-medium text-muted-foreground mb-2">History:</p>
+                            <div className="space-y-2">
+                              {stepHistory
+                                .filter(h => h.id !== step.id) // Filter out current action
+                                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                                .map((historyAction, histIdx) => (
+                                  <div key={historyAction.id} className="text-xs border-l-2 border-muted pl-2 py-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium text-muted-foreground">
+                                        {getActionLabel(historyAction)}
+                                      </span>
+                                      {historyAction.acted_at && (
+                                        <span className="text-[10px] text-muted-foreground/70">
+                                          {new Date(historyAction.acted_at).toLocaleString()}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {historyAction.acted_by && (
+                                      <p className="text-muted-foreground">
+                                        By: {actorNames[historyAction.acted_by] ?? "—"}
+                                      </p>
+                                    )}
+                                    {historyAction.comment && (
+                                      <p className="text-muted-foreground italic mt-1">
+                                        &quot;{historyAction.comment}&quot;
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
                         )}
                       </div>
                     </div>

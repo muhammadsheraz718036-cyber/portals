@@ -245,19 +245,21 @@ export default function NewRequest() {
                 )}
 
                 {/* Pre-Comments (Salutation) */}
-                <div className="space-y-2 border-t pt-4">
-                  <label className="block text-sm font-medium text-foreground">
-                    Pre-Salutation
-                  </label>
-                  <RichTextEditor
-                    content={preComments}
-                    onChange={setPreComments}
-                    placeholder="e.g., Dear Mr. Manager, I hope you are doing well. Please find below the details of my request..."
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Add a greeting or salutation before the form data
-                  </p>
-                </div>
+                {approvalType?.pre_salutation && (
+                  <div className="space-y-2 border-t pt-4">
+                    <label className="block text-sm font-medium text-foreground">
+                      Pre-Salutation
+                    </label>
+                    <RichTextEditor
+                      content={preComments}
+                      onChange={setPreComments}
+                      placeholder="e.g., Dear Mr. Manager, I hope you are doing well. Please find below the details of my request..."
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Add a greeting or salutation before the form data
+                    </p>
+                  </div>
+                )}
 
                 {/* Rich Text Editor - Commented Out */}
                 {/* 
@@ -316,19 +318,21 @@ export default function NewRequest() {
                   <CardTitle className="text-base">Closing Remarks</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
-                    <label className="block text-sm font-medium text-foreground">
-                      Post-Comments
-                    </label>
-                    <RichTextEditor
-                      content={postComments}
-                      onChange={setPostComments}
-                      placeholder="e.g., Thank you for your time and consideration. Please contact me if you need any additional information."
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Add any closing remarks after your form data
-                    </p>
-                  </div>
+                  {approvalType?.post_salutation && (
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-foreground">
+                        Post-Comments
+                      </label>
+                      <RichTextEditor
+                        content={postComments}
+                        onChange={setPostComments}
+                        placeholder="e.g., Thank you for your time and consideration. Please contact me if you need any additional information."
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Add a closing statement or signature
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -452,7 +456,7 @@ export default function NewRequest() {
                                 return (
                                   <div
                                     key={group}
-                                    className="border rounded p-3 bg-muted/10"
+                                    className="p-3"
                                   >
                                     <h3 className="text-sm font-semibold mb-2">
                                       {group}
@@ -528,7 +532,7 @@ export default function NewRequest() {
                         ) : null}
                       </div>
 
-                      <div className="mt-12 flex justify-end">
+                      <div className="mt-12 flex justify-start">
                         <div className="text-left w-full max-w-[210px]">
                           <p className="font-bold" style={{ fontSize: "14px" }}>
                             {profile?.full_name ?? ""}
@@ -543,13 +547,7 @@ export default function NewRequest() {
                             className="text-muted-foreground"
                             style={{ fontSize: "13px" }}
                           >
-                            {profile?.department_name ?? ""}
-                          </p>
-                          <p
-                            className="text-muted-foreground"
-                            style={{ fontSize: "13px" }}
-                          >
-                            {companyName ?? ""}
+                            {settings?.company_name ?? ""}
                           </p>
                         </div>
                       </div>

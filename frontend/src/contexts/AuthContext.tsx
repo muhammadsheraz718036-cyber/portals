@@ -12,11 +12,14 @@ import {
   setStoredToken,
 } from "@/lib/api";
 import { AuthContext, type AuthContextType } from "./auth-context";
+import { useQueryClient } from "@tanstack/react-query";
+import { QUERY_KEYS } from "@/constants/query-keys";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   const refreshSession = useCallback(async () => {
     const token = getStoredToken();
@@ -30,6 +33,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { user: u, profile: p } = await api.auth.me();
       setUser(u);
       setProfile(p);
+      
+      // Invalidate all queries that depend on user data
+      queryClient.invalidateQueries({ 
+        queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
+        refetchType: 'active'
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: [QUERY_KEYS.PROFILE_NAMES],
+        refetchType: 'active'
+      });
+      // Also clear all queries to be safe
+      queryClient.clear();
+      
     } catch {
       setStoredToken(null);
       setUser(null);
@@ -37,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     refreshSession();
@@ -53,6 +69,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setStoredToken(token);
       setUser(u);
       setProfile(p);
+      
+      // Invalidate all queries when user signs in
+      queryClient.invalidateQueries({ 
+        queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
+        refetchType: 'active'
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: [QUERY_KEYS.PROFILE_NAMES],
+        refetchType: 'active'
+      });
+      // Also clear all queries to be safe
+      queryClient.clear();
+      
       return { error: null };
     } catch (e) {
       return { error: e instanceof Error ? e : new Error(String(e)) };
@@ -63,6 +92,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStoredToken(null);
     setUser(null);
     setProfile(null);
+    
+    // Invalidate all queries when user signs out
+    queryClient.invalidateQueries({ 
+      queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
+      refetchType: 'active'
+    });
+    queryClient.invalidateQueries({ 
+      queryKey: [QUERY_KEYS.PROFILE_NAMES],
+      refetchType: 'active'
+    });
+    // Also clear all queries to be safe
+    queryClient.clear();
   };
 
   const hasPermission = (permission: string): boolean => {

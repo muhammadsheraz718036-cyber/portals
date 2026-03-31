@@ -65,6 +65,8 @@ export interface ApprovalType {
   fields: unknown[];
   page_layout?: string;
   allow_attachments?: boolean;
+  pre_salutation?: string;
+  post_salutation?: string;
   created_at?: string;
   updated_at?: string;
 }

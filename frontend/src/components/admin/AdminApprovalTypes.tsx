@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, GripVertical, Copy, Paperclip } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { RichTextEditor } from "@/components/RichTextEditor";
 import {
   Dialog,
   DialogContent,
@@ -41,7 +42,10 @@ type Field = {
   type: string;
   required: boolean;
   options?: string[];
-  group?: string; // Group/section name for organizing fields
+  group?: string; // Field group for organizing into separate sections
+  description?: string;
+  order?: number;
+  action?: string;
 };
 
 type AttachmentField = {
@@ -62,9 +66,9 @@ interface ApprovalType {
   description: string;
   fields: Field[];
   page_layout?: string;
+  allow_attachments?: boolean;
   pre_salutation?: string;
   post_salutation?: string;
-  allow_attachments?: boolean;
 }
 
 export function AdminApprovalTypes() {
@@ -738,11 +742,10 @@ export function AdminApprovalTypes() {
               <TabsContent value="salutations" className="space-y-4 mt-4">
                 <div className="space-y-1.5">
                   <Label>Pre-Salutation (Optional)</Label>
-                  <Textarea
-                    value={preSalutation}
-                    onChange={(e) => setPreSalutation(e.target.value)}
+                  <RichTextEditor
+                    content={preSalutation}
+                    onChange={setPreSalutation}
                     placeholder="e.g., Dear [Recipient],&#10;&#10;I hope this message finds you well..."
-                    rows={4}
                   />
                   <p className="text-xs text-muted-foreground">
                     Default greeting text that will appear before the form data
@@ -751,11 +754,10 @@ export function AdminApprovalTypes() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Post-Salutation (Optional)</Label>
-                  <Textarea
-                    value={postSalutation}
-                    onChange={(e) => setPostSalutation(e.target.value)}
+                  <RichTextEditor
+                    content={postSalutation}
+                    onChange={setPostSalutation}
                     placeholder="e.g., Thank you for your attention to this matter.&#10;&#10;Best regards,&#10;[Your Name]"
-                    rows={4}
                   />
                   <p className="text-xs text-muted-foreground">
                     Default closing text that will appear after the form data in

@@ -39,7 +39,7 @@ export const useDeleteRequestAttachment = () => {
     mutationFn: (attachmentId: string) => services.requestAttachments.deleteAttachment(attachmentId),
     onSuccess: (_, __) => {
       // We need to invalidate all request attachment queries since we don't have requestId here
-      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
       queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
     },
   });

@@ -78,11 +78,14 @@ export type ApprovalTypeRow = {
   id: string;
   name: string;
   description: string | null;
-  fields: ApprovalFormField[];
+  fields: unknown;
   page_layout?: string;
-  pre_salutation?: string | null;
-  post_salutation?: string | null;
-};
+  allow_attachments?: boolean;
+  pre_salutation?: string;
+  post_salutation?: string;
+  created_at?: string;
+  updated_at?: string;
+} | null;
 
 export type ChainStep = {
   order: number;

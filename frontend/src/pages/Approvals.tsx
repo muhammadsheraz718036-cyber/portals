@@ -15,6 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useApprovalRequests, useProfileNames } from "@/hooks/services";
+import { useDebounce } from "@/hooks/useDebounce";
 import type { RequestStatus } from "@/lib/constants";
 
 type RequestRow = {
@@ -22,6 +23,7 @@ type RequestRow = {
   request_number: string;
   status: RequestStatus;
   current_step: number;
+  current_step_role: string;
   total_steps: number;
   created_at: string;
   initiator_id: string;
@@ -33,21 +35,36 @@ type RequestRow = {
 
 export default function Approvals() {
   const navigate = useNavigate();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, hasPermission } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  
+  // Debounce search to prevent excessive re-renders
+  const debouncedSearch = useDebounce(search, 300);
 
-  const { data: rows = [], isLoading: loading } = useApprovalRequests();
+  const { data: rows = [], isLoading: loading } = useApprovalRequests() as { data: RequestRow[], isLoading: boolean };
 
-  const initiatorIds = [...new Set(rows.map((r) => r.initiator_id))];
+  const initiatorIds = useMemo(() => [...new Set(rows.map((r) => r.initiator_id))], [rows]);
   const { data: names = {} } = useProfileNames(initiatorIds);
 
   const segregated = useMemo(() => {
     const myRequests = rows.filter((r) => r.is_initiator);
-    const approvalRequests = rows.filter((r) => r.needs_approval);
+    
+    // Filter requests that need approval based on user permissions
+    const approvalRequests = rows.filter((r) => {
+      if (!r.needs_approval) return false;
+      
+      // Check if user has permission to approve/reject this request
+      // User can approve if they are admin OR have the required role
+      const canApprove = isAdmin || hasPermission('all') || 
+        (r.current_step_role && hasPermission(r.current_step_role));
+      
+      return canApprove;
+    });
+    
     const allOther = rows.filter((r) => !r.is_initiator && !r.needs_approval);
     return { myRequests, approvalRequests, allOther };
-  }, [rows]);
+  }, [rows, isAdmin, hasPermission]);
 
   const filtered = useMemo(() => {
     const applyFilters = (list: RequestRow[]) =>

@@ -18,7 +18,25 @@ import Setup from "./pages/Setup";
 import NotFound from "./pages/NotFound";
 import { Loader2 } from "lucide-react";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000, // 1 minute default
+      refetchOnWindowFocus: false, // Prevent unnecessary refetches
+      refetchOnReconnect: false, // Prevent unnecessary refetches
+      retry: (failureCount, error) => {
+        // Only retry on network errors, not on 4xx/5xx
+        if (error?.message?.includes('401') || error?.message?.includes('403') || error?.message?.includes('404')) {
+          return false;
+        }
+        return failureCount < 3;
+      },
+    },
+    mutations: {
+      retry: 1, // Only retry mutations once
+    },
+  },
+});
 
 function ProtectedRoutes() {
   const { user, loading } = useAuth();
@@ -49,23 +67,21 @@ function ProtectedRoutes() {
   );
 }
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Sonner />
-      <AuthProvider>
-        <CompanyProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/setup" element={<Setup />} />
-              <Route path="/*" element={<ProtectedRoutes />} />
-            </Routes>
-          </BrowserRouter>
-        </CompanyProvider>
-      </AuthProvider>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
-
-export default App;
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <TooltipProvider>
+          <CompanyProvider>
+            <AuthProvider>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/*" element={<ProtectedRoutes />} />
+              </Routes>
+            </AuthProvider>
+          </CompanyProvider>
+        </TooltipProvider>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}

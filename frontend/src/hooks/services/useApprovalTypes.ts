@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
+import { useAuth } from '@/contexts/auth-hooks';
 import { 
   CreateApprovalTypeRequest, 
   UpdateApprovalTypeRequest,
@@ -8,27 +9,37 @@ import {
 } from '../../services/types';
 
 export const useApprovalTypes = () => {
+  const { hasPermission } = useAuth();
+  
   return useQuery({
     queryKey: ['approval-types'],
     queryFn: () => services.approvalTypes.list(),
+    enabled: hasPermission('manage_approval_types'),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 };
 
 export const useApprovalType = (id: string) => {
+  const { hasPermission } = useAuth();
+  
   return useQuery({
     queryKey: ['approval-types', id],
     queryFn: () => services.approvalTypes.get(id),
-    enabled: !!id,
+    enabled: !!id && hasPermission('manage_approval_types'),
   });
 };
 
 export const useCreateApprovalType = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
-    mutationFn: (data: CreateApprovalTypeRequest) => 
-      services.approvalTypes.create(data),
+    mutationFn: (data: CreateApprovalTypeRequest) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.create(data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
     },
@@ -37,10 +48,15 @@ export const useCreateApprovalType = () => {
 
 export const useUpdateApprovalType = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: UpdateApprovalTypeRequest }) => 
-      services.approvalTypes.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: UpdateApprovalTypeRequest }) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.update(id, data);
+    },
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types', id] });
@@ -50,9 +66,15 @@ export const useUpdateApprovalType = () => {
 
 export const useDeleteApprovalType = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
-    mutationFn: (id: string) => services.approvalTypes.delete(id),
+    mutationFn: (id: string) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.delete(id);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
     },
@@ -61,19 +83,26 @@ export const useDeleteApprovalType = () => {
 
 // Attachment hooks
 export const useApprovalTypeAttachments = (approvalTypeId: string) => {
+  const { hasPermission } = useAuth();
+  
   return useQuery({
     queryKey: ['approval-types', approvalTypeId, 'attachments'],
     queryFn: () => services.approvalTypes.getAttachments(approvalTypeId),
-    enabled: !!approvalTypeId,
+    enabled: !!approvalTypeId && hasPermission('manage_approval_types'),
   });
 };
 
 export const useCreateApprovalTypeAttachment = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
-    mutationFn: ({ approvalTypeId, data }: { approvalTypeId: string; data: CreateApprovalTypeAttachmentRequest }) => 
-      services.approvalTypes.createAttachment(approvalTypeId, data),
+    mutationFn: ({ approvalTypeId, data }: { approvalTypeId: string; data: CreateApprovalTypeAttachmentRequest }) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.createAttachment(approvalTypeId, data);
+    },
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
@@ -83,25 +112,37 @@ export const useCreateApprovalTypeAttachment = () => {
 
 export const useUpdateApprovalTypeAttachment = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
     mutationFn: ({ approvalTypeId, attachmentId, data }: { 
       approvalTypeId: string; 
       attachmentId: string; 
       data: UpdateApprovalTypeAttachmentRequest 
-    }) => services.approvalTypes.updateAttachment(approvalTypeId, attachmentId, data),
+    }) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.updateAttachment(approvalTypeId, attachmentId, data);
+    },
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
+      queryClient.invalidateQueries({ queryKey: ['approval-types'] });
     },
   });
 };
 
 export const useDeleteApprovalTypeAttachment = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   
   return useMutation({
-    mutationFn: ({ approvalTypeId, attachmentId }: { approvalTypeId: string; attachmentId: string }) => 
-      services.approvalTypes.deleteAttachment(approvalTypeId, attachmentId),
+    mutationFn: ({ approvalTypeId, attachmentId }: { approvalTypeId: string; attachmentId: string }) => {
+      if (!hasPermission('manage_approval_types')) {
+        throw new Error('You do not have permission to manage approval types');
+      }
+      return services.approvalTypes.deleteAttachment(approvalTypeId, attachmentId);
+    },
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });

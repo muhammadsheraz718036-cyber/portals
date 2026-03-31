@@ -1851,7 +1851,7 @@ apiRouter.get(
     const uid = req.auth!.userId;
     const roleId = req.profile!.role_id;
     const { rows } = await pool.query(
-      `SELECT ar.*,
+      `SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
         json_build_object('name', d.name) AS departments,
         (ar.initiator_id = $2) AS is_initiator,
@@ -1861,19 +1861,15 @@ apiRouter.get(
           WHERE aa.request_id = ar.id
           AND r.id = $3
           AND aa.status IN ('pending', 'waiting')
-        ) AS needs_approval
+        ) AS needs_approval,
+        aa.role_name AS current_step_role
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
+      LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
+      LEFT JOIN roles r ON r.id = aa.role_id
       WHERE ($1::boolean 
         OR ar.initiator_id = $2
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
-          WHERE aa.request_id = ar.id
-          AND r.id = $3
-          AND aa.status IN ('pending', 'waiting')
-        )
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
@@ -2379,21 +2375,29 @@ apiRouter.patch(
       if (changedActionRows.length > 0) {
         const changedStepOrder = changedActionRows[0].step_order;
 
-        // Reset only the changes_requested action back to pending and clear metadata
-        await pool.query(
-          `UPDATE approval_actions 
-           SET status = 'pending', acted_by = NULL, comment = NULL, acted_at = NULL 
-           WHERE request_id = $1 AND status = 'changes_requested'`,
-          [requestId],
+        // Instead of resetting subsequent steps, we'll create new action entries for the resubmission
+        // This preserves the complete history
+        
+        // Get the original chain steps to recreate new actions
+        const { rows: chainSteps } = await pool.query(
+          `SELECT acs.step_order, acs.role_name, acs.action 
+           FROM approval_chain_steps acs 
+           JOIN approval_chains ac ON ac.id = acs.chain_id 
+           JOIN approval_requests ar ON ar.approval_chain_id = ac.id 
+           WHERE ar.id = $1 AND acs.step_order >= $2 
+           ORDER BY acs.step_order`,
+          [requestId, changedStepOrder]
         );
 
-        // Set all subsequent steps back to waiting to reset any partial progress
-        await pool.query(
-          `UPDATE approval_actions 
-           SET status = 'waiting', acted_by = NULL, comment = NULL, acted_at = NULL 
-           WHERE request_id = $1 AND step_order > $2`,
-          [requestId, changedStepOrder],
-        );
+        // Create new action entries for the resubmission from the changes_requested step onward
+        for (const step of chainSteps) {
+          await pool.query(
+            `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [requestId, step.step_order, step.role_name, step.action, 
+             step.step_order === changedStepOrder ? 'pending' : 'waiting']
+          );
+        }
       }
 
       const { rows: updatedActions } = await pool.query(

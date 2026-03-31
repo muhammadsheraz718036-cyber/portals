@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { services } from '../../services';
+import { QUERY_KEYS } from "@/constants/query-keys";
+import { api } from "@/lib/api";
 import { 
   CreateApprovalRequestRequest, 
   UpdateApprovalRequestRequest,
@@ -8,8 +9,8 @@ import {
 
 export const useApprovalRequests = () => {
   return useQuery({
-    queryKey: ['approval-requests'],
-    queryFn: () => services.approvalRequests.list(),
+    queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
+    queryFn: () => api.approvalRequests.list(),
     staleTime: 2 * 60 * 1000, // 2 minutes - more frequent updates
     refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes
   });
@@ -17,8 +18,8 @@ export const useApprovalRequests = () => {
 
 export const useApprovalRequest = (id: string) => {
   return useQuery({
-    queryKey: ['approval-requests', id],
-    queryFn: () => services.approvalRequests.get(id),
+    queryKey: QUERY_KEYS.REQUEST_DETAIL(id),
+    queryFn: () => api.approvalRequests.get(id),
     enabled: !!id,
     staleTime: 1 * 60 * 1000, // 1 minute - very fresh data for individual requests
   });
@@ -29,9 +30,9 @@ export const useCreateApprovalRequest = () => {
   
   return useMutation({
     mutationFn: (data: CreateApprovalRequestRequest) => 
-      services.approvalRequests.create(data),
+      api.approvalRequests.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
     },
   });
 };
@@ -41,10 +42,10 @@ export const useUpdateApprovalRequest = () => {
   
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateApprovalRequestRequest }) => 
-      services.approvalRequests.update(id, data),
+      api.approvalRequests.update(id, data),
     onSuccess: (_, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
-      queryClient.invalidateQueries({ queryKey: ['approval-requests', id] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
     },
   });
 };
@@ -54,10 +55,10 @@ export const useApproveRequest = () => {
   
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data?: ApprovalActionRequest }) => 
-      services.approvalRequests.approve(id, data || {}),
+      api.approvalRequests.approve(id, data || {}),
     onSuccess: (_, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
-      queryClient.invalidateQueries({ queryKey: ['approval-requests', id] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
     },
   });
 };
@@ -67,10 +68,10 @@ export const useRejectRequest = () => {
   
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data?: ApprovalActionRequest }) => 
-      services.approvalRequests.reject(id, data || {}),
+      api.approvalRequests.reject(id, data || {}),
     onSuccess: (_, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
-      queryClient.invalidateQueries({ queryKey: ['approval-requests', id] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
     },
   });
 };
@@ -80,10 +81,10 @@ export const useRequestChanges = () => {
   
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data?: ApprovalActionRequest }) => 
-      services.approvalRequests.requestChanges(id, data || {}),
+      api.approvalRequests.requestChanges(id, data || {}),
     onSuccess: (_, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
-      queryClient.invalidateQueries({ queryKey: ['approval-requests', id] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
     },
   });
 };
@@ -91,6 +92,6 @@ export const useRequestChanges = () => {
 export const useResolveRequestNumber = () => {
   return useMutation({
     mutationFn: (requestNumber: string) => 
-      services.approvalRequests.resolveNumber(requestNumber),
+      api.approvalRequests.resolveNumber(requestNumber),
   });
 };
