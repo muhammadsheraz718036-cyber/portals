@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,8 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/auth-hooks";
+import { useApprovalRequests, useProfileNames } from "@/hooks/services";
 import type { RequestStatus } from "@/lib/constants";
 
 type RequestRow = {
@@ -37,25 +36,11 @@ export default function Approvals() {
   const { user, isAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const queryClient = useQueryClient();
 
-  const { data: rows = [], isLoading: loading } = useQuery({
-    queryKey: ["approval-requests"],
-    queryFn: async () => {
-      const data = await api.approvalRequests.list();
-      return data as RequestRow[];
-    },
-  });
+  const { data: rows = [], isLoading: loading } = useApprovalRequests();
 
-  const { data: names = {} } = useQuery({
-    queryKey: ["profile-names", rows.map(r => r.initiator_id)],
-    queryFn: async () => {
-      const ids = [...new Set(rows.map((r) => r.initiator_id))];
-      if (ids.length === 0) return {};
-      return await api.profiles.lookupNames(ids);
-    },
-    enabled: rows.length > 0,
-  });
+  const initiatorIds = [...new Set(rows.map((r) => r.initiator_id))];
+  const { data: names = {} } = useProfileNames(initiatorIds);
 
   const segregated = useMemo(() => {
     const myRequests = rows.filter((r) => r.is_initiator);

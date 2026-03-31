@@ -1,13 +1,19 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, CheckCircle, XCircle, Clock, ArrowRight, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/auth-hooks";
+import { useApprovalRequests, useAuditLogs } from "@/hooks/services";
 import type { RequestStatus } from "@/lib/constants";
+
+const getApprovalTypeName = (approvalTypes: unknown): string => {
+  if (approvalTypes && typeof approvalTypes === 'object' && 'name' in approvalTypes) {
+    return (approvalTypes as { name: string }).name;
+  }
+  return "—";
+};
 
 type RequestRow = {
   id: string;
@@ -17,7 +23,7 @@ type RequestRow = {
   total_steps: number;
   created_at: string;
   initiator_id: string;
-  approval_types: { name: string } | null;
+  approval_types: { name: string } | null | unknown;
 };
 
 type AuditRow = {
@@ -33,23 +39,10 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
 
-  const { data: requests = [], isLoading: loading } = useQuery({
-    queryKey: ["approval-requests"],
-    queryFn: async () => {
-      const data = await api.approvalRequests.list();
-      return data as RequestRow[];
-    },
-  });
+  const { data: requests = [], isLoading: loading } = useApprovalRequests();
 
-  const { data: auditLogs = [] } = useQuery({
-    queryKey: ["audit-logs"],
-    queryFn: async () => {
-      if (!isAdmin) return [];
-      const data = await api.auditLogs.list();
-      return (data as AuditRow[]).slice(0, 5);
-    },
-    enabled: isAdmin,
-  });
+  const { data: auditLogs = [] } = useAuditLogs();
+  const filteredAuditLogs = isAdmin ? auditLogs.slice(0, 5) : [];
 
   const stats = useMemo(() => {
     const total = requests.length;
@@ -123,7 +116,7 @@ export default function Dashboard() {
                       <StatusBadge status={req.status} />
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {req.approval_types?.name ?? "—"}
+                      {getApprovalTypeName(req.approval_types)}
                     </p>
                   </div>
                   <div className="text-xs text-muted-foreground">
@@ -157,7 +150,7 @@ export default function Dashboard() {
                 </div>
               )}
               {isAdmin &&
-                auditLogs.map((log) => (
+                filteredAuditLogs.map((log) => (
                   <div key={log.id} className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-foreground">{log.user_name}</span>
@@ -168,7 +161,7 @@ export default function Dashboard() {
                     <p className="text-[11px] text-muted-foreground/70 mt-1">{new Date(log.created_at).toLocaleString()}</p>
                   </div>
                 ))}
-              {isAdmin && auditLogs.length === 0 && (
+              {isAdmin && filteredAuditLogs.length === 0 && (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">No audit entries yet</div>
               )}
             </div>

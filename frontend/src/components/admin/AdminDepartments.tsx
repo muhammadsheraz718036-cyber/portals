@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Plus, Edit, Trash2, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
+import { useDepartments, useCreateDepartment, useUpdateDepartment, useDeleteDepartment } from "@/hooks/services";
 import { toast } from "sonner";
 
 interface Department {
@@ -15,24 +15,16 @@ interface Department {
 }
 
 export function AdminDepartments() {
-  const [departments, setDepartments] = useState<Department[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDept, setEditDept] = useState<Department | null>(null);
   const [name, setName] = useState("");
   const [head, setHead] = useState("");
-  const [loading, setLoading] = useState(true);
 
-  const fetchDepartments = async () => {
-    try {
-      const data = await api.departments.list();
-      setDepartments((data as Department[]) || []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load");
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => { fetchDepartments(); }, []);
+  const { data: departments = [], isLoading: loading } = useDepartments();
+  
+  const createMutation = useCreateDepartment();
+  const updateMutation = useUpdateDepartment();
+  const deleteMutation = useDeleteDepartment();
 
   const openCreate = () => { setEditDept(null); setName(""); setHead(""); setDialogOpen(true); };
   const openEdit = (d: Department) => { setEditDept(d); setName(d.name); setHead(d.head_name || ""); setDialogOpen(true); };
@@ -41,24 +33,29 @@ export function AdminDepartments() {
     if (!name.trim()) return;
     try {
       if (editDept) {
-        await api.departments.update(editDept.id, { name, head_name: head || null });
+        await updateMutation.mutateAsync({
+          id: editDept.id,
+          data: { name, head_name: head || null },
+        });
         toast.success("Department updated");
       } else {
-        await api.departments.create({ name, head_name: head || null });
+        await createMutation.mutateAsync({
+          name,
+          head_name: head || null,
+        });
         toast.success("Department created");
       }
       setDialogOpen(false);
-      fetchDepartments();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
     }
   };
 
   const handleDelete = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this department?")) return;
     try {
-      await api.departments.delete(id);
+      await deleteMutation.mutateAsync(id);
       toast.success("Deleted");
-      fetchDepartments();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }

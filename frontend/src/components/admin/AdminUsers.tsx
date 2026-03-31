@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { api } from "@/lib/api";
+import { useProfiles, useDepartments, useRoles, useCreateUser, useUpdateUser, useDeleteUser, useResetUserPassword } from "@/hooks/services";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/auth-hooks";
 
@@ -57,11 +57,7 @@ interface Role {
 
 export function AdminUsers() {
   const { profile: currentUser, hasPermission } = useAuth();
-  const [users, setUsers] = useState<Profile[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [editUser, setEditUser] = useState<Profile | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -75,6 +71,15 @@ export function AdminUsers() {
   const [changePassword, setChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
 
+  const { data: users = [], isLoading: loading } = useProfiles();
+  const { data: departments = [] } = useDepartments();
+  const { data: roles = [] } = useRoles();
+  
+  const createUserMutation = useCreateUser();
+  const updateUserMutation = useUpdateUser();
+  const deleteUserMutation = useDeleteUser();
+  const resetPasswordMutation = useResetUserPassword();
+
   const hasAdminConsoleAccess =
     currentUser?.is_admin ||
     hasPermission("manage_users") ||
@@ -84,26 +89,6 @@ export function AdminUsers() {
     hasPermission("manage_chains") ||
     hasPermission("all");
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const [u, d, r] = await Promise.all([
-        api.profiles.list(),
-        api.departments.list() as Promise<Department[]>,
-        api.roles.list() as Promise<Role[]>,
-      ]);
-      setUsers(u);
-      setDepartments(d);
-      setRoles(r);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load");
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   const openCreate = () => {
     setEditUser(null);
@@ -153,23 +138,29 @@ export function AdminUsers() {
     try {
       if (editUser) {
         // Update existing user
-        await api.admin.updateUser(editUser.id, {
-          full_name: fullName,
-          department_id: departmentId || null,
-          role_id: roleId || null,
-          is_admin: isAdmin,
-          is_active: isActive,
+        await updateUserMutation.mutateAsync({
+          userId: editUser.id,
+          data: {
+            full_name: fullName,
+            department_id: departmentId || null,
+            role_id: roleId || null,
+            is_admin: isAdmin,
+            is_active: isActive,
+          },
         });
 
         // Change password if requested
         if (changePassword && newPassword.trim()) {
-          await api.admin.resetUserPassword(editUser.id, newPassword);
+          await resetPasswordMutation.mutateAsync({
+            userId: editUser.id,
+            newPassword,
+          });
         }
 
         toast.success("User updated successfully");
       } else {
         // Create new user
-        await api.admin.createUser({
+        await createUserMutation.mutateAsync({
           email,
           password,
           full_name: fullName,
@@ -180,7 +171,6 @@ export function AdminUsers() {
         toast.success("User created successfully");
       }
       setDialogOpen(false);
-      fetchData();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to save user");
     }
@@ -189,12 +179,28 @@ export function AdminUsers() {
 
   const handleUnlock = async (userId: string) => {
     try {
-      await api.admin.updateUser(userId, { unlock_account: true });
+      await updateUserMutation.mutateAsync({
+        userId,
+        data: { unlock_account: true },
+      });
       toast.success("Account unlocked successfully");
-      fetchData();
     } catch (err: unknown) {
       toast.error(
         err instanceof Error ? err.message : "Failed to unlock account",
+      );
+    }
+  };
+
+  const handleDelete = async (userId: string) => {
+    if (!confirm("Are you sure you want to delete this user?")) {
+      return;
+    }
+    try {
+      await deleteUserMutation.mutateAsync(userId);
+      toast.success("User deleted successfully");
+    } catch (err: unknown) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete user",
       );
     }
   };

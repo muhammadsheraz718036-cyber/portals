@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useReactToPrint } from "react-to-print";
 import {
   ArrowLeft,
@@ -28,7 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { useCompany } from "@/contexts/company-hooks";
 import { useAuth } from "@/contexts/auth-hooks";
-import { api } from "@/lib/api";
+import { useApprovalRequest, useProfile, useApproveRequest, useRejectRequest, useRequestChanges, useUpdateApprovalRequest, useResolveRequestNumber } from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
 import type { LineItem } from "@/components/LineItemsManager";
@@ -96,7 +95,6 @@ export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { profile, user } = useAuth();
-  const queryClient = useQueryClient();
   const [actioning, setActioning] = useState(false);
   const [showRequestChangesDialog, setShowRequestChangesDialog] = useState(false);
   const [changesComment, setChangesComment] = useState("");
@@ -104,30 +102,19 @@ export default function RequestDetail() {
   const [updatingFormData, setUpdatingFormData] = useState<Record<string, unknown>>({});
   const printLetterRef = useRef<HTMLDivElement>(null);
 
-  const { data: requestData, isLoading: loading, error: notFound } = useQuery({
-    queryKey: ["approval-request", id],
-    queryFn: async () => {
-      if (!id) throw new Error("No ID provided");
-      let resolvedId = id;
-      if (!uuidRe.test(id)) {
-        const r = await api.approvalRequests.resolveNumber(id);
-        resolvedId = r.id;
-      }
-      const data = await api.approvalRequests.get(resolvedId);
-      return data;
-    },
-    enabled: !!id,
-  });
+  const resolveMutation = useResolveRequestNumber();
+  const approveMutation = useApproveRequest();
+  const rejectMutation = useRejectRequest();
+  const requestChangesMutation = useRequestChanges();
+  const updateRequestMutation = useUpdateApprovalRequest();
+  
+  const { data: requestData, isLoading: loading, error: notFound } = useApprovalRequest(id || "");
 
   const request = requestData?.request as RequestRow | undefined;
   const actions = (requestData?.actions ?? []) as ActionRow[];
   const actorNames = requestData?.actorNames ?? {};
 
-  const { data: initiatorProfile } = useQuery({
-    queryKey: ["profile", request?.initiator_id],
-    queryFn: () => api.profiles.get(request!.initiator_id),
-    enabled: !!request?.initiator_id,
-  });
+  const { data: initiatorProfile } = useProfile(request?.initiator_id || "");
 
   const [initiatorName, setInitiatorName] = useState("");
   const [initiatorRole, setInitiatorRole] = useState("");
@@ -213,15 +200,7 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await api.approvalRequests.approve(request.id, {
-        comment: "",
-      });
-      
-      // Invalidate queries to refresh data across the app
-      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
-      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
-      
+      await approveMutation.mutateAsync({ id: request.id, data: { comment: "" } });
       toast.success("Request approved successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to approve request");
@@ -234,15 +213,7 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await api.approvalRequests.reject(request.id, {
-        comment: "",
-      });
-      
-      // Invalidate queries to refresh data across the app
-      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
-      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
-      
+      await rejectMutation.mutateAsync({ id: request.id, data: { comment: "" } });
       toast.success("Request rejected successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reject request");
@@ -255,15 +226,7 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await api.approvalRequests.requestChanges(request.id, {
-        comment: changesComment,
-      });
-      
-      // Invalidate queries to refresh data across the app
-      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
-      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
-      
+      await requestChangesMutation.mutateAsync({ id: request.id, data: { comment: changesComment } });
       setShowRequestChangesDialog(false);
       setChangesComment("");
       toast.success("Changes requested successfully");
@@ -278,15 +241,7 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await api.approvalRequests.update(request.id, {
-        form_data: updatingFormData,
-      });
-      
-      // Invalidate queries to refresh data across the app
-      queryClient.invalidateQueries({ queryKey: ["approval-request", id] });
-      queryClient.invalidateQueries({ queryKey: ["approval-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["profile-names"] });
-      
+      await updateRequestMutation.mutateAsync({ id: request.id, data: { form_data: updatingFormData } });
       setShowUpdateForm(false);
       setUpdatingFormData({});
       toast.success("Request updated and resubmitted successfully");
