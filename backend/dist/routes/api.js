@@ -116,13 +116,33 @@ apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
     }
     res.json({ token, user: { id, email: user.email }, profile });
 }));
+async function ensureCompanySettingsColumns() {
+    await pool.query(`ALTER TABLE company_settings
+       ADD COLUMN IF NOT EXISTS phone_number TEXT,
+       ADD COLUMN IF NOT EXISTS landline_number TEXT`);
+}
 apiRouter.get("/company-settings", asyncHandler(async (_req, res) => {
-    const { rows } = await pool.query(`SELECT id, company_name, logo_url, phone_number, landline_number, updated_at, updated_by FROM company_settings LIMIT 1`);
-    if (rows.length === 0) {
-        res.json(null);
-        return;
+    try {
+        const { rows } = await pool.query(`SELECT id, company_name, logo_url, phone_number, landline_number, contact_department, updated_at, updated_by FROM company_settings LIMIT 1`);
+        if (rows.length === 0) {
+            res.json(null);
+            return;
+        }
+        res.json(rows[0]);
     }
-    res.json(rows[0]);
+    catch (err) {
+        if (err.code === "42703") {
+            await ensureCompanySettingsColumns();
+            const { rows } = await pool.query(`SELECT id, company_name, logo_url, phone_number, landline_number, contact_department, updated_at, updated_by FROM company_settings LIMIT 1`);
+            if (rows.length === 0) {
+                res.json(null);
+                return;
+            }
+            res.json(rows[0]);
+            return;
+        }
+        throw err;
+    }
 }));
 // --- Authenticated ---
 apiRouter.get("/auth/me", requireAuth, asyncHandler(async (req, res) => {
@@ -172,16 +192,18 @@ apiRouter.patch("/company-settings", requireAdmin, asyncHandler(async (req, res)
         logo_url: z.string().nullable().optional(),
         phone_number: z.string().nullable().optional(),
         landline_number: z.string().nullable().optional(),
+        contact_department: z.string().nullable().optional(),
     })
         .parse(req.body);
     const { rows } = await pool.query(`SELECT id FROM company_settings LIMIT 1`);
     if (rows.length === 0) {
         // Initialize company settings if they do not exist yet
-        const { rows: inserted } = await pool.query(`INSERT INTO company_settings (company_name, logo_url, phone_number, landline_number, updated_by) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [
+        const { rows: inserted } = await pool.query(`INSERT INTO company_settings (company_name, logo_url, phone_number, landline_number, contact_department, updated_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`, [
             body.company_name ?? "ApprovalHub",
             body.logo_url ?? null,
             body.phone_number ?? null,
             body.landline_number ?? null,
+            body.contact_department ?? "MIS Department",
             req.auth.userId,
         ]);
         res.json(inserted[0]);
@@ -206,6 +228,10 @@ apiRouter.patch("/company-settings", requireAdmin, asyncHandler(async (req, res)
     if (body.landline_number !== undefined) {
         parts.push(`landline_number = $${n++}`);
         vals.push(body.landline_number);
+    }
+    if (body.contact_department !== undefined) {
+        parts.push(`contact_department = $${n++}`);
+        vals.push(body.contact_department);
     }
     if (parts.length === 0) {
         throw new HttpError(400, "No fields to update");
@@ -1309,7 +1335,7 @@ apiRouter.get("/approval-requests/:id", requireAuth, asyncHandler(async (req, re
         throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
     }
     let scopeClause = "";
-    const queryParams = [req.params.id, uid];
+    const queryParams = [req.params.id, uid, canApprove];
     if (admin || userPermissions.includes("view_all_requests")) {
         scopeClause = "ar.id = $1";
     }
@@ -1327,8 +1353,7 @@ apiRouter.get("/approval-requests/:id", requireAuth, asyncHandler(async (req, re
     else {
         scopeClause = "ar.id = $1 AND FALSE";
     }
-    // Match pending steps by the viewer's role name (same idea as approve/reject), so we
-    // do not rely on JOIN roles ON roles.name = aa.role_name (breaks if names diverge).
+    // Allow users with approve_reject permission to see all requests with pending actions
     const { rows } = await pool.query(`SELECT ar.*,
         json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
         json_build_object('name', d.name) AS departments,
@@ -1342,9 +1367,9 @@ apiRouter.get("/approval-requests/:id", requireAuth, asyncHandler(async (req, re
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.status IN ('pending', 'waiting')
-          AND aa.role_name = (SELECT r.name FROM profiles p
+          AND (aa.role_name = (SELECT r.name FROM profiles p
             INNER JOIN roles r ON r.id = p.role_id
-            WHERE p.id = $2)
+            WHERE p.id = $2) OR $3)
         )
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
@@ -1458,48 +1483,47 @@ apiRouter.post("/approval-requests/:id/approve", requireAuth, asyncHandler(async
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot approve your own request");
     }
-    // Get the first pending action; if config has legacy duplicated entries, prefer latest created for step order
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
-    if (pendingActions.length === 0)
-        throw new HttpError(400, "No pending approval step found");
-    const currentAction = pendingActions[0];
-    // Skip stale candidates from previous cycles to avoid accidental old-step approvals
-    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending','waiting') AND id <> $2`, [requestId, currentAction.id]);
-    // Check if user's role can approve this step
-    let canApprove = false;
-    let userRoleName = null;
-    if (isAdmin) {
-        canApprove = true;
-    }
-    else if (userRoleId) {
+    // Get pending actions that match the user's role
+    let currentActionQuery = `
+      SELECT * FROM approval_actions 
+      WHERE request_id = $1 AND status IN ('pending', 'waiting') 
+      ORDER BY step_order ASC, created_at DESC`;
+    let queryParams = [requestId];
+    let userRoleName;
+    if (!isAdmin) {
+        // For non-admins, only allow approving steps that match their role
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
-            canApprove = userRoleName === currentAction.role_name;
+            currentActionQuery = `
+          SELECT * FROM approval_actions 
+          WHERE request_id = $1 AND status IN ('pending', 'waiting') AND role_name = $2
+          ORDER BY step_order ASC, created_at DESC LIMIT 1`;
+            queryParams = [requestId, userRoleName];
+        }
+        else {
+            throw new HttpError(403, "No role assigned to user");
         }
     }
-    if (!canApprove) {
-        throw new HttpError(403, `This step requires approval from role: ${currentAction.role_name}. Your role: ${userRoleName || "No role assigned"}`);
-    }
+    const { rows: pendingActions } = await pool.query(currentActionQuery, queryParams);
+    if (pendingActions.length === 0)
+        throw new HttpError(400, "No pending approval step found for your role");
+    const currentAction = pendingActions[0];
+    // For parallel approval, we don't skip other pending actions
     // Update the current action to approved
     await pool.query(`UPDATE approval_actions SET status = 'approved', acted_by = $1, acted_at = now(), comment = $2 WHERE id = $3`, [userId, body.comment || null, currentAction.id]);
     // Get all actions for this request
     const { rows: allActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
-    // Check if there are more steps: choose waiting item with lowest step_order and newest created_at
-    const nextAction = allActions
-        .filter((a) => a.status === "waiting")
-        .sort((a, b) => a.step_order === b.step_order
-        ? new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        : a.step_order - b.step_order)[0];
+    // Parallel approval: check if all pending/waiting actions are now approved
+    const remainingPending = allActions.filter((a) => ["pending", "waiting"].includes(a.status));
     let newStatus = request.status;
-    if (nextAction) {
-        // Mark next action as pending
-        await pool.query(`UPDATE approval_actions SET status = 'pending' WHERE id = $1`, [nextAction.id]);
-        newStatus = "in_progress";
-    }
-    else {
+    if (remainingPending.length === 0) {
         // All steps approved
         newStatus = "approved";
+    }
+    else {
+        // Still pending approvals
+        newStatus = "in_progress";
     }
     // Update the request status
     await pool.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [newStatus, requestId]);
@@ -1533,35 +1557,39 @@ apiRouter.post("/approval-requests/:id/reject", requireAuth, asyncHandler(async 
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot reject your own request");
     }
-    // Get the first pending action; prefer latest duplicate for same step order
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
-    if (pendingActions.length === 0)
-        throw new HttpError(400, "No pending approval step found");
-    const currentAction = pendingActions[0];
-    // Mark any older pending/waiting actions as skipped to avoid old cycles conflict
-    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
-    // Check if user's role can reject this step
-    let canReject = false;
-    let userRoleName = null;
-    if (isAdmin) {
-        canReject = true;
-    }
-    else if (userRoleId) {
+    // Get pending actions that match the user's role
+    let currentActionQuery = `
+      SELECT * FROM approval_actions 
+      WHERE request_id = $1 AND status IN ('pending', 'waiting') 
+      ORDER BY step_order ASC, created_at DESC`;
+    let queryParams = [requestId];
+    let userRoleName;
+    if (!isAdmin) {
+        // For non-admins, only allow rejecting steps that match their role
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
-            canReject = userRoleName === currentAction.role_name;
+            currentActionQuery = `
+          SELECT * FROM approval_actions 
+          WHERE request_id = $1 AND status IN ('pending', 'waiting') AND role_name = $2
+          ORDER BY step_order ASC, created_at DESC LIMIT 1`;
+            queryParams = [requestId, userRoleName];
+        }
+        else {
+            throw new HttpError(403, "No role assigned to user");
         }
     }
-    if (!canReject) {
-        throw new HttpError(403, `This step requires approval from role: ${currentAction.role_name}. Your role: ${userRoleName || "No role assigned"}`);
-    }
+    const { rows: pendingActions } = await pool.query(currentActionQuery, queryParams);
+    if (pendingActions.length === 0)
+        throw new HttpError(400, "No pending approval step found for your role");
+    const currentAction = pendingActions[0];
+    // For parallel approval, we don't skip other pending actions
     // Update the current action to rejected
     await pool.query(`UPDATE approval_actions SET status = 'rejected', acted_by = $1, acted_at = now(), comment = $2 WHERE id = $3`, [userId, body.comment || null, currentAction.id]);
-    // Mark the request as rejected
+    // Mark remaining pending/waiting actions as rejected
+    await pool.query(`UPDATE approval_actions SET status = 'rejected' WHERE request_id = $1 AND status IN ('pending', 'waiting')`, [requestId]);
+    // Update request status to rejected
     await pool.query(`UPDATE approval_requests SET status = 'rejected', updated_at = now() WHERE id = $1`, [requestId]);
-    // Mark remaining pending actions as skipped
-    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting')`, [requestId]);
     // Return updated request
     const { rows: updatedRequests } = await pool.query(`SELECT * FROM approval_requests WHERE id = $1`, [requestId]);
     const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
@@ -1592,33 +1620,37 @@ apiRouter.post("/approval-requests/:id/request-changes", requireAuth, asyncHandl
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot request changes on your own request");
     }
-    // Get the first pending action; prefer latest duplicate entry for same step order
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
-    if (pendingActions.length === 0)
-        throw new HttpError(400, "No pending approval step found");
-    const currentAction = pendingActions[0];
-    // Mark old pending/waiting states as skipped to avoid old-cycle approval conflicts
-    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
-    // Check if user's role can request changes
-    let canRequestChanges = false;
-    let userRoleName = null;
-    if (isAdmin) {
-        canRequestChanges = true;
-    }
-    else if (userRoleId) {
+    // Get pending actions that match the user's role
+    let currentActionQuery = `
+      SELECT * FROM approval_actions 
+      WHERE request_id = $1 AND status IN ('pending', 'waiting') 
+      ORDER BY step_order ASC, created_at DESC`;
+    let queryParams = [requestId];
+    let userRoleName;
+    if (!isAdmin) {
+        // For non-admins, only allow requesting changes on steps that match their role
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
-            canRequestChanges = userRoleName === currentAction.role_name;
+            currentActionQuery = `
+          SELECT * FROM approval_actions 
+          WHERE request_id = $1 AND status IN ('pending', 'waiting') AND role_name = $2
+          ORDER BY step_order ASC, created_at DESC LIMIT 1`;
+            queryParams = [requestId, userRoleName];
+        }
+        else {
+            throw new HttpError(403, "No role assigned to user");
         }
     }
-    if (!canRequestChanges) {
-        throw new HttpError(403, `This step requires approval from role: ${currentAction.role_name}. Your role: ${userRoleName || "No role assigned"}`);
-    }
-    // Skip stale pending/waiting rows to avoid old iteration steps becoming active after resubmission
-    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
+    const { rows: pendingActions } = await pool.query(currentActionQuery, queryParams);
+    if (pendingActions.length === 0)
+        throw new HttpError(400, "No pending approval step found for your role");
+    const currentAction = pendingActions[0];
+    // For parallel approval, we don't skip other pending actions
     // Update the current action to changes_requested
     await pool.query(`UPDATE approval_actions SET status = 'changes_requested', acted_by = $1, acted_at = now(), comment = $2 WHERE id = $3`, [userId, body.comment || null, currentAction.id]);
+    // Mark remaining pending/waiting actions as changes_requested
+    await pool.query(`UPDATE approval_actions SET status = 'changes_requested' WHERE request_id = $1 AND status IN ('pending', 'waiting')`, [requestId]);
     // Update request status to changes_requested
     await pool.query(`UPDATE approval_requests SET status = 'changes_requested', updated_at = now() WHERE id = $1`, [requestId]);
     // Return updated request
@@ -1685,7 +1717,6 @@ apiRouter.patch("/approval-requests/:id", requireAuth, asyncHandler(async (req, 
                 throw new HttpError(400, "No approval chain steps found");
             }
             const chainSteps = chainData[0].steps;
-            let firstNonSkippedFound = false;
             for (let i = 0; i < chainSteps.length; i++) {
                 const step = chainSteps[i];
                 const stepRoleName = step.roleName || step.role_name || "";
@@ -1695,19 +1726,9 @@ apiRouter.patch("/approval-requests/:id", requireAuth, asyncHandler(async (req, 
                VALUES ($1, $2, $3, $4, 'skipped')`, [requestId, i + 1, stepRoleName, step.action || "Review"]);
                     continue;
                 }
-                // Determine status: first non-skipped becomes pending, others waiting
-                const stepStatus = !firstNonSkippedFound ? "pending" : "waiting";
-                if (!firstNonSkippedFound) {
-                    firstNonSkippedFound = true;
-                }
+                // Parallel approval: all non-skipped steps are pending
                 await pool.query(`INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
-             VALUES ($1, $2, $3, $4, $5)`, [
-                    requestId,
-                    i + 1,
-                    stepRoleName,
-                    step.action || "Review",
-                    stepStatus,
-                ]);
+             VALUES ($1, $2, $3, $4, 'pending')`, [requestId, i + 1, stepRoleName, step.action || "Review"]);
             }
         }
         const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);

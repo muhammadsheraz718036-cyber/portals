@@ -309,6 +309,7 @@ apiRouter.patch(
         logo_url: z.string().nullable().optional(),
         phone_number: z.string().nullable().optional(),
         landline_number: z.string().nullable().optional(),
+        contact_department: z.string().nullable().optional(),
       })
       .parse(req.body);
 
@@ -2311,6 +2312,7 @@ apiRouter.post(
       WHERE request_id = $1 AND status IN ('pending', 'waiting') 
       ORDER BY step_order ASC, created_at DESC`;
     let queryParams: any[] = [requestId];
+    let userRoleName: string | undefined;
 
     if (!isAdmin) {
       // For non-admins, only allow approving steps that match their role
@@ -2437,6 +2439,7 @@ apiRouter.post(
       WHERE request_id = $1 AND status IN ('pending', 'waiting') 
       ORDER BY step_order ASC, created_at DESC`;
     let queryParams: any[] = [requestId];
+    let userRoleName: string | undefined;
 
     if (!isAdmin) {
       // For non-admins, only allow rejecting steps that match their role
@@ -2553,6 +2556,7 @@ apiRouter.post(
       WHERE request_id = $1 AND status IN ('pending', 'waiting') 
       ORDER BY step_order ASC, created_at DESC`;
     let queryParams: any[] = [requestId];
+    let userRoleName: string | undefined;
 
     if (!isAdmin) {
       // For non-admins, only allow requesting changes on steps that match their role

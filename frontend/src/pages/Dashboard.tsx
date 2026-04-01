@@ -1,5 +1,12 @@
 import { useMemo } from "react";
-import { ClipboardList, CheckCircle, XCircle, Clock, ArrowRight, Loader2 } from "lucide-react";
+import {
+  ClipboardList,
+  CheckCircle,
+  XCircle,
+  Clock,
+  ArrowRight,
+  Loader2,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -9,7 +16,11 @@ import { useApprovalRequests, useAuditLogs } from "@/hooks/services";
 import type { RequestStatus } from "@/lib/constants";
 
 const getApprovalTypeName = (approvalTypes: unknown): string => {
-  if (approvalTypes && typeof approvalTypes === 'object' && 'name' in approvalTypes) {
+  if (
+    approvalTypes &&
+    typeof approvalTypes === "object" &&
+    "name" in approvalTypes
+  ) {
     return (approvalTypes as { name: string }).name;
   }
   return "—";
@@ -39,9 +50,11 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
 
-  const { data: requests = [], isLoading: loading } = useApprovalRequests() as { data: RequestRow[], isLoading: boolean };
+  const { data: requests = [], isLoading: loading } = useApprovalRequests() as {
+    data: RequestRow[];
+    isLoading: boolean;
+  };
   const { data: auditLogs = [] } = useAuditLogs();
-  
   // Memoize filtered audit logs to prevent unnecessary recalculations
   const filteredAuditLogs = useMemo(() => {
     return isAdmin ? auditLogs.slice(0, 5) : [];
@@ -55,9 +68,24 @@ export default function Dashboard() {
       (r) => r.status === "pending" || r.status === "in_progress",
     ).length;
     return [
-      { label: "Total Requests", value: total, icon: ClipboardList, color: "text-primary" },
-      { label: "Approved", value: approved, icon: CheckCircle, color: "text-success" },
-      { label: "Rejected", value: rejected, icon: XCircle, color: "text-destructive" },
+      {
+        label: "Total Requests",
+        value: total,
+        icon: ClipboardList,
+        color: "text-primary",
+      },
+      {
+        label: "Approved",
+        value: approved,
+        icon: CheckCircle,
+        color: "text-success",
+      },
+      {
+        label: "Rejected",
+        value: rejected,
+        icon: XCircle,
+        color: "text-destructive",
+      },
       { label: "Pending", value: pending, icon: Clock, color: "text-warning" },
     ];
   }, [requests]);
@@ -76,7 +104,9 @@ export default function Dashboard() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-1">Overview of approval requests and activity</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Overview of approval requests and activity
+        </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -87,7 +117,9 @@ export default function Dashboard() {
                 <stat.icon className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-foreground">{stat.value}</p>
+                <p className="text-2xl font-bold text-foreground">
+                  {stat.value}
+                </p>
                 <p className="text-xs text-muted-foreground">{stat.label}</p>
               </div>
             </CardContent>
@@ -99,8 +131,15 @@ export default function Dashboard() {
         <Card className="border">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold">Recent Requests</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => navigate("/approvals")} className="text-xs text-primary">
+              <CardTitle className="text-base font-semibold">
+                Recent Requests
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate("/approvals")}
+                className="text-xs text-primary"
+              >
                 View All <ArrowRight className="ml-1 h-3 w-3" />
               </Button>
             </div>
@@ -115,7 +154,9 @@ export default function Dashboard() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground">{req.request_number}</span>
+                      <span className="text-sm font-medium text-foreground">
+                        {req.request_number}
+                      </span>
                       <StatusBadge status={req.status} />
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -128,7 +169,9 @@ export default function Dashboard() {
                 </div>
               ))}
               {recent.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No requests yet</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  No requests yet
+                </div>
               )}
             </div>
           </CardContent>
@@ -137,9 +180,16 @@ export default function Dashboard() {
         <Card className="border">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold">Recent Activity</CardTitle>
+              <CardTitle className="text-base font-semibold">
+                Recent Activity
+              </CardTitle>
               {isAdmin && (
-                <Button variant="ghost" size="sm" onClick={() => navigate("/audit-logs")} className="text-xs text-primary">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate("/audit-logs")}
+                  className="text-xs text-primary"
+                >
                   View All <ArrowRight className="ml-1 h-3 w-3" />
                 </Button>
               )}
@@ -156,16 +206,26 @@ export default function Dashboard() {
                 filteredAuditLogs.map((log) => (
                   <div key={log.id} className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground">{log.user_name}</span>
+                      <span className="text-sm font-medium text-foreground">
+                        {log.user_name}
+                      </span>
                       <span className="text-xs text-muted-foreground">·</span>
-                      <span className="text-xs text-muted-foreground">{log.action}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {log.action}
+                      </span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{log.details}</p>
-                    <p className="text-[11px] text-muted-foreground/70 mt-1">{new Date(log.created_at).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {log.details}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground/70 mt-1">
+                      {new Date(log.created_at).toLocaleString()}
+                    </p>
                   </div>
                 ))}
               {isAdmin && filteredAuditLogs.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No audit entries yet</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  No audit entries yet
+                </div>
               )}
             </div>
           </CardContent>

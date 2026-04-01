@@ -8,7 +8,6 @@ import {
 } from "@/lib/api";
 import { AuthContext, type AuthContextType } from "./auth-context";
 import { useQueryClient } from "@tanstack/react-query";
-import { QUERY_KEYS } from "@/constants/query-keys";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -29,15 +28,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(u);
       setProfile(p);
 
-      // Invalidate queries that depend on user authentication
-      queryClient.invalidateQueries({
-        queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-        refetchType: "active",
-      });
-      queryClient.invalidateQueries({
-        queryKey: [QUERY_KEYS.PROFILE_NAMES],
-        refetchType: "active",
-      });
+      // Invalidate all queries to fetch fresh user-specific data
+      await queryClient.invalidateQueries();
     } catch {
       setStoredToken(null);
       setUser(null);
@@ -62,15 +54,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(u);
       setProfile(p);
 
-      // Invalidate queries that depend on user authentication
-      queryClient.invalidateQueries({
-        queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-        refetchType: "active",
-      });
-      queryClient.invalidateQueries({
-        queryKey: [QUERY_KEYS.PROFILE_NAMES],
-        refetchType: "active",
-      });
+      // Invalidate all queries to fetch fresh user-specific data
+      await queryClient.invalidateQueries();
 
       return { error: null };
     } catch (e) {
@@ -83,15 +68,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setProfile(null);
 
-    // Invalidate queries that depend on user authentication
-    queryClient.invalidateQueries({
-      queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-      refetchType: "active",
-    });
-    queryClient.invalidateQueries({
-      queryKey: [QUERY_KEYS.PROFILE_NAMES],
-      refetchType: "active",
-    });
+    // Clear all cached user data when logging out
+    queryClient.clear();
   };
 
   const hasPermission = (permission: string): boolean => {

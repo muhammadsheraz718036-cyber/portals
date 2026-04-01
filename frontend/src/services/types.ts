@@ -268,4 +268,5 @@ export interface UpdateCompanySettingsRequest {
   logo_url?: string | null;
   phone_number?: string | null;
   landline_number?: string | null;
+  contact_department?: string | null;
 }

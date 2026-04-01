@@ -17,6 +17,7 @@ export function AdminSettings() {
   const [logoUrl, setLogoUrl] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [landlineNumber, setLandlineNumber] = useState("");
+  const [contactDepartment, setContactDepartment] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -25,6 +26,7 @@ export function AdminSettings() {
       setLogoUrl(settings.logo_url || "");
       setPhoneNumber(settings.phone_number || "");
       setLandlineNumber(settings.landline_number || "");
+      setContactDepartment(settings.contact_department || "MIS Department");
     }
   }, [settings]);
 
@@ -40,6 +42,7 @@ export function AdminSettings() {
         logo_url: logoUrl.trim() || null,
         phone_number: phoneNumber.trim() || null,
         landline_number: landlineNumber.trim() || null,
+        contact_department: contactDepartment.trim() || null,
       });
       await refetch();
     } catch (e) {
@@ -94,6 +97,18 @@ export function AdminSettings() {
                 onChange={(e) => setLandlineNumber(e.target.value)}
                 placeholder="e.g., 4803"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Contact Department</Label>
+              <Input
+                value={contactDepartment}
+                onChange={(e) => setContactDepartment(e.target.value)}
+                placeholder="e.g., MIS Department"
+              />
+              <p className="text-xs text-muted-foreground">
+                This department name will be displayed on the login page for
+                user queries.
+              </p>
             </div>
           </div>
           {logoUrl && (
