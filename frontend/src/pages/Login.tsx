@@ -66,28 +66,55 @@ export default function Login() {
             </div>
           )}
           <CardTitle className="text-xl font-bold">{companyName}</CardTitle>
-          <p className="text-sm text-muted-foreground">Sign in to your account</p>
+          <p className="text-sm text-muted-foreground">
+            Sign in to your account
+          </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label>Email</Label>
-              <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" autoFocus={true} />
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                autoFocus={true}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Password</Label>
-              <Input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : null}
               Sign In
             </Button>
           </form>
-          <p className="text-xs text-muted-foreground text-center mt-4">
-            In case of queries, contact MIS Department
-            <br />
-            Mobile: 0591373812<br />Telephone: 4803
-          </p>
+          {(settings?.phone_number || settings?.landline_number) && (
+            <div className="rounded border p-3 mt-4 bg-muted/50 text-xs text-muted-foreground">
+              <p className="font-semibold text-sm text-foreground text-center">
+                In case of queries, contact{" "}
+                {settings?.contact_department || "MIS Department"}
+              </p>
+              <div className="text-center">
+                {settings?.phone_number && (
+                  <span>Mobile: {settings.phone_number}</span>
+                )}
+                {settings?.phone_number && settings?.landline_number && <br />}
+                {settings?.landline_number && (
+                  <span>Telephone: {settings.landline_number}</span>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

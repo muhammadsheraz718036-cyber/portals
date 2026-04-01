@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS company_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_name TEXT NOT NULL DEFAULT 'ApprovalHub',
   logo_url TEXT,
+  phone_number TEXT,
+  landline_number TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by UUID REFERENCES users(id) ON DELETE SET NULL
 );
@@ -156,7 +158,6 @@ DECLARE
   i int := 0;
   n int;
   initiator_role_name TEXT;
-  first_non_skipped_found BOOLEAN := FALSE;
   step_status TEXT;
 BEGIN
   IF NEW.approval_chain_id IS NULL THEN
@@ -190,12 +191,9 @@ BEGIN
     -- If the step's role matches the initiator's role, skip it
     IF COALESCE(step_rec->>'roleName', '') = COALESCE(initiator_role_name, '') THEN
       step_status := 'skipped';
-    -- Otherwise, mark first non-skipped as pending, rest as waiting
-    ELSIF NOT first_non_skipped_found THEN
-      step_status := 'pending';
-      first_non_skipped_found := TRUE;
     ELSE
-      step_status := 'waiting';
+      -- Parallel approval: all non-skipped steps are pending
+      step_status := 'pending';
     END IF;
 
     INSERT INTO approval_actions (

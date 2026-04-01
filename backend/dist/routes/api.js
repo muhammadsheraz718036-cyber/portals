@@ -4,9 +4,20 @@ import { pool } from "../db.js";
 import { HttpError } from "../httpError.js";
 import { asyncHandler } from "../asyncHandler.js";
 import { hashPassword, verifyPassword } from "../auth/password.js";
+import { isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE, } from "../auth/passwordPolicy.js";
 import { signToken } from "../auth/jwt.js";
 import { requireAuth, requireAdmin, } from "../middleware/auth.js";
+import { upload, deleteUploadedFile, validateFileSize, getMimeType, } from "../fileUpload.js";
+import path from "path";
 export const apiRouter = Router();
+const uploadsRoot = path.resolve(process.cwd(), "uploads");
+function sanitizeDownloadFilename(filename) {
+    return filename.replace(/[\r\n"]/g, "_");
+}
+function isFileInsideUploads(filePath) {
+    const resolved = path.resolve(filePath);
+    return (resolved === uploadsRoot || resolved.startsWith(`${uploadsRoot}${path.sep}`));
+}
 // Helper function to log audit events
 async function logAudit(userId, userName, action, target, details) {
     try {
@@ -24,7 +35,10 @@ apiRouter.get("/setup/status", asyncHandler(async (_req, res) => {
 }));
 const setupBody = z.object({
     email: z.string().email(),
-    password: z.string().min(6),
+    password: z
+        .string()
+        .min(8)
+        .refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
     full_name: z.string().min(1),
 });
 apiRouter.post("/setup", asyncHandler(async (req, res) => {
@@ -63,7 +77,7 @@ const loginBody = z.object({
 });
 apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
     const body = loginBody.parse(req.body);
-    const { rows } = await pool.query(`SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts
+    const { rows } = await pool.query(`SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts, p.is_admin
         FROM users u
         JOIN profiles p ON u.id = p.id
         WHERE u.email = $1`, [body.email.toLowerCase()]);
@@ -71,19 +85,20 @@ apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
         throw new HttpError(401, "Invalid email or password");
     }
     const user = rows[0];
-    // Check if account is locked
-    if (user.is_locked) {
+    // Lock after failed attempts applies to non-admin accounts only; admins are never locked.
+    if (user.is_locked && !user.is_admin) {
         throw new HttpError(423, "Account is locked due to too many failed login attempts. Please contact an administrator.");
     }
     const ok = await verifyPassword(body.password, user.password_hash);
     if (!ok) {
-        // Increment failed login attempts
-        await pool.query(`UPDATE profiles SET
+        if (!user.is_admin) {
+            await pool.query(`UPDATE profiles SET
           failed_login_attempts = failed_login_attempts + 1,
           last_failed_login_at = now(),
           is_locked = CASE WHEN failed_login_attempts + 1 >= 3 THEN true ELSE false END,
           locked_at = CASE WHEN failed_login_attempts + 1 >= 3 THEN now() ELSE locked_at END
          WHERE id = $1`, [user.id]);
+        }
         throw new HttpError(401, "Invalid email or password");
     }
     // Reset failed login attempts on successful login
@@ -102,7 +117,7 @@ apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
     res.json({ token, user: { id, email: user.email }, profile });
 }));
 apiRouter.get("/company-settings", asyncHandler(async (_req, res) => {
-    const { rows } = await pool.query(`SELECT id, company_name, logo_url, updated_at, updated_by FROM company_settings LIMIT 1`);
+    const { rows } = await pool.query(`SELECT id, company_name, logo_url, phone_number, landline_number, updated_at, updated_by FROM company_settings LIMIT 1`);
     if (rows.length === 0) {
         res.json(null);
         return;
@@ -117,7 +132,10 @@ apiRouter.get("/auth/me", requireAuth, asyncHandler(async (req, res) => {
     res.json({ user: { id, email: u[0]?.email }, profile });
 }));
 const passwordBody = z.object({
-    new_password: z.string().min(6),
+    new_password: z
+        .string()
+        .min(8)
+        .refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
     current_password: z.string().optional(),
 });
 apiRouter.patch("/auth/me/password", requireAuth, asyncHandler(async (req, res) => {
@@ -152,14 +170,18 @@ apiRouter.patch("/company-settings", requireAdmin, asyncHandler(async (req, res)
         .object({
         company_name: z.string().min(1).optional(),
         logo_url: z.string().nullable().optional(),
+        phone_number: z.string().nullable().optional(),
+        landline_number: z.string().nullable().optional(),
     })
         .parse(req.body);
     const { rows } = await pool.query(`SELECT id FROM company_settings LIMIT 1`);
     if (rows.length === 0) {
         // Initialize company settings if they do not exist yet
-        const { rows: inserted } = await pool.query(`INSERT INTO company_settings (company_name, logo_url, updated_by) VALUES ($1, $2, $3) RETURNING *`, [
+        const { rows: inserted } = await pool.query(`INSERT INTO company_settings (company_name, logo_url, phone_number, landline_number, updated_by) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [
             body.company_name ?? "ApprovalHub",
             body.logo_url ?? null,
+            body.phone_number ?? null,
+            body.landline_number ?? null,
             req.auth.userId,
         ]);
         res.json(inserted[0]);
@@ -176,6 +198,14 @@ apiRouter.patch("/company-settings", requireAdmin, asyncHandler(async (req, res)
     if (body.logo_url !== undefined) {
         parts.push(`logo_url = $${n++}`);
         vals.push(body.logo_url);
+    }
+    if (body.phone_number !== undefined) {
+        parts.push(`phone_number = $${n++}`);
+        vals.push(body.phone_number);
+    }
+    if (body.landline_number !== undefined) {
+        parts.push(`landline_number = $${n++}`);
+        vals.push(body.landline_number);
     }
     if (parts.length === 0) {
         throw new HttpError(400, "No fields to update");
@@ -397,14 +427,14 @@ apiRouter.delete("/roles/:id", requireAuth, asyncHandler(async (req, res) => {
 }));
 // Approval types
 apiRouter.get("/approval-types", requireAuth, asyncHandler(async (req, res) => {
-    // Check if user has admin access or manage_approval_types permission
-    // const isAdmin = req.profile?.is_admin;
-    // const hasPermission =
-    //   req.profile?.permissions?.includes("manage_approval_types") ||
-    //   req.profile?.permissions?.includes("all");
-    // if (!isAdmin && !hasPermission) {
-    //   throw new HttpError(403, "Forbidden");
-    // }
+    // Check if user can manage approval types or initiate requests.
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_approval_types") ||
+        req.profile?.permissions?.includes("initiate_request") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
     const { rows } = await pool.query(`SELECT * FROM approval_types ORDER BY name`);
     res.json(rows);
 }));
@@ -422,13 +452,19 @@ apiRouter.post("/approval-types", requireAuth, asyncHandler(async (req, res) => 
         description: z.string().optional(),
         fields: z.array(z.any()),
         page_layout: z.enum(["portrait", "landscape"]).optional(),
+        pre_salutation: z.string().nullable().optional(),
+        post_salutation: z.string().nullable().optional(),
+        allow_attachments: z.boolean().default(false),
     })
         .parse(req.body);
-    const { rows } = await pool.query(`INSERT INTO approval_types (name, description, fields, page_layout, created_by) VALUES ($1, $2, $3::jsonb, $4, $5) RETURNING *`, [
+    const { rows } = await pool.query(`INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8) RETURNING *`, [
         body.name.trim(),
         body.description ?? "",
         JSON.stringify(body.fields),
         body.page_layout ?? "portrait",
+        body.pre_salutation ?? null,
+        body.post_salutation ?? null,
+        body.allow_attachments,
         req.auth.userId,
     ]);
     // Log audit event
@@ -449,6 +485,9 @@ apiRouter.patch("/approval-types/:id", requireAuth, asyncHandler(async (req, res
         description: z.string().optional(),
         fields: z.array(z.any()).optional(),
         page_layout: z.enum(["portrait", "landscape"]).optional(),
+        pre_salutation: z.string().nullable().optional(),
+        post_salutation: z.string().nullable().optional(),
+        allow_attachments: z.boolean().optional(),
     })
         .parse(req.body);
     const parts = [];
@@ -470,6 +509,18 @@ apiRouter.patch("/approval-types/:id", requireAuth, asyncHandler(async (req, res
         parts.push(`page_layout = $${n++}`);
         vals.push(body.page_layout);
     }
+    if (body.pre_salutation !== undefined) {
+        parts.push(`pre_salutation = $${n++}`);
+        vals.push(body.pre_salutation);
+    }
+    if (body.post_salutation !== undefined) {
+        parts.push(`post_salutation = $${n++}`);
+        vals.push(body.post_salutation);
+    }
+    if (body.allow_attachments !== undefined) {
+        parts.push(`allow_attachments = $${n++}`);
+        vals.push(body.allow_attachments);
+    }
     if (parts.length === 0)
         throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -487,6 +538,10 @@ apiRouter.patch("/approval-types/:id", requireAuth, asyncHandler(async (req, res
         changes.push(`fields updated`);
     if (body.page_layout !== undefined)
         changes.push(`page_layout: "${body.page_layout}"`);
+    if (body.pre_salutation !== undefined)
+        changes.push(`pre_salutation updated`);
+    if (body.post_salutation !== undefined)
+        changes.push(`post_salutation updated`);
     await logAudit(req.auth.userId, req.profile.full_name, "UPDATE", "Approval Type", `Updated approval type ${rows[0].name}: ${changes.join(", ")}`);
     res.json(rows[0]);
 }));
@@ -510,16 +565,308 @@ apiRouter.delete("/approval-types/:id", requireAuth, asyncHandler(async (req, re
     await logAudit(req.auth.userId, req.profile.full_name, "DELETE", "Approval Type", `Deleted approval type: ${approvalTypeName}`);
     res.status(204).end();
 }));
+// File attachments for approval types
+apiRouter.get("/approval-types/:id/attachments", requireAuth, asyncHandler(async (req, res) => {
+    // Check if user can manage approval types or initiate requests.
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_approval_types") ||
+        req.profile?.permissions?.includes("initiate_request") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
+    const { rows } = await pool.query(`SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 ORDER BY field_name`, [req.params.id]);
+    res.json(rows);
+}));
+apiRouter.post("/approval-types/:id/attachments", requireAuth, asyncHandler(async (req, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_approval_types") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
+    const body = z
+        .object({
+        field_name: z.string().min(1),
+        label: z.string().min(1),
+        required: z.boolean().default(false),
+        max_file_size_mb: z.number().min(1).max(100).default(10),
+        allowed_extensions: z
+            .array(z.string())
+            .default(["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]),
+        max_files: z.number().min(1).max(10).default(1),
+    })
+        .parse(req.body);
+    const { rows } = await pool.query(`INSERT INTO approval_type_attachments (approval_type_id, field_name, label, required, max_file_size_mb, allowed_extensions, max_files) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [
+        req.params.id,
+        body.field_name,
+        body.label,
+        body.required,
+        body.max_file_size_mb,
+        body.allowed_extensions,
+        body.max_files,
+    ]);
+    // Update approval type to indicate it allows attachments
+    await pool.query(`UPDATE approval_types SET allow_attachments = true, updated_at = now() WHERE id = $1`, [req.params.id]);
+    // Log audit event
+    await logAudit(req.auth.userId, req.profile.full_name, "CREATE", "Approval Type Attachment", `Added attachment field: ${body.label} to approval type`);
+    res.status(201).json(rows[0]);
+}));
+apiRouter.patch("/approval-types/:typeId/attachments/:id", requireAuth, asyncHandler(async (req, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_approval_types") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
+    const body = z
+        .object({
+        label: z.string().min(1).optional(),
+        required: z.boolean().optional(),
+        max_file_size_mb: z.number().min(1).max(100).optional(),
+        allowed_extensions: z.array(z.string()).optional(),
+        max_files: z.number().min(1).max(10).optional(),
+    })
+        .parse(req.body);
+    const parts = [];
+    const vals = [];
+    let n = 1;
+    if (body.label !== undefined) {
+        parts.push(`label = $${n++}`);
+        vals.push(body.label);
+    }
+    if (body.required !== undefined) {
+        parts.push(`required = $${n++}`);
+        vals.push(body.required);
+    }
+    if (body.max_file_size_mb !== undefined) {
+        parts.push(`max_file_size_mb = $${n++}`);
+        vals.push(body.max_file_size_mb);
+    }
+    if (body.allowed_extensions !== undefined) {
+        parts.push(`allowed_extensions = $${n++}`);
+        vals.push(body.allowed_extensions);
+    }
+    if (body.max_files !== undefined) {
+        parts.push(`max_files = $${n++}`);
+        vals.push(body.max_files);
+    }
+    if (parts.length === 0)
+        throw new HttpError(400, "No fields to update");
+    parts.push(`updated_at = now()`);
+    vals.push(req.params.id);
+    const { rows } = await pool.query(`UPDATE approval_type_attachments SET ${parts.join(", ")} WHERE id = $${n} AND approval_type_id = $${n + 1} RETURNING *`, [...vals, req.params.typeId]);
+    if (rows.length === 0)
+        throw new HttpError(404, "Not found");
+    res.json(rows[0]);
+}));
+apiRouter.delete("/approval-types/:typeId/attachments/:id", requireAuth, asyncHandler(async (req, res) => {
+    // Check if user has admin access or manage_approval_types permission
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_approval_types") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
+    // Get attachment info for audit logging
+    const { rows: attachment } = await pool.query(`SELECT label FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`, [req.params.id, req.params.typeId]);
+    const attachmentLabel = attachment[0]?.label || "Unknown";
+    const r = await pool.query(`DELETE FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`, [req.params.id, req.params.typeId]);
+    if (r.rowCount === 0)
+        throw new HttpError(404, "Not found");
+    // Check if this was the last attachment field for this approval type
+    const { rows: remaining } = await pool.query(`SELECT COUNT(*)::int as count FROM approval_type_attachments WHERE approval_type_id = $1`, [req.params.typeId]);
+    if (remaining[0].count === 0) {
+        await pool.query(`UPDATE approval_types SET allow_attachments = false, updated_at = now() WHERE id = $1`, [req.params.typeId]);
+    }
+    // Log audit event
+    await logAudit(req.auth.userId, req.profile.full_name, "DELETE", "Approval Type Attachment", `Deleted attachment field: ${attachmentLabel}`);
+    res.status(204).end();
+}));
+// File upload endpoint for requests
+apiRouter.post("/requests/:id/attachments", requireAuth, upload.array("files", 5), // Allow up to 5 files
+asyncHandler(async (req, res) => {
+    const requestId = req.params.id;
+    const fieldName = req.body.field_name;
+    const files = req.files;
+    if (!fieldName) {
+        throw new HttpError(400, "field_name is required");
+    }
+    if (!files || files.length === 0) {
+        throw new HttpError(400, "No files uploaded");
+    }
+    // Get the request and verify user has access
+    const { rows: requests } = await pool.query(`SELECT ar.*, at.allow_attachments FROM approval_requests ar 
+       JOIN approval_types at ON ar.approval_type_id = at.id 
+       WHERE ar.id = $1`, [requestId]);
+    if (requests.length === 0) {
+        throw new HttpError(404, "Request not found");
+    }
+    const request = requests[0];
+    const userId = req.auth.userId;
+    // Check if user can upload files (initiator or admin)
+    const isAdmin = req.profile?.is_admin;
+    if (request.initiator_id !== userId && !isAdmin) {
+        throw new HttpError(403, "You can only upload files to your own requests");
+    }
+    if (!request.allow_attachments) {
+        throw new HttpError(400, "This approval type does not allow file attachments");
+    }
+    // Get attachment configuration for this field
+    const { rows: attachmentConfig } = await pool.query(`SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 AND field_name = $2`, [request.approval_type_id, fieldName]);
+    if (attachmentConfig.length === 0) {
+        throw new HttpError(400, "Invalid attachment field");
+    }
+    const config = attachmentConfig[0];
+    // Validate file count
+    if (files.length > config.max_files) {
+        throw new HttpError(400, `Maximum ${config.max_files} files allowed`);
+    }
+    // Validate each file
+    try {
+        for (const file of files) {
+            // Validate file size
+            if (!validateFileSize(file.size, config.max_file_size_mb)) {
+                throw new HttpError(400, `File ${file.originalname} exceeds maximum size of ${config.max_file_size_mb}MB`);
+            }
+            // Validate file extension
+            const ext = path.extname(file.originalname).toLowerCase().slice(1);
+            if (!config.allowed_extensions.includes(ext)) {
+                throw new HttpError(400, `File type .${ext} not allowed for field ${fieldName}`);
+            }
+        }
+        // Insert file records into database
+        const insertedFiles = [];
+        for (const file of files) {
+            const { rows: inserted } = await pool.query(`INSERT INTO request_attachments (request_id, approval_type_attachment_id, field_name, original_filename, stored_filename, file_path, file_size_bytes, mime_type, uploaded_by) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`, [
+                requestId,
+                config.id,
+                fieldName,
+                file.originalname,
+                file.filename,
+                file.path,
+                file.size,
+                file.mimetype || getMimeType(file.filename),
+                userId,
+            ]);
+            insertedFiles.push(inserted[0]);
+        }
+        // Update request to indicate it has attachments
+        await pool.query(`UPDATE approval_requests SET has_attachments = true, updated_at = now() WHERE id = $1`, [requestId]);
+        // Log audit event
+        await logAudit(userId, req.profile.full_name, "UPLOAD", "Request Attachments", `Uploaded ${files.length} file(s) to request ${requestId}`);
+        res.status(201).json(insertedFiles);
+    }
+    catch (e) {
+        // Best-effort cleanup for files already written to disk.
+        await Promise.all(files.map((f) => deleteUploadedFile(f.path)));
+        throw e;
+    }
+}));
+// Get attachments for a request
+apiRouter.get("/requests/:id/attachments", requireAuth, asyncHandler(async (req, res) => {
+    const requestId = req.params.id;
+    const userId = req.auth.userId;
+    // Get the request and verify user has access
+    const { rows: requests } = await pool.query(`SELECT * FROM approval_requests WHERE id = $1`, [requestId]);
+    if (requests.length === 0) {
+        throw new HttpError(404, "Request not found");
+    }
+    const request = requests[0];
+    const isAdmin = req.profile?.is_admin;
+    // Check if user can view attachments (initiator or admin)
+    if (request.initiator_id !== userId && !isAdmin) {
+        throw new HttpError(403, "You can only view attachments for your own requests");
+    }
+    const { rows } = await pool.query(`SELECT ra.*, ata.label as field_label FROM request_attachments ra 
+       JOIN approval_type_attachments ata ON ra.approval_type_attachment_id = ata.id 
+       WHERE ra.request_id = $1 ORDER BY ra.created_at`, [requestId]);
+    res.json(rows);
+}));
+// Download a file attachment
+apiRouter.get("/attachments/:id/download", requireAuth, asyncHandler(async (req, res) => {
+    const attachmentId = req.params.id;
+    const userId = req.auth.userId;
+    // Get attachment and request info
+    const { rows: attachments } = await pool.query(`SELECT ra.*, ar.initiator_id FROM request_attachments ra 
+       JOIN approval_requests ar ON ra.request_id = ar.id 
+       WHERE ra.id = $1`, [attachmentId]);
+    if (attachments.length === 0) {
+        throw new HttpError(404, "Attachment not found");
+    }
+    const attachment = attachments[0];
+    const isAdmin = req.profile?.is_admin;
+    // Check if user can download attachment (initiator or admin)
+    if (attachment.initiator_id !== userId && !isAdmin) {
+        throw new HttpError(403, "You can only download attachments for your own requests");
+    }
+    if (!isFileInsideUploads(attachment.file_path)) {
+        throw new HttpError(400, "Invalid attachment file path");
+    }
+    // Set headers for file download
+    const safeFilename = sanitizeDownloadFilename(attachment.original_filename);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    res.setHeader("Content-Type", attachment.mime_type);
+    // Send file
+    res.sendFile(attachment.file_path, (err) => {
+        if (err) {
+            console.error("Error sending file:", err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: "Failed to download file" });
+            }
+        }
+    });
+}));
+// Delete a file attachment
+apiRouter.delete("/attachments/:id", requireAuth, asyncHandler(async (req, res) => {
+    const attachmentId = req.params.id;
+    const userId = req.auth.userId;
+    // Get attachment and request info
+    const { rows: attachments } = await pool.query(`SELECT ra.*, ar.initiator_id, ar.status FROM request_attachments ra 
+       JOIN approval_requests ar ON ra.request_id = ar.id 
+       WHERE ra.id = $1`, [attachmentId]);
+    if (attachments.length === 0) {
+        throw new HttpError(404, "Attachment not found");
+    }
+    const attachment = attachments[0];
+    const isAdmin = req.profile?.is_admin;
+    // Check if user can delete attachment (initiator or admin, and only if request is still pending)
+    if (attachment.initiator_id !== userId && !isAdmin) {
+        throw new HttpError(403, "You can only delete attachments for your own requests");
+    }
+    if (attachment.status !== "pending" &&
+        attachment.status !== "in_progress") {
+        throw new HttpError(400, "Cannot delete attachments for requests that are already approved or rejected");
+    }
+    // Delete file from storage
+    await deleteUploadedFile(attachment.file_path);
+    // Delete from database
+    await pool.query(`DELETE FROM request_attachments WHERE id = $1`, [
+        attachmentId,
+    ]);
+    // Check if request has any remaining attachments
+    const { rows: remaining } = await pool.query(`SELECT COUNT(*)::int as count FROM request_attachments WHERE request_id = $1`, [attachment.request_id]);
+    if (remaining[0].count === 0) {
+        await pool.query(`UPDATE approval_requests SET has_attachments = false, updated_at = now() WHERE id = $1`, [attachment.request_id]);
+    }
+    // Log audit event
+    await logAudit(userId, req.profile.full_name, "DELETE", "Request Attachment", `Deleted file: ${attachment.original_filename}`);
+    res.status(204).end();
+}));
 // Approval chains
 apiRouter.get("/approval-chains", requireAuth, asyncHandler(async (req, res) => {
-    // Check if user has admin access or manage_chains permission
-    // const isAdmin = req.profile?.is_admin;
-    // const hasPermission =
-    //   req.profile?.permissions?.includes("manage_chains") ||
-    //   req.profile?.permissions?.includes("all");
-    // if (!isAdmin && !hasPermission) {
-    //   throw new HttpError(403, "Forbidden");
-    // }
+    // Check if user can manage chains or initiate requests.
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("manage_chains") ||
+        req.profile?.permissions?.includes("initiate_request") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
     const { rows } = await pool.query(`SELECT * FROM approval_chains ORDER BY name`);
     res.json(rows);
 }));
@@ -654,7 +1001,10 @@ apiRouter.get("/profiles", requireAuth, asyncHandler(async (req, res) => {
 // Admin users
 const createUserBody = z.object({
     email: z.string().email(),
-    password: z.string().min(6),
+    password: z
+        .string()
+        .min(8)
+        .refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
     full_name: z.string().min(1),
     department_id: z.string().uuid().nullable().optional(),
     role_id: z.string().uuid().nullable().optional(),
@@ -705,7 +1055,10 @@ apiRouter.post("/admin/users", requireAuth, asyncHandler(async (req, res) => {
     }
 }));
 const adminPasswordBody = z.object({
-    new_password: z.string().min(6),
+    new_password: z
+        .string()
+        .min(8)
+        .refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
 });
 apiRouter.patch("/admin/users/:userId/password", requireAuth, asyncHandler(async (req, res) => {
     // Check if user has admin access or manage_users permission
@@ -867,68 +1220,140 @@ apiRouter.get("/approval-requests", requireAuth, asyncHandler(async (req, res) =
     const admin = req.profile.is_admin;
     const uid = req.auth.userId;
     const roleId = req.profile.role_id;
-    const { rows } = await pool.query(`SELECT ar.*,
+    const userPermissions = req.profile.permissions || [];
+    const canApprove = userPermissions.includes("approve_reject") ||
+        userPermissions.includes("all");
+    const hasListAccess = admin ||
+        userPermissions.includes("view_own_requests") ||
+        userPermissions.includes("view_department_requests") ||
+        userPermissions.includes("view_all_requests") ||
+        userPermissions.includes("all") ||
+        userPermissions.includes("initiate_request") ||
+        canApprove;
+    if (!hasListAccess) {
+        throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+    }
+    let scopeClause = "";
+    const queryParams = [uid, roleId];
+    if (admin || userPermissions.includes("view_all_requests")) {
+        scopeClause = "TRUE";
+    }
+    else if (userPermissions.includes("all")) {
+        scopeClause = "TRUE";
+    }
+    else if (userPermissions.includes("view_department_requests")) {
+        scopeClause =
+            "(ar.initiator_id = $1 OR d.id = (SELECT department_id FROM profiles WHERE id = $1))";
+    }
+    else if (userPermissions.includes("view_own_requests") ||
+        userPermissions.includes("initiate_request")) {
+        scopeClause = "ar.initiator_id = $1";
+    }
+    else {
+        // approve_reject only: no broad list scope until pending/acted clauses apply
+        scopeClause = "FALSE";
+    }
+    const pendingForMyRoleClause = canApprove && roleId
+        ? `EXISTS (
+          SELECT 1 FROM approval_actions aa_pend
+          JOIN roles r_pend ON r_pend.name = aa_pend.role_name
+          WHERE aa_pend.request_id = ar.id
+          AND r_pend.id = $2::uuid
+          AND aa_pend.status IN ('pending', 'waiting')
+        )`
+        : "FALSE";
+    const whereCombined = `(
+      ${scopeClause}
+      OR EXISTS (
+        SELECT 1 FROM approval_actions aa_hist
+        WHERE aa_hist.request_id = ar.id
+        AND aa_hist.acted_by = $1
+      )
+      OR ${pendingForMyRoleClause}
+    )`;
+    const { rows } = await pool.query(`SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
         json_build_object('name', d.name) AS departments,
-        (ar.initiator_id = $2) AS is_initiator,
+        (ar.initiator_id = $1) AS is_initiator,
         EXISTS (
           SELECT 1 FROM approval_actions aa
           JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND r.id = $3
+          AND ($2::uuid IS NULL OR r.id = $2::uuid)
           AND aa.status IN ('pending', 'waiting')
-        ) AS needs_approval
+        ) AS needs_approval,
+        aa.role_name AS current_step_role
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
-      WHERE ($1::boolean 
-        OR ar.initiator_id = $2
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
-          WHERE aa.request_id = ar.id
-          AND r.id = $3
-          AND aa.status IN ('pending', 'waiting')
-        )
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-          AND aa.acted_by = $2
-        )
-      )
-      ORDER BY ar.created_at DESC`, [admin, uid, roleId]);
+      LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
+      LEFT JOIN roles r ON r.name = aa.role_name
+      WHERE ${whereCombined}
+      ORDER BY ar.id, ar.created_at DESC`, queryParams);
     res.json(rows);
 }));
 apiRouter.get("/approval-requests/:id", requireAuth, asyncHandler(async (req, res) => {
     const admin = req.profile.is_admin;
     const uid = req.auth.userId;
-    const roleId = req.profile.role_id;
+    const userPermissions = req.profile.permissions || [];
+    const canApprove = userPermissions.includes("approve_reject") ||
+        userPermissions.includes("all");
+    const hasDetailAccess = admin ||
+        userPermissions.includes("view_own_requests") ||
+        userPermissions.includes("view_department_requests") ||
+        userPermissions.includes("view_all_requests") ||
+        userPermissions.includes("all") ||
+        userPermissions.includes("initiate_request") ||
+        canApprove;
+    if (!hasDetailAccess) {
+        throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+    }
+    let scopeClause = "";
+    const queryParams = [req.params.id, uid];
+    if (admin || userPermissions.includes("view_all_requests")) {
+        scopeClause = "ar.id = $1";
+    }
+    else if (userPermissions.includes("all")) {
+        scopeClause = "ar.id = $1";
+    }
+    else if (userPermissions.includes("view_department_requests")) {
+        scopeClause =
+            "ar.id = $1 AND (ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
+    }
+    else if (userPermissions.includes("view_own_requests") ||
+        userPermissions.includes("initiate_request")) {
+        scopeClause = "ar.id = $1 AND ar.initiator_id = $2";
+    }
+    else {
+        scopeClause = "ar.id = $1 AND FALSE";
+    }
+    // Match pending steps by the viewer's role name (same idea as approve/reject), so we
+    // do not rely on JOIN roles ON roles.name = aa.role_name (breaks if names diverge).
     const { rows } = await pool.query(`SELECT ar.*,
-        json_build_object('name', at.name, 'description', at.description, 'fields', at.fields) AS approval_types,
+        json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
         json_build_object('name', d.name) AS departments,
         json_build_object('full_name', ip.full_name) AS initiator
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE ar.id = $1 AND ($2::boolean 
-        OR ar.initiator_id = $3
+      WHERE (${scopeClause}
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND r.id = $4
           AND aa.status IN ('pending', 'waiting')
+          AND aa.role_name = (SELECT r.name FROM profiles p
+            INNER JOIN roles r ON r.id = p.role_id
+            WHERE p.id = $2)
         )
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
-          AND aa.acted_by = $3
-        )
-      )`, [req.params.id, admin, uid, roleId]);
+          AND aa.acted_by = $2
+        ))`, queryParams);
     if (rows.length === 0)
         throw new HttpError(404, "Not found");
-    const { rows: actions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [req.params.id]);
+    const { rows: actions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [req.params.id]);
     const actorIds = [
         ...new Set(actions
             .map((a) => a.acted_by)
@@ -979,6 +1404,14 @@ const createRequestBody = z.object({
     status: z.enum(["pending", "in_progress", "approved", "rejected"]),
 });
 apiRouter.post("/approval-requests", requireAuth, asyncHandler(async (req, res) => {
+    const userPermissions = req.profile.permissions || [];
+    const isAdmin = req.profile.is_admin;
+    // Check if user has permission to initiate requests
+    const canInitiate = userPermissions.includes("initiate_request") ||
+        userPermissions.includes("all");
+    if (!canInitiate && !isAdmin) {
+        throw new HttpError(403, "Forbidden: You don't have permission to create approval requests");
+    }
     const body = createRequestBody.parse(req.body);
     const uid = req.auth.userId;
     const { rows } = await pool.query(`INSERT INTO approval_requests (
@@ -1008,6 +1441,14 @@ apiRouter.post("/approval-requests/:id/approve", requireAuth, asyncHandler(async
     const requestId = req.params.id;
     const userId = req.auth.userId;
     const userRoleId = req.profile.role_id;
+    const userPermissions = req.profile.permissions || [];
+    const isAdmin = req.profile.is_admin;
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = userPermissions.includes("approve_reject") ||
+        userPermissions.includes("all");
+    if (!canApproveReject && !isAdmin) {
+        throw new HttpError(403, "Forbidden: You don't have permission to approve requests");
+    }
     // Get the request
     const { rows: requests } = await pool.query(`SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`, [requestId]);
     if (requests.length === 0)
@@ -1017,15 +1458,20 @@ apiRouter.post("/approval-requests/:id/approve", requireAuth, asyncHandler(async
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot approve your own request");
     }
-    // Get the first pending action
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order LIMIT 1`, [requestId]);
+    // Get the first pending action; if config has legacy duplicated entries, prefer latest created for step order
+    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
     if (pendingActions.length === 0)
         throw new HttpError(400, "No pending approval step found");
     const currentAction = pendingActions[0];
+    // Skip stale candidates from previous cycles to avoid accidental old-step approvals
+    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending','waiting') AND id <> $2`, [requestId, currentAction.id]);
     // Check if user's role can approve this step
     let canApprove = false;
     let userRoleName = null;
-    if (userRoleId) {
+    if (isAdmin) {
+        canApprove = true;
+    }
+    else if (userRoleId) {
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
@@ -1038,9 +1484,13 @@ apiRouter.post("/approval-requests/:id/approve", requireAuth, asyncHandler(async
     // Update the current action to approved
     await pool.query(`UPDATE approval_actions SET status = 'approved', acted_by = $1, acted_at = now(), comment = $2 WHERE id = $3`, [userId, body.comment || null, currentAction.id]);
     // Get all actions for this request
-    const { rows: allActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
-    // Check if there are more steps
-    const nextAction = allActions.find((a) => a.status === "waiting");
+    const { rows: allActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
+    // Check if there are more steps: choose waiting item with lowest step_order and newest created_at
+    const nextAction = allActions
+        .filter((a) => a.status === "waiting")
+        .sort((a, b) => a.step_order === b.step_order
+        ? new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        : a.step_order - b.step_order)[0];
     let newStatus = request.status;
     if (nextAction) {
         // Mark next action as pending
@@ -1055,7 +1505,7 @@ apiRouter.post("/approval-requests/:id/approve", requireAuth, asyncHandler(async
     await pool.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [newStatus, requestId]);
     // Return updated request
     const { rows: updatedRequests } = await pool.query(`SELECT * FROM approval_requests WHERE id = $1`, [requestId]);
-    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
+    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
     // Log audit event
     await logAudit(userId, req.profile.full_name, "APPROVE", "Approval Request", `Approved request: ${updatedRequests[0].request_number}`);
     res.json({ request: updatedRequests[0], actions: updatedActions });
@@ -1066,6 +1516,14 @@ apiRouter.post("/approval-requests/:id/reject", requireAuth, asyncHandler(async 
     const requestId = req.params.id;
     const userId = req.auth.userId;
     const userRoleId = req.profile.role_id;
+    const userPermissions = req.profile.permissions || [];
+    const isAdmin = req.profile.is_admin;
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = userPermissions.includes("approve_reject") ||
+        userPermissions.includes("all");
+    if (!canApproveReject && !isAdmin) {
+        throw new HttpError(403, "Forbidden: You don't have permission to reject requests");
+    }
     // Get the request
     const { rows: requests } = await pool.query(`SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`, [requestId]);
     if (requests.length === 0)
@@ -1075,15 +1533,20 @@ apiRouter.post("/approval-requests/:id/reject", requireAuth, asyncHandler(async 
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot reject your own request");
     }
-    // Get the first pending action
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order LIMIT 1`, [requestId]);
+    // Get the first pending action; prefer latest duplicate for same step order
+    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
     if (pendingActions.length === 0)
         throw new HttpError(400, "No pending approval step found");
     const currentAction = pendingActions[0];
+    // Mark any older pending/waiting actions as skipped to avoid old cycles conflict
+    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
     // Check if user's role can reject this step
     let canReject = false;
     let userRoleName = null;
-    if (userRoleId) {
+    if (isAdmin) {
+        canReject = true;
+    }
+    else if (userRoleId) {
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
@@ -1101,7 +1564,7 @@ apiRouter.post("/approval-requests/:id/reject", requireAuth, asyncHandler(async 
     await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting')`, [requestId]);
     // Return updated request
     const { rows: updatedRequests } = await pool.query(`SELECT * FROM approval_requests WHERE id = $1`, [requestId]);
-    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
+    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
     // Log audit event
     await logAudit(userId, req.profile.full_name, "REJECT", "Approval Request", `Rejected request: ${updatedRequests[0].request_number}`);
     res.json({ request: updatedRequests[0], actions: updatedActions });
@@ -1112,6 +1575,14 @@ apiRouter.post("/approval-requests/:id/request-changes", requireAuth, asyncHandl
     const requestId = req.params.id;
     const userId = req.auth.userId;
     const userRoleId = req.profile.role_id;
+    const userPermissions = req.profile.permissions || [];
+    const isAdmin = req.profile.is_admin;
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = userPermissions.includes("approve_reject") ||
+        userPermissions.includes("all");
+    if (!canApproveReject && !isAdmin) {
+        throw new HttpError(403, "Forbidden: You don't have permission to request changes on requests");
+    }
     // Get the request
     const { rows: requests } = await pool.query(`SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`, [requestId]);
     if (requests.length === 0)
@@ -1121,15 +1592,20 @@ apiRouter.post("/approval-requests/:id/request-changes", requireAuth, asyncHandl
     if (request.initiator_id === userId) {
         throw new HttpError(403, "You cannot request changes on your own request");
     }
-    // Get the first pending action
-    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order LIMIT 1`, [requestId]);
+    // Get the first pending action; prefer latest duplicate entry for same step order
+    const { rows: pendingActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 AND status = 'pending' ORDER BY step_order ASC, created_at DESC LIMIT 1`, [requestId]);
     if (pendingActions.length === 0)
         throw new HttpError(400, "No pending approval step found");
     const currentAction = pendingActions[0];
+    // Mark old pending/waiting states as skipped to avoid old-cycle approval conflicts
+    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
     // Check if user's role can request changes
     let canRequestChanges = false;
     let userRoleName = null;
-    if (userRoleId) {
+    if (isAdmin) {
+        canRequestChanges = true;
+    }
+    else if (userRoleId) {
         const { rows: roleRows } = await pool.query(`SELECT name FROM roles WHERE id = $1`, [userRoleId]);
         if (roleRows.length > 0) {
             userRoleName = roleRows[0].name;
@@ -1139,13 +1615,15 @@ apiRouter.post("/approval-requests/:id/request-changes", requireAuth, asyncHandl
     if (!canRequestChanges) {
         throw new HttpError(403, `This step requires approval from role: ${currentAction.role_name}. Your role: ${userRoleName || "No role assigned"}`);
     }
+    // Skip stale pending/waiting rows to avoid old iteration steps becoming active after resubmission
+    await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting') AND id <> $2`, [requestId, currentAction.id]);
     // Update the current action to changes_requested
     await pool.query(`UPDATE approval_actions SET status = 'changes_requested', acted_by = $1, acted_at = now(), comment = $2 WHERE id = $3`, [userId, body.comment || null, currentAction.id]);
     // Update request status to changes_requested
     await pool.query(`UPDATE approval_requests SET status = 'changes_requested', updated_at = now() WHERE id = $1`, [requestId]);
     // Return updated request
     const { rows: updatedRequests } = await pool.query(`SELECT * FROM approval_requests WHERE id = $1`, [requestId]);
-    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
+    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
     // Log audit event
     await logAudit(userId, req.profile.full_name, "REQUEST_CHANGES", "Approval Request", `Requested changes on request: ${updatedRequests[0].request_number}`);
     res.json({ request: updatedRequests[0], actions: updatedActions });
@@ -1173,20 +1651,66 @@ apiRouter.patch("/approval-requests/:id", requireAuth, asyncHandler(async (req, 
     if (request.status === "changes_requested") {
         // Update form_data and set status back to in_progress
         const { rows: updatedRequests } = await pool.query(`UPDATE approval_requests SET form_data = $1::jsonb, status = 'in_progress', updated_at = now() WHERE id = $2 RETURNING *`, [JSON.stringify(body.form_data), requestId]);
-        // Find the step_order of the changes_requested action
-        const { rows: changedActionRows } = await pool.query(`SELECT step_order FROM approval_actions WHERE request_id = $1 AND status = 'changes_requested' LIMIT 1`, [requestId]);
+        // Most recent "changes requested" (there may be several from multiple rounds)
+        const { rows: changedActionRows } = await pool.query(`SELECT step_order FROM approval_actions
+         WHERE request_id = $1 AND status = 'changes_requested'
+         ORDER BY COALESCE(acted_at, created_at) DESC NULLS LAST
+         LIMIT 1`, [requestId]);
         if (changedActionRows.length > 0) {
             const changedStepOrder = changedActionRows[0].step_order;
-            // Reset only the changes_requested action back to pending and clear metadata
-            await pool.query(`UPDATE approval_actions 
-           SET status = 'pending', acted_by = NULL, comment = NULL, acted_at = NULL 
-           WHERE request_id = $1 AND status = 'changes_requested'`, [requestId]);
-            // Set all subsequent steps back to waiting to reset any partial progress
-            await pool.query(`UPDATE approval_actions 
-           SET status = 'waiting', acted_by = NULL, comment = NULL, acted_at = NULL 
-           WHERE request_id = $1 AND step_order > $2`, [requestId, changedStepOrder]);
+            // Deactivate existing waiting / pending actions from old cycle to avoid conflicts
+            await pool.query(`UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting')`, [requestId]);
+            // Get the initiator's role name
+            const { rows: initiatorRoleRows } = await pool.query(`SELECT r.name as role_name
+           FROM roles r
+           JOIN profiles p ON p.role_id = r.id
+           WHERE p.id = $1`, [request.initiator_id]);
+            const initiatorRoleName = initiatorRoleRows.length > 0 ? initiatorRoleRows[0].role_name : null;
+            // Record initiator resubmission in the timeline (before new pending rows so it stays in history)
+            const initiatorName = (req.profile.full_name || "Initiator").trim();
+            await pool.query(`INSERT INTO approval_actions (
+            request_id, step_order, role_name, action_label, status, acted_by, acted_at
+          ) VALUES ($1, $2, $3, $4, 'resubmitted', $5, now())`, [
+                requestId,
+                1, // Always start from step 1
+                "Initiator",
+                `Resubmitted for review (${initiatorName})`,
+                userId,
+            ]);
+            const { rows: chainData } = await pool.query(`SELECT ac.steps
+           FROM approval_chains ac
+           JOIN approval_requests ar ON ar.approval_chain_id = ac.id
+           WHERE ar.id = $1`, [requestId]);
+            if (chainData.length === 0 || !chainData[0].steps) {
+                throw new HttpError(400, "No approval chain steps found");
+            }
+            const chainSteps = chainData[0].steps;
+            let firstNonSkippedFound = false;
+            for (let i = 0; i < chainSteps.length; i++) {
+                const step = chainSteps[i];
+                const stepRoleName = step.roleName || step.role_name || "";
+                // Skip if this step's role matches the initiator's role
+                if (stepRoleName === initiatorRoleName) {
+                    await pool.query(`INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
+               VALUES ($1, $2, $3, $4, 'skipped')`, [requestId, i + 1, stepRoleName, step.action || "Review"]);
+                    continue;
+                }
+                // Determine status: first non-skipped becomes pending, others waiting
+                const stepStatus = !firstNonSkippedFound ? "pending" : "waiting";
+                if (!firstNonSkippedFound) {
+                    firstNonSkippedFound = true;
+                }
+                await pool.query(`INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
+             VALUES ($1, $2, $3, $4, $5)`, [
+                    requestId,
+                    i + 1,
+                    stepRoleName,
+                    step.action || "Review",
+                    stepStatus,
+                ]);
+            }
         }
-        const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
+        const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
         // Log audit event
         await logAudit(userId, req.profile.full_name, "UPDATE", "Approval Request", `Updated request after changes requested: ${updatedRequests[0].request_number}`);
         res.json({ request: updatedRequests[0], actions: updatedActions });
@@ -1201,13 +1725,19 @@ apiRouter.patch("/approval-requests/:id", requireAuth, asyncHandler(async (req, 
     // Update form_data; keep or set in_progress status for chain continuation
     const targetStatus = request.status === "pending" ? "in_progress" : request.status;
     const { rows: updatedRequests } = await pool.query(`UPDATE approval_requests SET form_data = $1::jsonb, status = $2, updated_at = now() WHERE id = $3 RETURNING *`, [JSON.stringify(body.form_data), targetStatus, requestId]);
-    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`, [requestId]);
+    const { rows: updatedActions } = await pool.query(`SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`, [requestId]);
     // Log audit event
     await logAudit(userId, req.profile.full_name, "UPDATE", "Approval Request", `Updated request: ${updatedRequests[0].request_number}`);
     res.json({ request: updatedRequests[0], actions: updatedActions });
     return;
 }));
-apiRouter.get("/audit-logs", requireAdmin, asyncHandler(async (_req, res) => {
+apiRouter.get("/audit-logs", requireAuth, asyncHandler(async (req, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission = req.profile?.permissions?.includes("view_audit_logs") ||
+        req.profile?.permissions?.includes("all");
+    if (!isAdmin && !hasPermission) {
+        throw new HttpError(403, "Forbidden");
+    }
     const { rows } = await pool.query(`SELECT * FROM audit_logs ORDER BY created_at DESC`);
     res.json(rows);
 }));

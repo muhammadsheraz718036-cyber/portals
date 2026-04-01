@@ -37,6 +37,9 @@ export interface CompanySettings {
   id: string;
   company_name: string;
   logo_url: string | null;
+  phone_number: string | null;
+  landline_number: string | null;
+  contact_department: string | null;
   updated_at: string;
   updated_by: string | null;
 }
@@ -263,4 +266,6 @@ export interface UpdateProfileRequest {
 export interface UpdateCompanySettingsRequest {
   company_name?: string;
   logo_url?: string | null;
+  phone_number?: string | null;
+  landline_number?: string | null;
 }

@@ -106,10 +106,17 @@ export const api = {
         id: string;
         company_name: string;
         logo_url: string | null;
+        phone_number: string | null;
+        landline_number: string | null;
         updated_at: string;
         updated_by: string | null;
       } | null>("/api/company-settings", { skipAuth: true }),
-    update: (body: { company_name?: string; logo_url?: string | null }) =>
+    update: (body: {
+      company_name?: string;
+      logo_url?: string | null;
+      phone_number?: string | null;
+      landline_number?: string | null;
+    }) =>
       request("/api/company-settings", {
         method: "PATCH",
         body: JSON.stringify(body),

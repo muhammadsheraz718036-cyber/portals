@@ -31,17 +31,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { useCompany } from "@/contexts/company-hooks";
 import { useAuth } from "@/contexts/auth-hooks";
-import { 
-  useApprovalRequest, 
-  useProfile, 
-  useApproveRequest, 
-  useRejectRequest, 
-  useRequestChanges, 
-  useUpdateApprovalRequest, 
+import {
+  useApprovalRequest,
+  useProfile,
+  useApproveRequest,
+  useRejectRequest,
+  useRequestChanges,
+  useUpdateApprovalRequest,
   useResolveRequestNumber,
   useRequestAttachments,
   useDownloadAttachment,
-  useDeleteRequestAttachment
+  useDeleteRequestAttachment,
 } from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -80,22 +80,22 @@ function iconKeyForAction(status: string): keyof typeof actionIcons {
 
 const getActionLabel = (action: ActionRow) => {
   switch (action.status) {
-    case 'approved':
-      return 'Approved';
-    case 'rejected':
-      return 'Rejected';
-    case 'changes_requested':
-      return 'Changes Requested';
-    case 'resubmitted':
-      return 'Resubmitted';
-    case 'skipped':
-      return 'Skipped';
-    case 'pending':
-      return 'Pending Approval';
-    case 'waiting':
-      return 'Waiting';
+    case "approved":
+      return "Approved";
+    case "rejected":
+      return "Rejected";
+    case "changes_requested":
+      return "Changes Requested";
+    case "resubmitted":
+      return "Resubmitted";
+    case "skipped":
+      return "Skipped";
+    case "pending":
+      return "Pending Approval";
+    case "waiting":
+      return "Waiting";
     default:
-      return 'Waiting';
+      return "Waiting";
   }
 };
 
@@ -151,10 +151,13 @@ export default function RequestDetail() {
   const navigate = useNavigate();
   const { profile, user } = useAuth();
   const [actioning, setActioning] = useState(false);
-  const [showRequestChangesDialog, setShowRequestChangesDialog] = useState(false);
+  const [showRequestChangesDialog, setShowRequestChangesDialog] =
+    useState(false);
   const [changesComment, setChangesComment] = useState("");
   const [showUpdateForm, setShowUpdateForm] = useState(false);
-  const [updatingFormData, setUpdatingFormData] = useState<Record<string, unknown>>({});
+  const [updatingFormData, setUpdatingFormData] = useState<
+    Record<string, unknown>
+  >({});
   const printLetterRef = useRef<HTMLDivElement>(null);
 
   const resolveMutation = useResolveRequestNumber();
@@ -162,20 +165,28 @@ export default function RequestDetail() {
   const rejectMutation = useRejectRequest();
   const requestChangesMutation = useRequestChanges();
   const updateRequestMutation = useUpdateApprovalRequest();
-  
-  const { data: requestData, isLoading: loading, error: notFound } = useApprovalRequest(id || "");
+
+  const {
+    data: requestData,
+    isLoading: loading,
+    error: notFound,
+  } = useApprovalRequest(id || "");
   const downloadMutation = useDownloadAttachment();
   const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
-  const actions = useMemo(() => (requestData?.actions ?? []) as ActionRow[], [requestData?.actions]);
+  const actions = useMemo(
+    () => (requestData?.actions ?? []) as ActionRow[],
+    [requestData?.actions],
+  );
   const actorNames = requestData?.actorNames ?? {};
 
   // Only fetch attachments if the request type supports them
-  const supportsAttachments = request?.approval_types?.allow_attachments === true;
-  
+  const supportsAttachments =
+    request?.approval_types?.allow_attachments === true;
+
   const { data: attachments = [] } = useRequestAttachments(
-    supportsAttachments && id ? id : ""
+    supportsAttachments && id ? id : "",
   );
 
   const { data: initiatorProfile } = useProfile(request?.initiator_id || "");
@@ -204,7 +215,7 @@ export default function RequestDetail() {
   // Group actions by step_order to show history
   const groupedActions = useMemo(() => {
     const groups: Record<number, ActionRow[]> = {};
-    actions.forEach(action => {
+    actions.forEach((action) => {
       if (!groups[action.step_order]) {
         groups[action.step_order] = [];
       }
@@ -298,7 +309,10 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await approveMutation.mutateAsync({ id: request.id, data: { comment: "" } });
+      await approveMutation.mutateAsync({
+        id: request.id,
+        data: { comment: "" },
+      });
       toast.success("Request approved successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to approve request");
@@ -311,7 +325,10 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      await rejectMutation.mutateAsync({ id: request.id, data: { comment: "" } });
+      await rejectMutation.mutateAsync({
+        id: request.id,
+        data: { comment: "" },
+      });
       toast.success("Request rejected successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reject request");
@@ -342,12 +359,17 @@ export default function RequestDetail() {
       // Check if user is the request initiator or an admin
       const isInitiator = user?.id === request.initiator_id;
       const isAdmin = profile?.is_admin || false;
-      
+
       if (!isInitiator && !isAdmin) {
-        throw new Error("Only the request initiator or an admin can update this request");
+        throw new Error(
+          "Only the request initiator or an admin can update this request",
+        );
       }
-      
-      await updateRequestMutation.mutateAsync({ id: request.id, data: { form_data: updatingFormData } });
+
+      await updateRequestMutation.mutateAsync({
+        id: request.id,
+        data: { form_data: updatingFormData },
+      });
       setShowUpdateForm(false);
       setUpdatingFormData({});
       toast.success("Request updated and resubmitted successfully");
@@ -362,7 +384,7 @@ export default function RequestDetail() {
     try {
       const blob = await downloadMutation.mutateAsync(attachment.id);
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
       a.download = attachment.original_filename;
       document.body.appendChild(a);
@@ -376,7 +398,11 @@ export default function RequestDetail() {
   };
 
   const handleDeleteFile = async (attachment: RequestAttachment) => {
-    if (!confirm(`Are you sure you want to delete ${attachment.original_filename}?`)) {
+    if (
+      !confirm(
+        `Are you sure you want to delete ${attachment.original_filename}?`,
+      )
+    ) {
       return;
     }
 
@@ -391,21 +417,28 @@ export default function RequestDetail() {
   const canDeleteFiles = () => {
     // Only initiator can delete files, and only if request is pending/in_progress
     if (!request || !user) return false;
-    return request.initiator_id === user.id && 
-           (request.status === "pending" || request.status === "in_progress");
+    return (
+      request.initiator_id === user.id &&
+      (request.status === "pending" || request.status === "in_progress")
+    );
   };
 
   const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) return "0 Bytes";
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ["Bytes", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  // Check if user can approve: they must have the role of the first pending action
+  // Check if user can approve: they must have the role of at least one pending action
   const canApprove = () => {
-    if (!request || !user || !profile || request.status !== "in_progress") {
+    if (
+      !request ||
+      !user ||
+      !profile ||
+      !["in_progress", "pending"].includes(request.status)
+    ) {
       return false;
     }
 
@@ -414,12 +447,17 @@ export default function RequestDetail() {
       return false;
     }
 
-    const pendingAction = actions.find((a) => a.status === "pending");
-    if (!pendingAction) {
+    const pendingActions = actions.filter((a) =>
+      ["pending", "waiting"].includes(a.status),
+    );
+    if (pendingActions.length === 0) {
       return false;
     }
 
-    if (!profile.is_admin && profile.role_name !== pendingAction.role_name) {
+    if (
+      !profile.is_admin &&
+      !pendingActions.some((a) => profile.role_name === a.role_name)
+    ) {
       return false;
     }
 
@@ -435,7 +473,9 @@ export default function RequestDetail() {
   };
 
   const shouldShowButtons =
-    request && request.status === "in_progress" && canApprove();
+    request &&
+    ["in_progress", "pending"].includes(request.status) &&
+    canApprove();
   const shouldShowUpdateButton =
     request &&
     request.status === "changes_requested" &&
@@ -681,7 +721,9 @@ export default function RequestDetail() {
                               fontFamily: "Arial, sans-serif",
                               fontSize: "14px",
                             }}
-                            dangerouslySetInnerHTML={{ __html: safeRichContent }}
+                            dangerouslySetInnerHTML={{
+                              __html: safeRichContent,
+                            }}
                           />
                         </div>
                       </div>
@@ -741,10 +783,7 @@ export default function RequestDetail() {
                                       if (groupFields.length === 0) return null;
 
                                       return (
-                                        <div
-                                          key={group}
-                                          className="p-3"
-                                        >
+                                        <div key={group} className="p-3">
                                           <h3 className="text-sm font-semibold mb-2">
                                             {group}
                                           </h3>
@@ -853,10 +892,7 @@ export default function RequestDetail() {
                                     if (groupFields.length === 0) return null;
 
                                     return (
-                                      <div
-                                        key={group}
-                                        className="p-3"
-                                      >
+                                      <div key={group} className="p-3">
                                         <h3 className="text-sm font-semibold mb-2">
                                           {group}
                                         </h3>
@@ -1013,9 +1049,12 @@ export default function RequestDetail() {
                   const iconKey = iconKeyForAction(step.status);
                   const stepHistory = groupedActions[step.step_order] || [];
                   const hasHistory = stepHistory.length > 1;
-                  
+
                   return (
-                    <div key={`${step.step_order}-${step.id}`} className="flex gap-3">
+                    <div
+                      key={`${step.step_order}-${step.id}`}
+                      className="flex gap-3"
+                    >
                       <div className="flex flex-col items-center">
                         <div className="flex-shrink-0">
                           {actionIcons[iconKey] || actionIcons.Waiting}
@@ -1046,30 +1085,43 @@ export default function RequestDetail() {
                             &quot;{step.comment}&quot;
                           </p>
                         )}
-                        
+
                         {/* Show history for this step */}
                         {hasHistory && (
                           <div className="mt-3 border-t pt-3">
-                            <p className="text-xs font-medium text-muted-foreground mb-2">History:</p>
+                            <p className="text-xs font-medium text-muted-foreground mb-2">
+                              History:
+                            </p>
                             <div className="space-y-2">
                               {stepHistory
-                                .filter(h => h.id !== step.id) // Filter out current action
-                                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                .filter((h) => h.id !== step.id) // Filter out current action
+                                .sort(
+                                  (a, b) =>
+                                    new Date(a.created_at).getTime() -
+                                    new Date(b.created_at).getTime(),
+                                )
                                 .map((historyAction, histIdx) => (
-                                  <div key={historyAction.id} className="text-xs border-l-2 border-muted pl-2 py-1">
+                                  <div
+                                    key={historyAction.id}
+                                    className="text-xs border-l-2 border-muted pl-2 py-1"
+                                  >
                                     <div className="flex items-center gap-2">
                                       <span className="font-medium text-muted-foreground">
                                         {getActionLabel(historyAction)}
                                       </span>
                                       {historyAction.acted_at && (
                                         <span className="text-[10px] text-muted-foreground/70">
-                                          {new Date(historyAction.acted_at).toLocaleString()}
+                                          {new Date(
+                                            historyAction.acted_at,
+                                          ).toLocaleString()}
                                         </span>
                                       )}
                                     </div>
                                     {historyAction.acted_by && (
                                       <p className="text-muted-foreground">
-                                        By: {actorNames[historyAction.acted_by] ?? "—"}
+                                        By:{" "}
+                                        {actorNames[historyAction.acted_by] ??
+                                          "—"}
                                       </p>
                                     )}
                                     {historyAction.comment && (
@@ -1187,11 +1239,19 @@ export default function RequestDetail() {
                             {attachment.original_filename}
                           </p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>{formatFileSize(attachment.file_size_bytes)}</span>
+                            <span>
+                              {formatFileSize(attachment.file_size_bytes)}
+                            </span>
                             <span>•</span>
-                            <span>{attachment.field_label || attachment.field_name}</span>
+                            <span>
+                              {attachment.field_label || attachment.field_name}
+                            </span>
                             <span>•</span>
-                            <span>{new Date(attachment.created_at!).toLocaleDateString()}</span>
+                            <span>
+                              {new Date(
+                                attachment.created_at!,
+                              ).toLocaleDateString()}
+                            </span>
                           </div>
                         </div>
                       </div>

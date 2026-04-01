@@ -9,12 +9,17 @@ import { setStoredToken } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { useSetup, useSetupStatus } from "@/hooks/services";
-import { isPasswordPolicyValid, PASSWORD_POLICY_HINT } from "@/lib/passwordPolicy";
+import {
+  isPasswordPolicyValid,
+  PASSWORD_POLICY_HINT,
+} from "@/lib/passwordPolicy";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function Setup() {
   const { user, loading } = useAuth();
   const { data: setupStatus, isLoading: loadingSetupStatus } = useSetupStatus();
   const setupMutation = useSetup();
+  const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -48,6 +53,10 @@ export default function Setup() {
         full_name: fullName,
       });
       setStoredToken(token);
+
+      // Invalidate setup status since we now have users
+      queryClient.invalidateQueries({ queryKey: ["auth", "setup-status"] });
+
       toast.success("Admin account created!");
       window.location.assign("/");
     } catch (err) {
@@ -64,24 +73,42 @@ export default function Setup() {
             <ShieldCheck className="h-6 w-6 text-primary" />
           </div>
           <CardTitle className="text-xl font-bold">Initial Setup</CardTitle>
-          <p className="text-sm text-muted-foreground">Create the first administrator account</p>
+          <p className="text-sm text-muted-foreground">
+            Create the first administrator account
+          </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSetup} className="space-y-4">
             <div className="space-y-1.5">
               <Label>Full Name</Label>
-              <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Admin Name" />
+              <Input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Admin Name"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Email</Label>
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@company.com" />
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@company.com"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Password</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={PASSWORD_POLICY_HINT} />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={PASSWORD_POLICY_HINT}
+              />
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : null}
               Create Admin Account
             </Button>
           </form>

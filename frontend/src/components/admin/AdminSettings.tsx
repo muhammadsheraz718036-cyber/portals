@@ -15,12 +15,16 @@ export function AdminSettings() {
   const updateCompanySettings = useUpdateCompanySettings();
   const [companyName, setCompanyName] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [landlineNumber, setLandlineNumber] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (settings) {
       setCompanyName(settings.company_name);
       setLogoUrl(settings.logo_url || "");
+      setPhoneNumber(settings.phone_number || "");
+      setLandlineNumber(settings.landline_number || "");
     }
   }, [settings]);
 
@@ -34,6 +38,8 @@ export function AdminSettings() {
       await updateCompanySettings.mutateAsync({
         company_name: companyName.trim(),
         logo_url: logoUrl.trim() || null,
+        phone_number: phoneNumber.trim() || null,
+        landline_number: landlineNumber.trim() || null,
       });
       await refetch();
     } catch (e) {
@@ -70,6 +76,25 @@ export function AdminSettings() {
               Enter a URL to your company logo. It will appear in the sidebar
               and printed letters.
             </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Mobile Phone</Label>
+              <Input
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="e.g., +971501234567"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Landline Number</Label>
+              <Input
+                value={landlineNumber}
+                onChange={(e) => setLandlineNumber(e.target.value)}
+                placeholder="e.g., 4803"
+              />
+            </div>
           </div>
           {logoUrl && (
             <div className="border rounded p-4 flex items-center justify-center bg-muted/30">

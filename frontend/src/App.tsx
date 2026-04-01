@@ -27,7 +27,11 @@ const queryClient = new QueryClient({
       refetchOnReconnect: false, // Prevent unnecessary refetches
       retry: (failureCount, error) => {
         // Only retry on network errors, not on 4xx/5xx
-        if (error?.message?.includes('401') || error?.message?.includes('403') || error?.message?.includes('404')) {
+        if (
+          error?.message?.includes("401") ||
+          error?.message?.includes("403") ||
+          error?.message?.includes("404")
+        ) {
           return false;
         }
         return failureCount < 3;
@@ -87,6 +91,7 @@ export default function App() {
             <AuthProvider>
               <Routes>
                 <Route path="/login" element={<Login />} />
+                <Route path="/setup" element={<Setup />} />
                 <Route path="/*" element={<ProtectedRoutes />} />
               </Routes>
               <Sonner />

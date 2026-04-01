@@ -4,6 +4,7 @@
 
 -- Run individual migration files
 \i sql/add-file-attachments.sql
+\i sql/add-company-phone-settings.sql
 
 -- Add future migration files here as they are created
 -- \i sql/another-migration.sql

@@ -23,6 +23,9 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
         id: data.id,
         company_name: data.company_name,
         logo_url: data.logo_url,
+        phone_number: data.phone_number,
+        landline_number: data.landline_number,
+        contact_department: data.contact_department,
       });
     } catch {
       setSettings(null);
@@ -36,9 +39,10 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
   }, [fetchSettings]);
 
   return (
-    <CompanyContext.Provider value={{ settings, loading, refetch: fetchSettings }}>
+    <CompanyContext.Provider
+      value={{ settings, loading, refetch: fetchSettings }}
+    >
       {children}
     </CompanyContext.Provider>
   );
 }
-

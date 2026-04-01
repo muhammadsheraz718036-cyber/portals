@@ -1,9 +1,4 @@
-import {
-  useContext,
-  useEffect,
-  useState,
-  useCallback,
-} from "react";
+import { useContext, useEffect, useState, useCallback } from "react";
 import {
   api,
   type AuthUser,
@@ -33,19 +28,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { user: u, profile: p } = await api.auth.me();
       setUser(u);
       setProfile(p);
-      
-      // Invalidate all queries that depend on user data
-      queryClient.invalidateQueries({ 
+
+      // Invalidate queries that depend on user authentication
+      queryClient.invalidateQueries({
         queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-        refetchType: 'active'
+        refetchType: "active",
       });
-      queryClient.invalidateQueries({ 
+      queryClient.invalidateQueries({
         queryKey: [QUERY_KEYS.PROFILE_NAMES],
-        refetchType: 'active'
+        refetchType: "active",
       });
-      // Also clear all queries to be safe
-      queryClient.clear();
-      
     } catch {
       setStoredToken(null);
       setUser(null);
@@ -69,19 +61,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setStoredToken(token);
       setUser(u);
       setProfile(p);
-      
-      // Invalidate all queries when user signs in
-      queryClient.invalidateQueries({ 
+
+      // Invalidate queries that depend on user authentication
+      queryClient.invalidateQueries({
         queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-        refetchType: 'active'
+        refetchType: "active",
       });
-      queryClient.invalidateQueries({ 
+      queryClient.invalidateQueries({
         queryKey: [QUERY_KEYS.PROFILE_NAMES],
-        refetchType: 'active'
+        refetchType: "active",
       });
-      // Also clear all queries to be safe
-      queryClient.clear();
-      
+
       return { error: null };
     } catch (e) {
       return { error: e instanceof Error ? e : new Error(String(e)) };
@@ -92,18 +82,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStoredToken(null);
     setUser(null);
     setProfile(null);
-    
-    // Invalidate all queries when user signs out
-    queryClient.invalidateQueries({ 
+
+    // Invalidate queries that depend on user authentication
+    queryClient.invalidateQueries({
       queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
-      refetchType: 'active'
+      refetchType: "active",
     });
-    queryClient.invalidateQueries({ 
+    queryClient.invalidateQueries({
       queryKey: [QUERY_KEYS.PROFILE_NAMES],
-      refetchType: 'active'
+      refetchType: "active",
     });
-    // Also clear all queries to be safe
-    queryClient.clear();
   };
 
   const hasPermission = (permission: string): boolean => {
@@ -143,4 +131,3 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     </AuthContext.Provider>
   );
 }
-
