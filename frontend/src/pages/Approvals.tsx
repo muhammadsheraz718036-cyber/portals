@@ -50,16 +50,10 @@ export default function Approvals() {
   const segregated = useMemo(() => {
     const myRequests = rows.filter((r) => r.is_initiator);
     
-    // Filter requests that need approval based on user permissions
+    // Backend computes needs_approval using current role assignment.
     const approvalRequests = rows.filter((r) => {
       if (!r.needs_approval) return false;
-      
-      // Check if user has permission to approve/reject this request
-      // User can approve if they are admin OR have the required role
-      const canApprove = isAdmin || hasPermission('all') || 
-        (r.current_step_role && hasPermission(r.current_step_role));
-      
-      return canApprove;
+      return isAdmin || hasPermission("approve_reject") || hasPermission("all");
     });
     
     const allOther = rows.filter((r) => !r.is_initiator && !r.needs_approval);

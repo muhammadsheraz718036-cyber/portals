@@ -30,10 +30,8 @@ const storage = multer.diskStorage({
 
 // File filter to validate file types
 const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  // Get allowed extensions from request body or use defaults
-  const allowedExtensions = req.body.allowed_extensions 
-    ? (Array.isArray(req.body.allowed_extensions) ? req.body.allowed_extensions : req.body.allowed_extensions.split(','))
-    : ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png'];
+  // Use a strict server-side allowlist only.
+  const allowedExtensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png'];
   
   const fileExtension = path.extname(file.originalname).toLowerCase().slice(1);
   

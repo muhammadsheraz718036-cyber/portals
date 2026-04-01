@@ -3,18 +3,23 @@ import { useAuth } from '@/contexts/auth-hooks';
 
 // Secure API wrapper that checks permissions before making requests
 export const secureApi = {
+  canViewRequests: (hasPermission: (permission: string) => boolean) =>
+    hasPermission('view_own_requests') ||
+    hasPermission('view_department_requests') ||
+    hasPermission('view_all_requests'),
+
   // Approval requests - requires 'initiate_request' permission
   approvalRequests: {
     list: () => {
       const { hasPermission } = useAuth();
-      if (!hasPermission('initiate_request')) {
+      if (!secureApi.canViewRequests(hasPermission)) {
         throw new Error('Unauthorized: You do not have permission to view approval requests');
       }
       return api.approvalRequests.list();
     },
     get: (id: string) => {
       const { hasPermission } = useAuth();
-      if (!hasPermission('view_own_requests')) {
+      if (!secureApi.canViewRequests(hasPermission)) {
         throw new Error('Unauthorized: You do not have permission to view this request');
       }
       return api.approvalRequests.get(id);
@@ -42,7 +47,7 @@ export const secureApi = {
     },
     update: (id: string, data: any) => {
       const { hasPermission } = useAuth();
-      if (!hasPermission('view_own_requests')) {
+      if (!secureApi.canViewRequests(hasPermission)) {
         throw new Error('Unauthorized: You do not have permission to update this request');
       }
       return api.approvalRequests.update(id, data);

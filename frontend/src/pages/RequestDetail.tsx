@@ -46,6 +46,7 @@ import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
 import type { LineItem } from "@/components/LineItemsManager";
 import type { RequestAttachment } from "@/services/types";
+import { sanitizeHtml } from "@/lib/sanitizeHtml";
 
 const actionIcons: Record<string, React.ReactNode> = {
   Approved: <CheckCircle className="h-5 w-5 text-success" />,
@@ -448,6 +449,9 @@ export default function RequestDetail() {
     typeof formData.pre_comments === "string" ? formData.pre_comments : "";
   const postComments =
     typeof formData.post_comments === "string" ? formData.post_comments : "";
+  const safeRichContent = richContent ? sanitizeHtml(richContent) : "";
+  const safePreComments = preComments ? sanitizeHtml(preComments) : "";
+  const safePostComments = postComments ? sanitizeHtml(postComments) : "";
   const formEntries = Object.entries(formData).filter(
     ([key]) =>
       key !== "items" &&
@@ -655,7 +659,7 @@ export default function RequestDetail() {
                               fontFamily: "Arial, sans-serif",
                               fontSize: "14px",
                             }}
-                            dangerouslySetInnerHTML={{ __html: richContent }}
+                            dangerouslySetInnerHTML={{ __html: safeRichContent }}
                           />
                         </div>
                       </div>
@@ -682,7 +686,7 @@ export default function RequestDetail() {
                                     fontFamily: "Arial, sans-serif",
                                   }}
                                   dangerouslySetInnerHTML={{
-                                    __html: preComments,
+                                    __html: safePreComments,
                                   }}
                                 />
                               )}
@@ -781,7 +785,7 @@ export default function RequestDetail() {
                                     marginTop: "1rem",
                                   }}
                                   dangerouslySetInnerHTML={{
-                                    __html: postComments,
+                                    __html: safePostComments,
                                   }}
                                 />
                               )}
@@ -796,7 +800,7 @@ export default function RequestDetail() {
                                   fontFamily: "Arial, sans-serif",
                                 }}
                                 dangerouslySetInnerHTML={{
-                                  __html: preComments,
+                                  __html: safePreComments,
                                 }}
                               />
                             )}
@@ -892,7 +896,7 @@ export default function RequestDetail() {
                                   marginTop: "1rem",
                                 }}
                                 dangerouslySetInnerHTML={{
-                                  __html: postComments,
+                                  __html: safePostComments,
                                 }}
                               />
                             )}

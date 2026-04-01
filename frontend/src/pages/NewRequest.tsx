@@ -32,6 +32,7 @@ import type {
   ChainStep,
 } from "@/lib/constants";
 import type { ApprovalTypeAttachment } from "@/services/types";
+import { sanitizeHtml } from "@/lib/sanitizeHtml";
 
 export default function NewRequest() {
   const navigate = useNavigate();
@@ -64,6 +65,8 @@ export default function NewRequest() {
   const approvalType = types.find((t) => t.id === selectedType);
   const chainList = selectedType ? chains.filter((c) => c.approval_type_id === selectedType) : [];
   const chain = chainList[0];
+  const safePreComments = preComments ? sanitizeHtml(preComments) : "";
+  const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
   // All fields are now repeatable (line items)
   const regularFields: ApprovalFormField[] = [];
@@ -424,7 +427,7 @@ export default function NewRequest() {
                               fontSize: "14px",
                               fontFamily: "Arial, sans-serif",
                             }}
-                            dangerouslySetInnerHTML={{ __html: preComments }}
+                            dangerouslySetInnerHTML={{ __html: safePreComments }}
                           />
                         ) : null}
 
@@ -527,7 +530,7 @@ export default function NewRequest() {
                               fontFamily: "Arial, sans-serif",
                               marginTop: "1rem",
                             }}
-                            dangerouslySetInnerHTML={{ __html: postComments }}
+                            dangerouslySetInnerHTML={{ __html: safePostComments }}
                           />
                         ) : null}
                       </div>

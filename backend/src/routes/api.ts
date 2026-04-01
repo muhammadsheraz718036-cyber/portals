@@ -14,6 +14,16 @@ import { upload, deleteUploadedFile, validateFileSize, getMimeType } from "../fi
 import path from "path";
 
 export const apiRouter = Router();
+const uploadsRoot = path.resolve(process.cwd(), "uploads");
+
+function sanitizeDownloadFilename(filename: string): string {
+  return filename.replace(/[\r\n"]/g, "_");
+}
+
+function isFileInsideUploads(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  return resolved === uploadsRoot || resolved.startsWith(`${uploadsRoot}${path.sep}`);
+}
 
 // Helper function to log audit events
 async function logAudit(
@@ -1099,56 +1109,62 @@ apiRouter.post(
     }
 
     // Validate each file
-    for (const file of files) {
-      // Validate file size
-      if (!validateFileSize(file.size, config.max_file_size_mb)) {
-        throw new HttpError(400, `File ${file.originalname} exceeds maximum size of ${config.max_file_size_mb}MB`);
+    try {
+      for (const file of files) {
+        // Validate file size
+        if (!validateFileSize(file.size, config.max_file_size_mb)) {
+          throw new HttpError(400, `File ${file.originalname} exceeds maximum size of ${config.max_file_size_mb}MB`);
+        }
+
+        // Validate file extension
+        const ext = path.extname(file.originalname).toLowerCase().slice(1);
+        if (!config.allowed_extensions.includes(ext)) {
+          throw new HttpError(400, `File type .${ext} not allowed for field ${fieldName}`);
+        }
       }
 
-      // Validate file extension
-      const ext = path.extname(file.originalname).toLowerCase().slice(1);
-      if (!config.allowed_extensions.includes(ext)) {
-        throw new HttpError(400, `File type .${ext} not allowed for field ${fieldName}`);
+      // Insert file records into database
+      const insertedFiles = [];
+      for (const file of files) {
+        const { rows: inserted } = await pool.query(
+          `INSERT INTO request_attachments (request_id, approval_type_attachment_id, field_name, original_filename, stored_filename, file_path, file_size_bytes, mime_type, uploaded_by) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          [
+            requestId,
+            config.id,
+            fieldName,
+            file.originalname,
+            file.filename,
+            file.path,
+            file.size,
+            file.mimetype || getMimeType(file.filename),
+            userId
+          ]
+        );
+        insertedFiles.push(inserted[0]);
       }
-    }
 
-    // Insert file records into database
-    const insertedFiles = [];
-    for (const file of files) {
-      const { rows: inserted } = await pool.query(
-        `INSERT INTO request_attachments (request_id, approval_type_attachment_id, field_name, original_filename, stored_filename, file_path, file_size_bytes, mime_type, uploaded_by) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [
-          requestId,
-          config.id,
-          fieldName,
-          file.originalname,
-          file.filename,
-          file.path,
-          file.size,
-          file.mimetype || getMimeType(file.filename),
-          userId
-        ]
+      // Update request to indicate it has attachments
+      await pool.query(
+        `UPDATE approval_requests SET has_attachments = true, updated_at = now() WHERE id = $1`,
+        [requestId]
       );
-      insertedFiles.push(inserted[0]);
+
+      // Log audit event
+      await logAudit(
+        userId,
+        req.profile!.full_name,
+        "UPLOAD",
+        "Request Attachments",
+        `Uploaded ${files.length} file(s) to request ${requestId}`,
+      );
+
+      res.status(201).json(insertedFiles);
+    } catch (e) {
+      // Best-effort cleanup for files already written to disk.
+      await Promise.all(files.map((f) => deleteUploadedFile(f.path)));
+      throw e;
     }
-
-    // Update request to indicate it has attachments
-    await pool.query(
-      `UPDATE approval_requests SET has_attachments = true, updated_at = now() WHERE id = $1`,
-      [requestId]
-    );
-
-    // Log audit event
-    await logAudit(
-      userId,
-      req.profile!.full_name,
-      "UPLOAD",
-      "Request Attachments",
-      `Uploaded ${files.length} file(s) to request ${requestId}`,
-    );
-
-    res.status(201).json(insertedFiles);
   }),
 );
 
@@ -1217,8 +1233,13 @@ apiRouter.get(
       throw new HttpError(403, "You can only download attachments for your own requests");
     }
 
+    if (!isFileInsideUploads(attachment.file_path)) {
+      throw new HttpError(400, "Invalid attachment file path");
+    }
+
     // Set headers for file download
-    res.setHeader('Content-Disposition', `attachment; filename="${attachment.original_filename}"`);
+    const safeFilename = sanitizeDownloadFilename(attachment.original_filename);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
     res.setHeader('Content-Type', attachment.mime_type);
 
     // Send file
@@ -1869,31 +1890,32 @@ apiRouter.get(
     if (admin) {
       // Admins can see all requests
       whereClause = "TRUE";
-      queryParams = [true, uid, roleId];
+      queryParams = [uid, roleId];
     } else if (userPermissions.includes("view_all_requests")) {
       // Users with view_all_requests can see all requests
       whereClause = "TRUE";
-      queryParams = [true, uid, roleId];
+      queryParams = [uid, roleId];
     } else if (userPermissions.includes("view_department_requests")) {
       // Users with view_department_requests can see requests from their department
-      whereClause = "($1::boolean OR ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
-      queryParams = [false, uid, roleId];
+      whereClause =
+        "(ar.initiator_id = $1 OR d.id = (SELECT department_id FROM profiles WHERE id = $1))";
+      queryParams = [uid, roleId];
     } else {
       // Users with view_own_requests can only see their own requests
-      whereClause = "ar.initiator_id = $2";
-      queryParams = [false, uid, roleId];
+      whereClause = "ar.initiator_id = $1";
+      queryParams = [uid, roleId];
     }
     
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
         json_build_object('name', d.name) AS departments,
-        (ar.initiator_id = $2) AS is_initiator,
+        (ar.initiator_id = $1) AS is_initiator,
         EXISTS (
           SELECT 1 FROM approval_actions aa
           JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND r.id = $3
+          AND ($2::uuid IS NULL OR r.id = $2::uuid)
           AND aa.status IN ('pending', 'waiting')
         ) AS needs_approval,
         aa.role_name AS current_step_role
@@ -1901,14 +1923,14 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
-      LEFT JOIN roles r ON r.id = aa.role_id
+      LEFT JOIN roles r ON r.name = aa.role_name
       WHERE ${whereClause}
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
-          AND aa.acted_by = $2
+          AND aa.acted_by = $1
         )
-      ORDER BY ar.created_at DESC`,
+      ORDER BY ar.id, ar.created_at DESC`,
       queryParams,
     );
     res.json(rows);
@@ -1936,24 +1958,25 @@ apiRouter.get(
     }
     
     let whereClause = "";
-    let queryParams: any[] = [req.params.id];
+    let queryParams: any[] = [];
     
     if (admin) {
       // Admins can see all requests
-      whereClause = "ar.id = $1 AND TRUE";
-      queryParams = [req.params.id, true, uid, roleId];
+      whereClause = "ar.id = $1";
+      queryParams = [req.params.id, uid, roleId];
     } else if (userPermissions.includes("view_all_requests")) {
       // Users with view_all_requests can see all requests
-      whereClause = "ar.id = $1 AND TRUE";
-      queryParams = [req.params.id, true, uid, roleId];
+      whereClause = "ar.id = $1";
+      queryParams = [req.params.id, uid, roleId];
     } else if (userPermissions.includes("view_department_requests")) {
       // Users with view_department_requests can see requests from their department
-      whereClause = "ar.id = $1 AND (ar.initiator_id = $3 OR d.id = (SELECT department_id FROM profiles WHERE id = $3))";
-      queryParams = [req.params.id, false, uid, roleId];
+      whereClause =
+        "ar.id = $1 AND (ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
+      queryParams = [req.params.id, uid, roleId];
     } else {
       // Users with view_own_requests can only see their own requests
-      whereClause = "ar.id = $1 AND ar.initiator_id = $3";
-      queryParams = [req.params.id, false, uid, roleId];
+      whereClause = "ar.id = $1 AND ar.initiator_id = $2";
+      queryParams = [req.params.id, uid, roleId];
     }
     
     const { rows } = await pool.query(
@@ -1970,13 +1993,13 @@ apiRouter.get(
           SELECT 1 FROM approval_actions aa
           JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND r.id = $4
+          AND r.id = $3
           AND aa.status IN ('pending', 'waiting')
         )
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
-          AND aa.acted_by = $3
+          AND aa.acted_by = $2
         )`,
       queryParams,
     );

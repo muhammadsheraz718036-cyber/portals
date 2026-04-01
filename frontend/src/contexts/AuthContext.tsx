@@ -108,7 +108,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPermission = (permission: string): boolean => {
     if (profile?.is_admin) return true;
-    return profile?.permissions?.includes(permission) ?? false;
+    const permissions = profile?.permissions ?? [];
+    if (permissions.includes("all")) return true;
+    if (permissions.includes(permission)) return true;
+
+    // Permission hierarchy for approval visibility scopes.
+    if (permission === "view_own_requests") {
+      return (
+        permissions.includes("view_department_requests") ||
+        permissions.includes("view_all_requests")
+      );
+    }
+    if (permission === "view_department_requests") {
+      return permissions.includes("view_all_requests");
+    }
+
+    return false;
   };
 
   return (
