@@ -121,8 +121,9 @@ apiRouter.post(
       email: string;
       is_locked: boolean;
       failed_login_attempts: number;
+      is_admin: boolean;
     }>(
-      `SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts
+      `SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts, p.is_admin
         FROM users u
         JOIN profiles p ON u.id = p.id
         WHERE u.email = $1`,
@@ -134,8 +135,8 @@ apiRouter.post(
 
     const user = rows[0];
 
-    // Check if account is locked
-    if (user.is_locked) {
+    // Lock after failed attempts applies to non-admin accounts only; admins are never locked.
+    if (user.is_locked && !user.is_admin) {
       throw new HttpError(
         423,
         "Account is locked due to too many failed login attempts. Please contact an administrator.",
@@ -144,16 +145,17 @@ apiRouter.post(
 
     const ok = await verifyPassword(body.password, user.password_hash);
     if (!ok) {
-      // Increment failed login attempts
-      await pool.query(
-        `UPDATE profiles SET
+      if (!user.is_admin) {
+        await pool.query(
+          `UPDATE profiles SET
           failed_login_attempts = failed_login_attempts + 1,
           last_failed_login_at = now(),
           is_locked = CASE WHEN failed_login_attempts + 1 >= 3 THEN true ELSE false END,
           locked_at = CASE WHEN failed_login_attempts + 1 >= 3 THEN now() ELSE locked_at END
          WHERE id = $1`,
-        [user.id],
-      );
+          [user.id],
+        );
+      }
       throw new HttpError(401, "Invalid email or password");
     }
 
@@ -1879,40 +1881,68 @@ apiRouter.get(
     const uid = req.auth!.userId;
     const roleId = req.profile!.role_id;
     const userPermissions = req.profile!.permissions || [];
-    
-    // Check if user has basic permission to view requests
-    const hasViewPermission = 
+
+    const canApprove =
+      userPermissions.includes("approve_reject") ||
+      userPermissions.includes("all");
+
+    const hasListAccess =
+      admin ||
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("view_department_requests") ||
       userPermissions.includes("view_all_requests") ||
-      userPermissions.includes("all");
-    
-    if (!hasViewPermission && !admin) {
-      throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+      userPermissions.includes("all") ||
+      userPermissions.includes("initiate_request") ||
+      canApprove;
+
+    if (!hasListAccess) {
+      throw new HttpError(
+        403,
+        "Forbidden: You don't have permission to view approval requests",
+      );
     }
-    
-    let whereClause = "";
-    let queryParams: any[] = [];
-    
-    if (admin) {
-      // Admins can see all requests
-      whereClause = "TRUE";
-      queryParams = [uid, roleId];
-    } else if (userPermissions.includes("view_all_requests")) {
-      // Users with view_all_requests can see all requests
-      whereClause = "TRUE";
-      queryParams = [uid, roleId];
+
+    let scopeClause = "";
+    const queryParams: any[] = [uid, roleId];
+
+    if (admin || userPermissions.includes("view_all_requests")) {
+      scopeClause = "TRUE";
+    } else if (userPermissions.includes("all")) {
+      scopeClause = "TRUE";
     } else if (userPermissions.includes("view_department_requests")) {
-      // Users with view_department_requests can see requests from their department
-      whereClause =
+      scopeClause =
         "(ar.initiator_id = $1 OR d.id = (SELECT department_id FROM profiles WHERE id = $1))";
-      queryParams = [uid, roleId];
+    } else if (
+      userPermissions.includes("view_own_requests") ||
+      userPermissions.includes("initiate_request")
+    ) {
+      scopeClause = "ar.initiator_id = $1";
     } else {
-      // Users with view_own_requests can only see their own requests
-      whereClause = "ar.initiator_id = $1";
-      queryParams = [uid, roleId];
+      // approve_reject only: no broad list scope until pending/acted clauses apply
+      scopeClause = "FALSE";
     }
-    
+
+    const pendingForMyRoleClause =
+      canApprove && roleId
+        ? `EXISTS (
+          SELECT 1 FROM approval_actions aa_pend
+          JOIN roles r_pend ON r_pend.name = aa_pend.role_name
+          WHERE aa_pend.request_id = ar.id
+          AND r_pend.id = $2::uuid
+          AND aa_pend.status IN ('pending', 'waiting')
+        )`
+        : "FALSE";
+
+    const whereCombined = `(
+      ${scopeClause}
+      OR EXISTS (
+        SELECT 1 FROM approval_actions aa_hist
+        WHERE aa_hist.request_id = ar.id
+        AND aa_hist.acted_by = $1
+      )
+      OR ${pendingForMyRoleClause}
+    )`;
+
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
@@ -1931,12 +1961,7 @@ apiRouter.get(
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
       LEFT JOIN roles r ON r.name = aa.role_name
-      WHERE ${whereClause}
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-          AND aa.acted_by = $1
-        )
+      WHERE ${whereCombined}
       ORDER BY ar.id, ar.created_at DESC`,
       queryParams,
     );
@@ -1950,42 +1975,49 @@ apiRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const admin = req.profile!.is_admin;
     const uid = req.auth!.userId;
-    const roleId = req.profile!.role_id;
     const userPermissions = req.profile!.permissions || [];
-    
-    // Check if user has basic permission to view requests
-    const hasViewPermission = 
+
+    const canApprove =
+      userPermissions.includes("approve_reject") ||
+      userPermissions.includes("all");
+
+    const hasDetailAccess =
+      admin ||
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("view_department_requests") ||
       userPermissions.includes("view_all_requests") ||
-      userPermissions.includes("all");
-    
-    if (!hasViewPermission && !admin) {
-      throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+      userPermissions.includes("all") ||
+      userPermissions.includes("initiate_request") ||
+      canApprove;
+
+    if (!hasDetailAccess) {
+      throw new HttpError(
+        403,
+        "Forbidden: You don't have permission to view approval requests",
+      );
     }
-    
-    let whereClause = "";
-    let queryParams: any[] = [];
-    
-    if (admin) {
-      // Admins can see all requests
-      whereClause = "ar.id = $1";
-      queryParams = [req.params.id, uid, roleId];
-    } else if (userPermissions.includes("view_all_requests")) {
-      // Users with view_all_requests can see all requests
-      whereClause = "ar.id = $1";
-      queryParams = [req.params.id, uid, roleId];
+
+    let scopeClause = "";
+    const queryParams: any[] = [req.params.id, uid];
+
+    if (admin || userPermissions.includes("view_all_requests")) {
+      scopeClause = "ar.id = $1";
+    } else if (userPermissions.includes("all")) {
+      scopeClause = "ar.id = $1";
     } else if (userPermissions.includes("view_department_requests")) {
-      // Users with view_department_requests can see requests from their department
-      whereClause =
+      scopeClause =
         "ar.id = $1 AND (ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
-      queryParams = [req.params.id, uid, roleId];
+    } else if (
+      userPermissions.includes("view_own_requests") ||
+      userPermissions.includes("initiate_request")
+    ) {
+      scopeClause = "ar.id = $1 AND ar.initiator_id = $2";
     } else {
-      // Users with view_own_requests can only see their own requests
-      whereClause = "ar.id = $1 AND ar.initiator_id = $2";
-      queryParams = [req.params.id, uid, roleId];
+      scopeClause = "ar.id = $1 AND FALSE";
     }
-    
+
+    // Match pending steps by the viewer's role name (same idea as approve/reject), so we
+    // do not rely on JOIN roles ON roles.name = aa.role_name (breaks if names diverge).
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
@@ -1995,24 +2027,25 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE ${whereClause}
+      WHERE (${scopeClause}
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND r.id = $3
           AND aa.status IN ('pending', 'waiting')
+          AND aa.role_name = (SELECT r.name FROM profiles p
+            INNER JOIN roles r ON r.id = p.role_id
+            WHERE p.id = $2)
         )
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.acted_by = $2
-        )`,
+        ))`,
       queryParams,
     );
     if (rows.length === 0) throw new HttpError(404, "Not found");
     const { rows: actions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [req.params.id],
     );
     const actorIds = [
@@ -2178,7 +2211,9 @@ apiRouter.post(
     let canApprove = false;
     let userRoleName: string | null = null;
 
-    if (userRoleId) {
+    if (isAdmin) {
+      canApprove = true;
+    } else if (userRoleId) {
       const { rows: roleRows } = await pool.query<{ name: string }>(
         `SELECT name FROM roles WHERE id = $1`,
         [userRoleId],
@@ -2204,7 +2239,7 @@ apiRouter.post(
 
     // Get all actions for this request
     const { rows: allActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [requestId],
     );
 
@@ -2236,7 +2271,7 @@ apiRouter.post(
       [requestId],
     );
     const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [requestId],
     );
 
@@ -2300,7 +2335,9 @@ apiRouter.post(
     let canReject = false;
     let userRoleName: string | null = null;
 
-    if (userRoleId) {
+    if (isAdmin) {
+      canReject = true;
+    } else if (userRoleId) {
       const { rows: roleRows } = await pool.query<{ name: string }>(
         `SELECT name FROM roles WHERE id = $1`,
         [userRoleId],
@@ -2342,7 +2379,7 @@ apiRouter.post(
       [requestId],
     );
     const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [requestId],
     );
 
@@ -2409,7 +2446,9 @@ apiRouter.post(
     let canRequestChanges = false;
     let userRoleName: string | null = null;
 
-    if (userRoleId) {
+    if (isAdmin) {
+      canRequestChanges = true;
+    } else if (userRoleId) {
       const { rows: roleRows } = await pool.query<{ name: string }>(
         `SELECT name FROM roles WHERE id = $1`,
         [userRoleId],
@@ -2445,7 +2484,7 @@ apiRouter.post(
       [requestId],
     );
     const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [requestId],
     );
 
@@ -2505,42 +2544,64 @@ apiRouter.patch(
         [JSON.stringify(body.form_data), requestId],
       );
 
-      // Find the step_order of the changes_requested action
-      const { rows: changedActionRows } = await pool.query(
-        `SELECT step_order FROM approval_actions WHERE request_id = $1 AND status = 'changes_requested' LIMIT 1`,
+      // Most recent "changes requested" (there may be several from multiple rounds)
+      const { rows: changedActionRows } = await pool.query<{ step_order: number }>(
+        `SELECT step_order FROM approval_actions
+         WHERE request_id = $1 AND status = 'changes_requested'
+         ORDER BY COALESCE(acted_at, created_at) DESC NULLS LAST
+         LIMIT 1`,
         [requestId],
       );
 
       if (changedActionRows.length > 0) {
         const changedStepOrder = changedActionRows[0].step_order;
 
-        // Instead of resetting subsequent steps, we'll create new action entries for the resubmission
-        // This preserves the complete history
-        
-        // Get the original chain steps to recreate new actions
-        const { rows: chainSteps } = await pool.query(
-          `SELECT acs.step_order, acs.role_name, acs.action 
-           FROM approval_chain_steps acs 
-           JOIN approval_chains ac ON ac.id = acs.chain_id 
-           JOIN approval_requests ar ON ar.approval_chain_id = ac.id 
-           WHERE ar.id = $1 AND acs.step_order >= $2 
-           ORDER BY acs.step_order`,
-          [requestId, changedStepOrder]
+        // Record initiator resubmission in the timeline (before new pending rows so it stays in history)
+        const initiatorName = (req.profile!.full_name || "Initiator").trim();
+        await pool.query(
+          `INSERT INTO approval_actions (
+            request_id, step_order, role_name, action_label, status, acted_by, acted_at
+          ) VALUES ($1, $2, $3, $4, 'resubmitted', $5, now())`,
+          [
+            requestId,
+            changedStepOrder,
+            "Initiator",
+            `Resubmitted for review (${initiatorName})`,
+            userId,
+          ],
         );
 
-        // Create new action entries for the resubmission from the changes_requested step onward
+        const { rows: chainSteps } = await pool.query<{
+          step_order: number;
+          role_name: string;
+          action: string;
+        }>(
+          `SELECT acs.step_order, acs.role_name, acs.action
+           FROM approval_chain_steps acs
+           JOIN approval_chains ac ON ac.id = acs.chain_id
+           JOIN approval_requests ar ON ar.approval_chain_id = ac.id
+           WHERE ar.id = $1 AND acs.step_order >= $2
+           ORDER BY acs.step_order`,
+          [requestId, changedStepOrder],
+        );
+
         for (const step of chainSteps) {
           await pool.query(
-            `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status) 
+            `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
              VALUES ($1, $2, $3, $4, $5)`,
-            [requestId, step.step_order, step.role_name, step.action, 
-             step.step_order === changedStepOrder ? 'pending' : 'waiting']
+            [
+              requestId,
+              step.step_order,
+              step.role_name,
+              step.action,
+              step.step_order === changedStepOrder ? "pending" : "waiting",
+            ],
           );
         }
       }
 
       const { rows: updatedActions } = await pool.query(
-        `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+        `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
         [requestId],
       );
 
@@ -2580,7 +2641,7 @@ apiRouter.patch(
     );
 
     const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order`,
+      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
       [requestId],
     );
 

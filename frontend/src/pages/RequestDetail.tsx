@@ -9,6 +9,7 @@ import {
   Clock,
   AlertCircle,
   SkipForward,
+  RefreshCw,
   Loader2,
   Edit2,
   Download,
@@ -44,7 +45,7 @@ import {
 } from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
-import type { LineItem } from "@/components/LineItemsManager";
+import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import type { RequestAttachment } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 
@@ -55,6 +56,7 @@ const actionIcons: Record<string, React.ReactNode> = {
   Waiting: <AlertCircle className="h-5 w-5 text-muted-foreground" />,
   Skipped: <SkipForward className="h-5 w-5 text-muted-foreground" />,
   ChangesRequested: <AlertCircle className="h-5 w-5 text-warning" />,
+  Resubmitted: <RefreshCw className="h-5 w-5 text-primary" />,
 };
 
 function iconKeyForAction(status: string): keyof typeof actionIcons {
@@ -69,6 +71,8 @@ function iconKeyForAction(status: string): keyof typeof actionIcons {
       return "Skipped";
     case "changes_requested":
       return "ChangesRequested";
+    case "resubmitted":
+      return "Resubmitted";
     default:
       return "Waiting";
   }
@@ -82,6 +86,8 @@ const getActionLabel = (action: ActionRow) => {
       return 'Rejected';
     case 'changes_requested':
       return 'Changes Requested';
+    case 'resubmitted':
+      return 'Resubmitted';
     case 'skipped':
       return 'Skipped';
     case 'pending':
@@ -126,6 +132,19 @@ type ActionRow = {
 
 const uuidRe =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Ensure line items have stable `id` for LineItemsManager (API JSON may omit or use numbers). */
+function normalizeItemsForEdit(raw: unknown): LineItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((it, idx) => {
+    const row = it as Record<string, unknown>;
+    const id =
+      row.id != null && String(row.id).trim() !== ""
+        ? String(row.id)
+        : `item-${idx}`;
+    return { ...row, id } as LineItem;
+  });
+}
 
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
@@ -194,16 +213,26 @@ export default function RequestDetail() {
     return groups;
   }, [actions]);
 
-  // Get the most recent action for each step to determine current status
+  // One row per step for the timeline "current" line: prefer active pending/waiting, else latest by time
   const currentActions = useMemo(() => {
-    const latest: Record<number, ActionRow> = {};
-    actions.forEach(action => {
-      if (!latest[action.step_order] || 
-          new Date(action.created_at) > new Date(latest[action.step_order].created_at)) {
-        latest[action.step_order] = action;
-      }
+    const byStep: Record<number, ActionRow[]> = {};
+    actions.forEach((action) => {
+      if (!byStep[action.step_order]) byStep[action.step_order] = [];
+      byStep[action.step_order].push(action);
     });
-    return Object.values(latest).sort((a, b) => a.step_order - b.step_order);
+    return Object.keys(byStep)
+      .map((k) => Number(k))
+      .sort((a, b) => a - b)
+      .map((stepOrder) => {
+        const rows = byStep[stepOrder];
+        const active = rows.find(
+          (r) => r.status === "pending" || r.status === "waiting",
+        );
+        if (active) return active;
+        return rows.reduce((best, r) =>
+          new Date(r.created_at) > new Date(best.created_at) ? r : best,
+        );
+      });
   }, [actions]);
 
   const handlePrint = useReactToPrint({
@@ -295,19 +324,12 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      // Check if user has permission to request changes
-      const canRequestChanges = profile?.role_name === request.current_step_role;
-      
-      if (!canRequestChanges) {
-        throw new Error("You do not have permission to request changes for this step");
-      }
-      
-      await requestChangesMutation.mutateAsync({ id: request.id, data: { comment: changesComment } });
+      await requestChangesMutation.mutateAsync({
+        id: request.id,
+        data: { comment: changesComment },
+      });
       setShowRequestChangesDialog(false);
       setChangesComment("");
-      toast.success("Changes requested successfully");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to request changes");
     } finally {
       setActioning(false);
     }
@@ -392,25 +414,23 @@ export default function RequestDetail() {
       return false;
     }
 
-    // Find the first pending action
     const pendingAction = actions.find((a) => a.status === "pending");
     if (!pendingAction) {
       return false;
     }
 
-    // Check if user has already acted on any step
-    if (actions.some((a) => a.acted_by === user.id)) {
-      return false; // User already approved/rejected, disable buttons
+    if (!profile.is_admin && profile.role_name !== pendingAction.role_name) {
+      return false;
     }
 
-    // User must have a role assigned
+    // Do not block on prior acted_by: the same approver may act again after
+    // "request changes" → resubmit (new pending row), or the same role may
+    // appear on multiple steps. The API enforces the current pending step + role.
+
     if (!profile.role_id) {
       return false;
     }
 
-    // For simplicity, we'll rely on the API to validate the role matches
-    // The backend will return an error if the role doesn't match
-    // This is just a UI check to hide buttons if no pending action exists
     return true;
   };
 
@@ -422,10 +442,12 @@ export default function RequestDetail() {
     user &&
     request.initiator_id === user.id;
 
-  // Initialize form data when entering update mode
+  // Initialize form data when entering update mode (line items live under form_data.items)
   useEffect(() => {
     if (showUpdateForm && request?.form_data) {
-      setUpdatingFormData({ ...request.form_data });
+      const fd = { ...(request.form_data as Record<string, unknown>) };
+      fd.items = normalizeItemsForEdit(fd.items);
+      setUpdatingFormData(fd);
     } else if (!showUpdateForm) {
       setUpdatingFormData({});
     }
@@ -1032,7 +1054,7 @@ export default function RequestDetail() {
                             <div className="space-y-2">
                               {stepHistory
                                 .filter(h => h.id !== step.id) // Filter out current action
-                                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                                 .map((historyAction, histIdx) => (
                                   <div key={historyAction.id} className="text-xs border-l-2 border-muted pl-2 py-1">
                                     <div className="flex items-center gap-2">
@@ -1272,63 +1294,100 @@ export default function RequestDetail() {
               </p>
             </div>
 
-            {fields.map((field) => {
-              const currentValue = updatingFormData[field.name] ?? "";
-              return (
-                <div key={field.name}>
-                  <label className="block text-sm font-medium mb-2">
-                    {field.label}
-                  </label>
-                  {field.type === "text" ||
-                  field.type === "email" ||
-                  field.type === "number" ? (
-                    <input
-                      type={field.type}
-                      value={String(currentValue)}
-                      onChange={(e) =>
-                        setUpdatingFormData((prev) => ({
-                          ...prev,
-                          [field.name]: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder={field.label}
-                    />
-                  ) : field.type === "textarea" ? (
-                    <textarea
-                      value={String(currentValue)}
-                      onChange={(e) =>
-                        setUpdatingFormData((prev) => ({
-                          ...prev,
-                          [field.name]: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                      rows={3}
-                      placeholder={field.label}
-                    />
-                  ) : field.type === "select" && field.options ? (
-                    <select
-                      value={String(currentValue)}
-                      onChange={(e) =>
-                        setUpdatingFormData((prev) => ({
-                          ...prev,
-                          [field.name]: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="">Select {field.label}</option>
-                      {field.options?.map((opt: string) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
-                </div>
-              );
-            })}
+            {typeof updatingFormData.content === "string" && (
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Letter body
+                </label>
+                <RichTextEditor
+                  key={`letter-body-${showUpdateForm ? "open" : "closed"}`}
+                  content={updatingFormData.content}
+                  onChange={(html) =>
+                    setUpdatingFormData((prev) => ({
+                      ...prev,
+                      content: html,
+                    }))
+                  }
+                  placeholder="Letter content…"
+                />
+              </div>
+            )}
+
+            {repeatableFields.length > 0 ? (
+              <LineItemsManager
+                items={
+                  Array.isArray(updatingFormData.items)
+                    ? (updatingFormData.items as LineItem[])
+                    : []
+                }
+                onItemsChange={(newItems) =>
+                  setUpdatingFormData((prev) => ({
+                    ...prev,
+                    items: newItems,
+                  }))
+                }
+                repeatableFields={repeatableFields}
+                title="Line items"
+              />
+            ) : (
+              fields.map((field) => {
+                const currentValue = updatingFormData[field.name] ?? "";
+                return (
+                  <div key={field.name}>
+                    <label className="block text-sm font-medium mb-2">
+                      {field.label}
+                    </label>
+                    {field.type === "text" ||
+                    field.type === "email" ||
+                    field.type === "number" ? (
+                      <input
+                        type={field.type}
+                        value={String(currentValue)}
+                        onChange={(e) =>
+                          setUpdatingFormData((prev) => ({
+                            ...prev,
+                            [field.name]: e.target.value,
+                          }))
+                        }
+                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                        placeholder={field.label}
+                      />
+                    ) : field.type === "textarea" ? (
+                      <textarea
+                        value={String(currentValue)}
+                        onChange={(e) =>
+                          setUpdatingFormData((prev) => ({
+                            ...prev,
+                            [field.name]: e.target.value,
+                          }))
+                        }
+                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                        rows={3}
+                        placeholder={field.label}
+                      />
+                    ) : field.type === "select" && field.options ? (
+                      <select
+                        value={String(currentValue)}
+                        onChange={(e) =>
+                          setUpdatingFormData((prev) => ({
+                            ...prev,
+                            [field.name]: e.target.value,
+                          }))
+                        }
+                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">Select {field.label}</option>
+                        {field.options?.map((opt: string) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
 
             <div>
               <label className="block text-sm font-medium mb-2">

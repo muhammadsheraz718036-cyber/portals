@@ -30,6 +30,7 @@ const migrations = [
   { name: "password_management", file: "add-password-management.sql" },
   { name: "salutations", file: "add-salutations.sql" },
   { name: "file_attachments", file: "add-file-attachments.sql" },
+  { name: "action_resubmitted_status", file: "add-action-resubmitted-status.sql" },
 ];
 
 async function run() {

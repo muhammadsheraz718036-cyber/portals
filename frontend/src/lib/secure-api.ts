@@ -6,7 +6,8 @@ export const secureApi = {
   canViewRequests: (hasPermission: (permission: string) => boolean) =>
     hasPermission('view_own_requests') ||
     hasPermission('view_department_requests') ||
-    hasPermission('view_all_requests'),
+    hasPermission('view_all_requests') ||
+    hasPermission('initiate_request'),
 
   // Approval requests - requires 'initiate_request' permission
   approvalRequests: {

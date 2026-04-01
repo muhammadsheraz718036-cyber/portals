@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS approval_actions (
   step_order INTEGER NOT NULL,
   role_name TEXT NOT NULL,
   action_label TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested')),
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested', 'resubmitted')),
   acted_by UUID REFERENCES users(id),
   comment TEXT,
   acted_at TIMESTAMPTZ,
