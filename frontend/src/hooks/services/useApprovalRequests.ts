@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from "@/constants/query-keys";
 import { api } from "@/lib/api";
+import { toast } from 'sonner';
 import { 
   CreateApprovalRequestRequest, 
   UpdateApprovalRequestRequest,
@@ -33,6 +34,10 @@ export const useCreateApprovalRequest = () => {
       api.approvalRequests.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      toast.success('Request created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create request');
     },
   });
 };
@@ -46,6 +51,10 @@ export const useUpdateApprovalRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      toast.success('Request updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update request');
     },
   });
 };
@@ -59,6 +68,10 @@ export const useApproveRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      toast.success('Request approved successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to approve request');
     },
   });
 };
@@ -72,6 +85,10 @@ export const useRejectRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      toast.success('Request rejected successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to reject request');
     },
   });
 };
@@ -85,6 +102,10 @@ export const useRequestChanges = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      toast.success('Changes requested successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to request changes');
     },
   });
 };

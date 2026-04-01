@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
 import { useAuth } from '@/contexts/auth-hooks';
+import { toast } from 'sonner';
 import { 
   CreateApprovalTypeRequest, 
   UpdateApprovalTypeRequest,
@@ -42,6 +43,10 @@ export const useCreateApprovalType = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
+      toast.success('Approval type created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create approval type');
     },
   });
 };
@@ -60,6 +65,10 @@ export const useUpdateApprovalType = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types', id] });
+      toast.success('Approval type updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update approval type');
     },
   });
 };
@@ -77,6 +86,10 @@ export const useDeleteApprovalType = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
+      toast.success('Approval type deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete approval type');
     },
   });
 };
@@ -106,6 +119,10 @@ export const useCreateApprovalTypeAttachment = () => {
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
+      toast.success('Attachment created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create attachment');
     },
   });
 };
@@ -128,6 +145,10 @@ export const useUpdateApprovalTypeAttachment = () => {
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
+      toast.success('Attachment updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update attachment');
     },
   });
 };
@@ -146,6 +167,10 @@ export const useDeleteApprovalTypeAttachment = () => {
     onSuccess: (_, { approvalTypeId }) => {
       queryClient.invalidateQueries({ queryKey: ['approval-types', approvalTypeId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-types'] });
+      toast.success('Attachment deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete attachment');
     },
   });
 };

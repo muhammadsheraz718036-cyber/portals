@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
 import { useAuth } from '@/contexts/auth-hooks';
+import { toast } from 'sonner';
 import { 
   CreateRoleRequest, 
   UpdateRoleRequest 
@@ -40,6 +41,10 @@ export const useCreateRole = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
+      toast.success('Role created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create role');
     },
   });
 };
@@ -58,6 +63,10 @@ export const useUpdateRole = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
       queryClient.invalidateQueries({ queryKey: ['roles', id] });
+      toast.success('Role updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update role');
     },
   });
 };
@@ -75,6 +84,10 @@ export const useDeleteRole = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
+      toast.success('Role deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete role');
     },
   });
 };

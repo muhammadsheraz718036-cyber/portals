@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
+import { toast } from 'sonner';
 import { 
   LoginRequest, 
   SetupRequest, 
@@ -44,6 +45,12 @@ export const useUpdatePassword = () => {
   return useMutation({
     mutationFn: (data: UpdatePasswordRequest) => 
       services.auth.updatePassword(data),
+    onSuccess: () => {
+      toast.success('Password updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update password');
+    },
   });
 };
 
@@ -55,6 +62,10 @@ export const useUpdateProfile = () => {
       services.auth.updateProfile(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
+      toast.success('Profile updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update profile');
     },
   });
 };

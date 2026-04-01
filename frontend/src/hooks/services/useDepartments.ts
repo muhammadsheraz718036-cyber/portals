@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
 import { useAuth } from '@/contexts/auth-hooks';
+import { toast } from 'sonner';
 import { 
   CreateDepartmentRequest, 
   UpdateDepartmentRequest 
@@ -40,6 +41,10 @@ export const useCreateDepartment = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['departments'] });
+      toast.success('Department created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create department');
     },
   });
 };
@@ -58,6 +63,10 @@ export const useUpdateDepartment = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['departments'] });
       queryClient.invalidateQueries({ queryKey: ['departments', id] });
+      toast.success('Department updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update department');
     },
   });
 };
@@ -75,6 +84,10 @@ export const useDeleteDepartment = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['departments'] });
+      toast.success('Department deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete department');
     },
   });
 };

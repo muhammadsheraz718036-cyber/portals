@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
+import { toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { useAuth } from "@/contexts/auth-hooks";
@@ -35,6 +36,16 @@ const queryClient = new QueryClient({
     mutations: {
       retry: 1, // Only retry mutations once
     },
+  },
+});
+
+// Global error handler for React Query
+queryClient.setDefaultOptions({
+  queries: {
+    ...queryClient.getDefaultOptions().queries,
+  },
+  mutations: {
+    ...queryClient.getDefaultOptions().mutations,
   },
 });
 
@@ -78,6 +89,7 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/*" element={<ProtectedRoutes />} />
               </Routes>
+              <Sonner />
             </AuthProvider>
           </CompanyProvider>
         </TooltipProvider>

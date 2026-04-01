@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
 import { useAuth } from '@/contexts/auth-hooks';
+import { toast } from 'sonner';
 import { 
   CreateUserRequest, 
   UpdateUserRequest 
@@ -19,6 +20,10 @@ export const useCreateUser = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      toast.success('User created successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to create user');
     },
   });
 };
@@ -38,6 +43,10 @@ export const useUpdateUser = () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
       queryClient.invalidateQueries({ queryKey: ['profiles', userId] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] }); // In case updating current user
+      toast.success('User updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update user');
     },
   });
 };
@@ -55,6 +64,10 @@ export const useDeleteUser = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      toast.success('User deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete user');
     },
   });
 };
@@ -68,6 +81,12 @@ export const useResetUserPassword = () => {
         throw new Error('You do not have permission to manage users');
       }
       return services.admin.resetUserPassword(userId, newPassword);
+    },
+    onSuccess: () => {
+      toast.success('Password reset successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to reset password');
     },
   });
 };

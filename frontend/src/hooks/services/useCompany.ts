@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
+import { toast } from 'sonner';
 import { UpdateCompanySettingsRequest } from '../../services/types';
 
 export const useCompanySettings = () => {
@@ -18,6 +19,10 @@ export const useUpdateCompanySettings = () => {
       services.company.update(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['company', 'settings'] });
+      toast.success('Company settings updated successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update company settings');
     },
   });
 };

@@ -651,14 +651,14 @@ apiRouter.get(
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
     // Check if user has admin access or manage_approval_types permission
-    // const isAdmin = req.profile?.is_admin;
-    // const hasPermission =
-    //   req.profile?.permissions?.includes("manage_approval_types") ||
-    //   req.profile?.permissions?.includes("all");
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
 
-    // if (!isAdmin && !hasPermission) {
-    //   throw new HttpError(403, "Forbidden");
-    // }
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
 
     const { rows } = await pool.query(
       `SELECT * FROM approval_types ORDER BY name`,
@@ -1303,14 +1303,14 @@ apiRouter.get(
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
     // Check if user has admin access or manage_chains permission
-    // const isAdmin = req.profile?.is_admin;
-    // const hasPermission =
-    //   req.profile?.permissions?.includes("manage_chains") ||
-    //   req.profile?.permissions?.includes("all");
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_chains") ||
+      req.profile?.permissions?.includes("all");
 
-    // if (!isAdmin && !hasPermission) {
-    //   throw new HttpError(403, "Forbidden");
-    // }
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
 
     const { rows } = await pool.query(
       `SELECT * FROM approval_chains ORDER BY name`,
@@ -1850,6 +1850,40 @@ apiRouter.get(
     const admin = req.profile!.is_admin;
     const uid = req.auth!.userId;
     const roleId = req.profile!.role_id;
+    const userPermissions = req.profile!.permissions || [];
+    
+    // Check if user has basic permission to view requests
+    const hasViewPermission = 
+      userPermissions.includes("view_own_requests") ||
+      userPermissions.includes("view_department_requests") ||
+      userPermissions.includes("view_all_requests") ||
+      userPermissions.includes("all");
+    
+    if (!hasViewPermission && !admin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+    }
+    
+    let whereClause = "";
+    let queryParams: any[] = [];
+    
+    if (admin) {
+      // Admins can see all requests
+      whereClause = "TRUE";
+      queryParams = [true, uid, roleId];
+    } else if (userPermissions.includes("view_all_requests")) {
+      // Users with view_all_requests can see all requests
+      whereClause = "TRUE";
+      queryParams = [true, uid, roleId];
+    } else if (userPermissions.includes("view_department_requests")) {
+      // Users with view_department_requests can see requests from their department
+      whereClause = "($1::boolean OR ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
+      queryParams = [false, uid, roleId];
+    } else {
+      // Users with view_own_requests can only see their own requests
+      whereClause = "ar.initiator_id = $2";
+      queryParams = [false, uid, roleId];
+    }
+    
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
@@ -1868,16 +1902,14 @@ apiRouter.get(
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
       LEFT JOIN roles r ON r.id = aa.role_id
-      WHERE ($1::boolean 
-        OR ar.initiator_id = $2
+      WHERE ${whereClause}
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.acted_by = $2
         )
-      )
       ORDER BY ar.created_at DESC`,
-      [admin, uid, roleId],
+      queryParams,
     );
     res.json(rows);
   }),
@@ -1890,6 +1922,40 @@ apiRouter.get(
     const admin = req.profile!.is_admin;
     const uid = req.auth!.userId;
     const roleId = req.profile!.role_id;
+    const userPermissions = req.profile!.permissions || [];
+    
+    // Check if user has basic permission to view requests
+    const hasViewPermission = 
+      userPermissions.includes("view_own_requests") ||
+      userPermissions.includes("view_department_requests") ||
+      userPermissions.includes("view_all_requests") ||
+      userPermissions.includes("all");
+    
+    if (!hasViewPermission && !admin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to view approval requests");
+    }
+    
+    let whereClause = "";
+    let queryParams: any[] = [req.params.id];
+    
+    if (admin) {
+      // Admins can see all requests
+      whereClause = "ar.id = $1 AND TRUE";
+      queryParams = [req.params.id, true, uid, roleId];
+    } else if (userPermissions.includes("view_all_requests")) {
+      // Users with view_all_requests can see all requests
+      whereClause = "ar.id = $1 AND TRUE";
+      queryParams = [req.params.id, true, uid, roleId];
+    } else if (userPermissions.includes("view_department_requests")) {
+      // Users with view_department_requests can see requests from their department
+      whereClause = "ar.id = $1 AND (ar.initiator_id = $3 OR d.id = (SELECT department_id FROM profiles WHERE id = $3))";
+      queryParams = [req.params.id, false, uid, roleId];
+    } else {
+      // Users with view_own_requests can only see their own requests
+      whereClause = "ar.id = $1 AND ar.initiator_id = $3";
+      queryParams = [req.params.id, false, uid, roleId];
+    }
+    
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
@@ -1899,8 +1965,7 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE ar.id = $1 AND ($2::boolean 
-        OR ar.initiator_id = $3
+      WHERE ${whereClause}
         OR EXISTS (
           SELECT 1 FROM approval_actions aa
           JOIN roles r ON r.name = aa.role_name
@@ -1912,9 +1977,8 @@ apiRouter.get(
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.acted_by = $3
-        )
-      )`,
-      [req.params.id, admin, uid, roleId],
+        )`,
+      queryParams,
     );
     if (rows.length === 0) throw new HttpError(404, "Not found");
     const { rows: actions } = await pool.query(
@@ -1988,6 +2052,18 @@ apiRouter.post(
   "/approval-requests",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
+    const userPermissions = req.profile!.permissions || [];
+    const isAdmin = req.profile!.is_admin;
+    
+    // Check if user has permission to initiate requests
+    const canInitiate = 
+      userPermissions.includes("initiate_request") ||
+      userPermissions.includes("all");
+    
+    if (!canInitiate && !isAdmin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to create approval requests");
+    }
+    
     const body = createRequestBody.parse(req.body);
     const uid = req.auth!.userId;
     const { rows } = await pool.query(
@@ -2034,6 +2110,17 @@ apiRouter.post(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const userRoleId = req.profile!.role_id;
+    const userPermissions = req.profile!.permissions || [];
+    const isAdmin = req.profile!.is_admin;
+    
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = 
+      userPermissions.includes("approve_reject") ||
+      userPermissions.includes("all");
+    
+    if (!canApproveReject && !isAdmin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to approve requests");
+    }
 
     // Get the request
     const { rows: requests } = await pool.query(
@@ -2145,6 +2232,17 @@ apiRouter.post(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const userRoleId = req.profile!.role_id;
+    const userPermissions = req.profile!.permissions || [];
+    const isAdmin = req.profile!.is_admin;
+    
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = 
+      userPermissions.includes("approve_reject") ||
+      userPermissions.includes("all");
+    
+    if (!canApproveReject && !isAdmin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to reject requests");
+    }
 
     // Get the request
     const { rows: requests } = await pool.query(
@@ -2240,6 +2338,17 @@ apiRouter.post(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const userRoleId = req.profile!.role_id;
+    const userPermissions = req.profile!.permissions || [];
+    const isAdmin = req.profile!.is_admin;
+    
+    // Check if user has permission to approve/reject requests
+    const canApproveReject = 
+      userPermissions.includes("approve_reject") ||
+      userPermissions.includes("all");
+    
+    if (!canApproveReject && !isAdmin) {
+      throw new HttpError(403, "Forbidden: You don't have permission to request changes on requests");
+    }
 
     // Get the request
     const { rows: requests } = await pool.query(
@@ -2461,8 +2570,17 @@ apiRouter.patch(
 
 apiRouter.get(
   "/audit-logs",
-  requireAdmin,
-  asyncHandler(async (_req, res) => {
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("view_audit_logs") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+    
     const { rows } = await pool.query(
       `SELECT * FROM audit_logs ORDER BY created_at DESC`,
     );
