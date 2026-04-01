@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Search, Filter, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,8 +15,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/auth-hooks";
+import { useAuditLogs } from "@/hooks/services";
 
 type AuditLogRow = {
   id: string;
@@ -32,38 +32,9 @@ export default function AuditLogs() {
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [selectedLog, setSelectedLog] = useState<AuditLogRow | null>(null);
-  const [logs, setLogs] = useState<AuditLogRow[]>([]);
-  const [loading, setLoading] = useState(true);
-
   const hasAuditAccess =
     isAdmin || hasPermission("view_audit_logs") || hasPermission("all");
-
-  useEffect(() => {
-    if (!hasAuditAccess) {
-      setLogs([]);
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      try {
-        const data = await api.auditLogs.list();
-        if (!cancelled) setLogs(data as AuditLogRow[]);
-      } catch {
-        if (!cancelled) setLogs([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [hasAuditAccess]);
+  const { data: logs = [], isLoading: loading } = useAuditLogs();
 
   const actions = [...new Set(logs.map((l) => l.action))];
 
@@ -81,13 +52,13 @@ export default function AuditLogs() {
     return true;
   });
 
-  if (!isAdmin) {
+  if (!hasAuditAccess) {
     return (
       <div className="p-6 space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Audit Logs</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Only administrators can view audit logs.
+            You do not have permission to view audit logs.
           </p>
         </div>
       </div>

@@ -15,7 +15,9 @@ export const useApprovalTypes = () => {
   return useQuery({
     queryKey: ['approval-types'],
     queryFn: () => services.approvalTypes.list(),
-    enabled: hasPermission('manage_approval_types'),
+    enabled:
+      hasPermission('manage_approval_types') ||
+      hasPermission('initiate_request'),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 };
@@ -101,7 +103,10 @@ export const useApprovalTypeAttachments = (approvalTypeId: string) => {
   return useQuery({
     queryKey: ['approval-types', approvalTypeId, 'attachments'],
     queryFn: () => services.approvalTypes.getAttachments(approvalTypeId),
-    enabled: !!approvalTypeId && hasPermission('manage_approval_types'),
+    enabled:
+      !!approvalTypeId &&
+      (hasPermission('manage_approval_types') ||
+        hasPermission('initiate_request')),
   });
 };
 

@@ -25,9 +25,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { api } from "@/lib/api";
-import { ChainRow, ApprovalTypeRow, Role } from "@/lib/constants";
-import { toast } from "sonner";
+import { ChainRow, ApprovalTypeRow } from "@/lib/constants";
+import {
+  useApprovalChains,
+  useApprovalTypes,
+  useCreateApprovalChain,
+  useDeleteApprovalChain,
+  useRoles,
+  useUpdateApprovalChain,
+} from "@/hooks/services";
+import { useApprovalChainSteps } from "@/hooks/useApprovalChainSteps";
 
 type Step = { order: number; roleName: string; action: string };
 
@@ -35,7 +42,7 @@ interface ApprovalType {
   id: string;
   name: string;
 }
-interface Role {
+interface RoleOption {
   id: string;
   name: string;
 }
@@ -47,133 +54,94 @@ interface Chain {
 }
 
 export function AdminChains() {
-  const [chains, setChains] = useState<Chain[]>([]);
-  const [approvalTypes, setApprovalTypes] = useState<ApprovalType[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editChain, setEditChain] = useState<Chain | null>(null);
   const [name, setName] = useState("");
   const [approvalTypeId, setApprovalTypeId] = useState("");
-  const [steps, setSteps] = useState<Step[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [draggedStepIdx, setDraggedStepIdx] = useState<number | null>(null);
+  const {
+    steps,
+    draggedStepIdx,
+    resetSteps,
+    addStep,
+    updateStep,
+    removeStep,
+    handleDragStartStep,
+    handleDragOverStep,
+    handleDropStep,
+  } = useApprovalChainSteps();
+  const { data: chainsRaw = [], isLoading: loadingChains } = useApprovalChains();
+  const { data: approvalTypesRaw = [], isLoading: loadingTypes } = useApprovalTypes();
+  const { data: rolesRaw = [], isLoading: loadingRoles } = useRoles();
+  const createChainMutation = useCreateApprovalChain();
+  const updateChainMutation = useUpdateApprovalChain();
+  const deleteChainMutation = useDeleteApprovalChain();
 
-  const fetchData = async () => {
-    try {
-      const [chainsRaw, typesRaw, rolesRaw] = await Promise.all([
-        api.approvalChains.list() as Promise<ChainRow[]>,
-        api.approvalTypes.list() as Promise<ApprovalTypeRow[]>,
-        api.roles.list() as Promise<Role[]>,
-      ]);
-      setChains((chainsRaw || []).map((c) => ({ ...c, steps: c.steps || [] })));
-      setApprovalTypes(
-        (typesRaw || []).map((t) => ({ id: t.id, name: t.name })),
-      );
-      setRoles((rolesRaw || []).map((r) => ({ id: r.id, name: r.name })));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load");
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const loading = loadingChains || loadingTypes || loadingRoles;
+  const chains: Chain[] = (chainsRaw as ChainRow[]).map((c) => ({
+    ...c,
+    steps: c.steps || [],
+  }));
+  const approvalTypes: ApprovalType[] = (approvalTypesRaw as ApprovalTypeRow[]).map((t) => ({
+    id: t.id,
+    name: t.name,
+  }));
+  const roles: RoleOption[] = (rolesRaw as RoleOption[]).map((r) => ({
+    id: r.id,
+    name: r.name,
+  }));
 
   const openCreate = () => {
     setEditChain(null);
     setName("");
     setApprovalTypeId("");
-    setSteps([]);
+    resetSteps([]);
     setDialogOpen(true);
   };
   const openEdit = (c: Chain) => {
     setEditChain(c);
     setName(c.name);
     setApprovalTypeId(c.approval_type_id);
-    setSteps(c.steps);
+    resetSteps(c.steps);
     setDialogOpen(true);
-  };
-
-  const addStep = () =>
-    setSteps([...steps, { order: steps.length + 1, roleName: "", action: "" }]);
-  const updateStep = (idx: number, updates: Partial<Step>) =>
-    setSteps(steps.map((s, i) => (i === idx ? { ...s, ...updates } : s)));
-  const removeStep = (idx: number) =>
-    setSteps(
-      steps.filter((_, i) => i !== idx).map((s, i) => ({ ...s, order: i + 1 })),
-    );
-
-  const handleDragStartStep = (idx: number) => {
-    setDraggedStepIdx(idx);
-  };
-
-  const handleDragOverStep = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDropStep = (targetIdx: number) => {
-    if (draggedStepIdx === null || draggedStepIdx === targetIdx) {
-      setDraggedStepIdx(null);
-      return;
-    }
-    const newSteps = [...steps];
-    const [draggedItem] = newSteps.splice(draggedStepIdx, 1);
-    newSteps.splice(targetIdx, 0, draggedItem);
-    // Update order numbers after reordering
-    const reorderedSteps = newSteps.map((s, i) => ({ ...s, order: i + 1 }));
-    setSteps(reorderedSteps);
-    setDraggedStepIdx(null);
   };
 
   const handleSave = async () => {
     if (!name.trim() || !approvalTypeId) return;
     try {
       if (editChain) {
-        await api.approvalChains.update(editChain.id, {
-          name,
-          approval_type_id: approvalTypeId,
-          steps,
+        await updateChainMutation.mutateAsync({
+          id: editChain.id,
+          data: {
+            name,
+            approval_type_id: approvalTypeId,
+            steps,
+          },
         });
-        toast.success("Chain updated");
       } else {
-        await api.approvalChains.create({
+        await createChainMutation.mutateAsync({
           name,
           approval_type_id: approvalTypeId,
           steps,
         });
-        toast.success("Chain created");
       }
       setDialogOpen(false);
-      fetchData();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    }
+    } catch {}
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await api.approvalChains.delete(id);
-      toast.success("Deleted");
-      fetchData();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
-    }
+      await deleteChainMutation.mutateAsync(id);
+    } catch {}
   };
 
   const handleDuplicate = async (chain: Chain) => {
     try {
-      await api.approvalChains.create({
+      await createChainMutation.mutateAsync({
         name: `${chain.name} (Copy)`,
         approval_type_id: chain.approval_type_id,
         steps: chain.steps.map((s) => ({ ...s })),
       });
-      toast.success("Approval chain duplicated");
-      fetchData();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Duplicate failed");
-    }
+    } catch {}
   };
 
   return (

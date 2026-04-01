@@ -15,9 +15,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { allPermissions } from "@/lib/constants";
-import { api } from "@/lib/api";
-import { toast } from "sonner";
 import { useAuth } from "@/contexts/auth-hooks";
+import { useCreateRole, useDeleteRole, useRoles, useUpdateRole } from "@/hooks/services";
 
 interface Role {
   id: string;
@@ -28,13 +27,15 @@ interface Role {
 
 export function AdminRoles() {
   const { profile: currentUser, hasPermission } = useAuth();
-  const [roles, setRoles] = useState<Role[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editRole, setEditRole] = useState<Role | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [permissions, setPermissions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: roles = [], isLoading: loading } = useRoles();
+  const createRoleMutation = useCreateRole();
+  const updateRoleMutation = useUpdateRole();
+  const deleteRoleMutation = useDeleteRole();
 
   const hasAdminConsoleAccessForRole = (rolePermissions: string[]) =>
     rolePermissions.includes("all") ||
@@ -48,20 +49,6 @@ export function AdminRoles() {
     editRole &&
     editRole.id === currentUser?.role_id &&
     hasAdminConsoleAccessForRole(editRole.permissions);
-
-  const fetchRoles = async () => {
-    try {
-      const data = await api.roles.list();
-      setRoles((data as Role[]) || []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load");
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchRoles();
-  }, []);
 
   const openCreate = () => {
     setEditRole(null);
@@ -83,27 +70,21 @@ export function AdminRoles() {
     if (!name.trim()) return;
     try {
       if (editRole) {
-        await api.roles.update(editRole.id, { name, description, permissions });
-        toast.success("Role updated");
+        await updateRoleMutation.mutateAsync({
+          id: editRole.id,
+          data: { name, description, permissions },
+        });
       } else {
-        await api.roles.create({ name, description, permissions });
-        toast.success("Role created");
+        await createRoleMutation.mutateAsync({ name, description, permissions });
       }
       setDialogOpen(false);
-      fetchRoles();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    }
+    } catch {}
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await api.roles.delete(id);
-      toast.success("Role deleted");
-      fetchRoles();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
-    }
+      await deleteRoleMutation.mutateAsync(id);
+    } catch {}
   };
 
   return (

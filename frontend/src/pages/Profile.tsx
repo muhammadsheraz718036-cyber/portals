@@ -3,13 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/auth-hooks";
 import { toast } from "sonner";
 import { User, KeyRound, Loader2 } from "lucide-react";
+import { useUpdatePassword, useUpdateProfile } from "@/hooks/services";
+import { isPasswordPolicyValid, PASSWORD_POLICY_HINT } from "@/lib/passwordPolicy";
 
 export default function Profile() {
   const { profile, refreshSession } = useAuth();
+  const updateProfileMutation = useUpdateProfile();
+  const updatePasswordMutation = useUpdatePassword();
   const [fullName, setFullName] = useState(profile?.full_name || "");
   const [updatingProfile, setUpdatingProfile] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -25,9 +28,8 @@ export default function Profile() {
 
     setUpdatingProfile(true);
     try {
-      await api.auth.updateProfile({ full_name: fullName.trim() });
+      await updateProfileMutation.mutateAsync({ full_name: fullName.trim() });
       await refreshSession(); // Refresh the session to get updated profile
-      toast.success("Profile updated successfully");
     } catch (err: unknown) {
       toast.error(
         err instanceof Error ? err.message : "Failed to update profile",
@@ -37,8 +39,8 @@ export default function Profile() {
   };
 
   const handleUpdatePassword = async () => {
-    if (!newPassword || newPassword.length < 6) {
-      toast.error("New password must be at least 6 characters");
+    if (!isPasswordPolicyValid(newPassword)) {
+      toast.error(PASSWORD_POLICY_HINT);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -52,11 +54,10 @@ export default function Profile() {
 
     setUpdatingPassword(true);
     try {
-      await api.auth.updatePassword({
+      await updatePasswordMutation.mutateAsync({
         new_password: newPassword,
         current_password: currentPassword,
       });
-      toast.success("Password updated successfully");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -129,7 +130,7 @@ export default function Profile() {
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Minimum 6 characters"
+              placeholder={PASSWORD_POLICY_HINT}
             />
           </div>
           <div className="space-y-1.5">

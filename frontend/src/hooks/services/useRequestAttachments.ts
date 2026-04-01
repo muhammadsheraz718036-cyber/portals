@@ -48,7 +48,6 @@ export const useDeleteRequestAttachment = () => {
     onSuccess: (_, __) => {
       // We need to invalidate all request attachment queries since we don't have requestId here
       queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
-      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
       toast.success('Attachment deleted successfully');
     },
     onError: (error: Error) => {

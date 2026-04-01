@@ -6,9 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2, Shield } from "lucide-react";
+import { useSetupStatus } from "@/hooks/services";
 
 export default function Login() {
   const { user, loading, signIn } = useAuth();
@@ -17,17 +17,13 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [checking, setChecking] = useState(true);
+  const { data: setupStatus, isLoading: checking } = useSetupStatus();
 
   useEffect(() => {
-    api.setup
-      .status()
-      .then(({ hasUsers }) => {
-        if (!hasUsers) navigate("/setup", { replace: true });
-        setChecking(false);
-      })
-      .catch(() => setChecking(false));
-  }, [navigate]);
+    if (setupStatus?.hasUsers === false) {
+      navigate("/setup", { replace: true });
+    }
+  }, [navigate, setupStatus?.hasUsers]);
 
   if (loading || checking) {
     return (
@@ -76,7 +72,7 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label>Email</Label>
-              <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+              <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" autoFocus={true} />
             </div>
             <div className="space-y-1.5">
               <Label>Password</Label>

@@ -1,30 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useAuth } from "@/contexts/auth-hooks";
 import { Navigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, setStoredToken } from "@/lib/api";
+import { setStoredToken } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2, ShieldCheck } from "lucide-react";
+import { useSetup, useSetupStatus } from "@/hooks/services";
+import { isPasswordPolicyValid, PASSWORD_POLICY_HINT } from "@/lib/passwordPolicy";
 
 export default function Setup() {
   const { user, loading } = useAuth();
-  const [hasUsers, setHasUsers] = useState<boolean | null>(null);
+  const { data: setupStatus, isLoading: loadingSetupStatus } = useSetupStatus();
+  const setupMutation = useSetup();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const hasUsers = setupStatus?.hasUsers ?? null;
 
-  useEffect(() => {
-    api.setup
-      .status()
-      .then(({ hasUsers: exists }) => setHasUsers(exists))
-      .catch(() => setHasUsers(false));
-  }, []);
-
-  if (loading || hasUsers === null) {
+  if (loading || loadingSetupStatus || hasUsers === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -38,10 +35,14 @@ export default function Setup() {
   const handleSetup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password || !fullName) return;
+    if (!isPasswordPolicyValid(password)) {
+      toast.error(PASSWORD_POLICY_HINT);
+      return;
+    }
     setSubmitting(true);
 
     try {
-      const { token } = await api.setup.complete({
+      const { token } = await setupMutation.mutateAsync({
         email,
         password,
         full_name: fullName,
@@ -77,7 +78,7 @@ export default function Setup() {
             </div>
             <div className="space-y-1.5">
               <Label>Password</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 6 characters" />
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={PASSWORD_POLICY_HINT} />
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}

@@ -3,15 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
 import { useCompany } from "@/contexts/company-hooks";
 import { useAuth } from "@/contexts/auth-hooks";
 import { toast } from "sonner";
 import { Building2, Loader2 } from "lucide-react";
+import { useUpdateCompanySettings } from "@/hooks/services";
 
 export function AdminSettings() {
   const { settings, refetch } = useCompany();
   const { isAdmin } = useAuth();
+  const updateCompanySettings = useUpdateCompanySettings();
   const [companyName, setCompanyName] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [saving, setSaving] = useState(false);
@@ -30,11 +31,10 @@ export function AdminSettings() {
     }
     setSaving(true);
     try {
-      await api.companySettings.update({
+      await updateCompanySettings.mutateAsync({
         company_name: companyName.trim(),
         logo_url: logoUrl.trim() || null,
       });
-      toast.success("Company settings saved");
       await refetch();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");

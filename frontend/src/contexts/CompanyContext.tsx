@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api } from "@/lib/api";
+import { services } from "@/services";
 import { CompanyContext, type CompanyContextType } from "./company-context";
 
 interface CompanySettings {
@@ -14,7 +14,7 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const data = await api.companySettings.get();
+      const data = await services.company.get();
       if (!data) {
         setSettings(null);
         return;

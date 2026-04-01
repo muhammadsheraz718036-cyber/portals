@@ -13,7 +13,9 @@ export const useApprovalChains = () => {
   return useQuery({
     queryKey: ['approval-chains'],
     queryFn: () => services.approvalChains.list(),
-    enabled: hasPermission('manage_chains'),
+    enabled:
+      hasPermission('manage_chains') ||
+      hasPermission('initiate_request'),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 };

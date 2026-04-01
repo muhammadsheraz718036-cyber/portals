@@ -4,6 +4,10 @@ import { pool } from "../db.js";
 import { HttpError } from "../httpError.js";
 import { asyncHandler } from "../asyncHandler.js";
 import { hashPassword, verifyPassword } from "../auth/password.js";
+import {
+  isPasswordPolicyValid,
+  PASSWORD_POLICY_MESSAGE,
+} from "../auth/passwordPolicy.js";
 import { signToken } from "../auth/jwt.js";
 import {
   requireAuth,
@@ -58,7 +62,7 @@ apiRouter.get(
 
 const setupBody = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8).refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
   full_name: z.string().min(1),
 });
 
@@ -205,7 +209,7 @@ apiRouter.get(
 );
 
 const passwordBody = z.object({
-  new_password: z.string().min(6),
+  new_password: z.string().min(8).refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
   current_password: z.string().optional(),
 });
 
@@ -660,10 +664,11 @@ apiRouter.get(
   "/approval-types",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
-    // Check if user has admin access or manage_approval_types permission
+    // Check if user can manage approval types or initiate requests.
     const isAdmin = req.profile?.is_admin;
     const hasPermission =
       req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("initiate_request") ||
       req.profile?.permissions?.includes("all");
 
     if (!isAdmin && !hasPermission) {
@@ -862,10 +867,11 @@ apiRouter.get(
   "/approval-types/:id/attachments",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
-    // Check if user has admin access or manage_approval_types permission
+    // Check if user can manage approval types or initiate requests.
     const isAdmin = req.profile?.is_admin;
     const hasPermission =
       req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("initiate_request") ||
       req.profile?.permissions?.includes("all");
 
     if (!isAdmin && !hasPermission) {
@@ -1323,10 +1329,11 @@ apiRouter.get(
   "/approval-chains",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
-    // Check if user has admin access or manage_chains permission
+    // Check if user can manage chains or initiate requests.
     const isAdmin = req.profile?.is_admin;
     const hasPermission =
       req.profile?.permissions?.includes("manage_chains") ||
+      req.profile?.permissions?.includes("initiate_request") ||
       req.profile?.permissions?.includes("all");
 
     if (!isAdmin && !hasPermission) {
@@ -1549,7 +1556,7 @@ apiRouter.get(
 // Admin users
 const createUserBody = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8).refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
   full_name: z.string().min(1),
   department_id: z.string().uuid().nullable().optional(),
   role_id: z.string().uuid().nullable().optional(),
@@ -1623,7 +1630,7 @@ apiRouter.post(
 );
 
 const adminPasswordBody = z.object({
-  new_password: z.string().min(6),
+  new_password: z.string().min(8).refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
 });
 
 apiRouter.patch(

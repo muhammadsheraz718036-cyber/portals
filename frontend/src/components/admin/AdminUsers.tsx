@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { useProfiles, useDepartments, useRoles, useCreateUser, useUpdateUser, useDeleteUser, useResetUserPassword } from "@/hooks/services";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/auth-hooks";
+import { isPasswordPolicyValid, PASSWORD_POLICY_HINT } from "@/lib/passwordPolicy";
 
 interface Profile {
   id: string;
@@ -128,9 +129,17 @@ export function AdminUsers() {
       toast.error("Email and password are required for new users");
       return;
     }
+    if (!editUser && !isPasswordPolicyValid(password)) {
+      toast.error(PASSWORD_POLICY_HINT);
+      return;
+    }
 
     if (editUser && changePassword && !newPassword.trim()) {
       toast.error("New password is required");
+      return;
+    }
+    if (editUser && changePassword && !isPasswordPolicyValid(newPassword)) {
+      toast.error(PASSWORD_POLICY_HINT);
       return;
     }
 
@@ -252,7 +261,7 @@ export function AdminUsers() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 6 characters"
+                    placeholder={PASSWORD_POLICY_HINT}
                   />
                 </div>
               )}
@@ -342,7 +351,7 @@ export function AdminUsers() {
                         type="password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="Minimum 6 characters"
+                        placeholder={PASSWORD_POLICY_HINT}
                       />
                     </div>
                   )}
