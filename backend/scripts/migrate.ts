@@ -34,6 +34,10 @@ const migrations = [
     name: "action_resubmitted_status",
     file: "add-action-resubmitted-status.sql",
   },
+  {
+    name: "approval_type_department",
+    file: "add-approval-type-department.sql",
+  },
   { name: "company_phone_settings", file: "add-company-phone-settings.sql" },
   {
     name: "company_contact_department",

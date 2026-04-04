@@ -70,8 +70,31 @@ export interface ApprovalType {
   allow_attachments?: boolean;
   pre_salutation?: string;
   post_salutation?: string;
+  department_id?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface CreateApprovalTypeRequest {
+  name: string;
+  description?: string;
+  fields: unknown[];
+  page_layout?: string;
+  pre_salutation?: string | null;
+  post_salutation?: string | null;
+  allow_attachments?: boolean;
+  department_id?: string | null;
+}
+
+export interface UpdateApprovalTypeRequest {
+  name?: string;
+  description?: string;
+  fields?: unknown[];
+  page_layout?: string;
+  pre_salutation?: string | null;
+  post_salutation?: string | null;
+  allow_attachments?: boolean;
+  department_id?: string | null;
 }
 
 export interface ApprovalTypeAttachment {
@@ -167,26 +190,6 @@ export interface UpdateRoleRequest {
   name?: string;
   description?: string;
   permissions?: string[];
-}
-
-export interface CreateApprovalTypeRequest {
-  name: string;
-  description?: string;
-  fields: unknown[];
-  page_layout?: string;
-  pre_salutation?: string | null;
-  post_salutation?: string | null;
-  allow_attachments?: boolean;
-}
-
-export interface UpdateApprovalTypeRequest {
-  name?: string;
-  description?: string;
-  fields?: unknown[];
-  page_layout?: string;
-  pre_salutation?: string | null;
-  post_salutation?: string | null;
-  allow_attachments?: boolean;
 }
 
 export interface CreateApprovalTypeAttachmentRequest {

@@ -1,5 +1,12 @@
 import { useState, useEffect } from "react";
-import { Plus, Edit, Trash2, GripVertical, Copy, Paperclip } from "lucide-react";
+import {
+  Plus,
+  Edit,
+  Trash2,
+  GripVertical,
+  Copy,
+  Paperclip,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +14,7 @@ import { RichTextEditor } from "@/components/RichTextEditor";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -24,14 +32,15 @@ import {
 import { Checkbox as CheckboxInput } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  useApprovalTypes, 
-  useCreateApprovalType, 
-  useUpdateApprovalType, 
+import {
+  useApprovalTypes,
+  useCreateApprovalType,
+  useUpdateApprovalType,
   useDeleteApprovalType,
   useApprovalTypeAttachments,
   useCreateApprovalTypeAttachment,
-  useDeleteApprovalTypeAttachment
+  useDeleteApprovalTypeAttachment,
+  useDepartments,
 } from "@/hooks/services";
 import { ApprovalTypeRow } from "@/lib/constants";
 import { toast } from "sonner";
@@ -79,15 +88,19 @@ export function AdminApprovalTypes() {
   const [fields, setFields] = useState<Field[]>([]);
   const [pageLayout, setPageLayout] = useState<PageLayout>("portrait");
   const [allowAttachments, setAllowAttachments] = useState(false);
-  const [attachmentFields, setAttachmentFields] = useState<AttachmentField[]>([]);
+  const [attachmentFields, setAttachmentFields] = useState<AttachmentField[]>(
+    [],
+  );
   const [activeTab, setActiveTab] = useState("fields");
   const [draggedFieldIdx, setDraggedFieldIdx] = useState<number | null>(null);
   const [groups, setGroups] = useState<string[]>(["General"]); // Default group
+  const [departmentId, setDepartmentId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [preSalutation, setPreSalutation] = useState("");
   const [postSalutation, setPostSalutation] = useState("");
 
   // React Query hooks
+  const { data: departments = [] } = useDepartments();
   const { data: types = [], isLoading: isLoadingTypes } = useApprovalTypes();
   const createMutation = useCreateApprovalType();
   const updateMutation = useUpdateApprovalType();
@@ -105,6 +118,7 @@ export function AdminApprovalTypes() {
     setNewGroupName("");
     setPreSalutation("");
     setPostSalutation("");
+    setDepartmentId(null);
     setActiveTab("fields");
     setDialogOpen(true);
   };
@@ -117,6 +131,7 @@ export function AdminApprovalTypes() {
     setAllowAttachments(t.allow_attachments || false);
     setPreSalutation(t.pre_salutation || "");
     setPostSalutation(t.post_salutation || "");
+    setDepartmentId(t.department_id ?? null);
     // Extract unique groups from fields
     const uniqueGroups = Array.from(
       new Set(t.fields.map((f) => f.group || "General")),
@@ -200,14 +215,28 @@ export function AdminApprovalTypes() {
       label: "",
       required: false,
       max_file_size_mb: 10,
-      allowed_extensions: ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"],
+      allowed_extensions: [
+        "pdf",
+        "doc",
+        "docx",
+        "xls",
+        "xlsx",
+        "jpg",
+        "jpeg",
+        "png",
+      ],
       max_files: 1,
     };
     setAttachmentFields([...attachmentFields, newField]);
   };
 
-  const updateAttachmentField = (idx: number, updates: Partial<AttachmentField>) => {
-    setAttachmentFields(attachmentFields.map((f, i) => (i === idx ? { ...f, ...updates } : f)));
+  const updateAttachmentField = (
+    idx: number,
+    updates: Partial<AttachmentField>,
+  ) => {
+    setAttachmentFields(
+      attachmentFields.map((f, i) => (i === idx ? { ...f, ...updates } : f)),
+    );
   };
 
   const removeAttachmentField = (idx: number) => {
@@ -256,6 +285,7 @@ export function AdminApprovalTypes() {
             pre_salutation: preSalutation || null,
             post_salutation: postSalutation || null,
             allow_attachments: allowAttachments,
+            department_id: departmentId,
           },
         });
         toast.success("Updated");
@@ -268,6 +298,7 @@ export function AdminApprovalTypes() {
           pre_salutation: preSalutation || null,
           post_salutation: postSalutation || null,
           allow_attachments: allowAttachments,
+          department_id: departmentId,
         });
         toast.success("Created");
       }
@@ -320,6 +351,9 @@ export function AdminApprovalTypes() {
               <DialogTitle>
                 {editType ? "Edit" : "Create"} Approval Type
               </DialogTitle>
+              <DialogDescription>
+                Configure form fields, attachments, and salutations for this approval type.
+              </DialogDescription>
             </DialogHeader>
             <Tabs
               value={activeTab}
@@ -338,6 +372,25 @@ export function AdminApprovalTypes() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                   />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Department</Label>
+                  <Select
+                    value={departmentId ?? "global"}
+                    onValueChange={(value) => setDepartmentId(value === "global" ? null : value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select department (or global)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="global">Global (all departments)</SelectItem>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept.id} value={dept.id}>
+                          {dept.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label>Description</Label>
@@ -609,9 +662,12 @@ export function AdminApprovalTypes() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-medium">File Attachment Fields</h3>
+                      <h3 className="text-lg font-medium">
+                        File Attachment Fields
+                      </h3>
                       <p className="text-sm text-muted-foreground">
-                        Configure which file upload fields users will see when submitting requests
+                        Configure which file upload fields users will see when
+                        submitting requests
                       </p>
                     </div>
                     <Button
@@ -627,13 +683,21 @@ export function AdminApprovalTypes() {
                   {!allowAttachments ? (
                     <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
                       <Paperclip className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                      <p className="text-muted-foreground">Enable file attachments in the Form Fields tab to configure attachment fields</p>
+                      <p className="text-muted-foreground">
+                        Enable file attachments in the Form Fields tab to
+                        configure attachment fields
+                      </p>
                     </div>
                   ) : attachmentFields.length === 0 ? (
                     <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
                       <Paperclip className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                      <p className="text-muted-foreground mb-2">No attachment fields configured</p>
-                      <p className="text-sm text-muted-foreground">Click "Add Attachment Field" to create your first file upload field</p>
+                      <p className="text-muted-foreground mb-2">
+                        No attachment fields configured
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Click "Add Attachment Field" to create your first file
+                        upload field
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-4">
@@ -641,7 +705,9 @@ export function AdminApprovalTypes() {
                         <Card key={idx} className="p-4">
                           <div className="space-y-4">
                             <div className="flex items-center justify-between">
-                              <h4 className="font-medium">Attachment Field {idx + 1}</h4>
+                              <h4 className="font-medium">
+                                Attachment Field {idx + 1}
+                              </h4>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -657,11 +723,16 @@ export function AdminApprovalTypes() {
                                 <Label>Field Name (Internal)</Label>
                                 <Input
                                   value={field.field_name}
-                                  onChange={(e) => updateAttachmentField(idx, { field_name: e.target.value })}
+                                  onChange={(e) =>
+                                    updateAttachmentField(idx, {
+                                      field_name: e.target.value,
+                                    })
+                                  }
                                   placeholder="e.g., supporting_documents"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                  Internal field identifier (no spaces, use underscores)
+                                  Internal field identifier (no spaces, use
+                                  underscores)
                                 </p>
                               </div>
 
@@ -669,7 +740,11 @@ export function AdminApprovalTypes() {
                                 <Label>Display Label</Label>
                                 <Input
                                   value={field.label}
-                                  onChange={(e) => updateAttachmentField(idx, { label: e.target.value })}
+                                  onChange={(e) =>
+                                    updateAttachmentField(idx, {
+                                      label: e.target.value,
+                                    })
+                                  }
                                   placeholder="e.g., Supporting Documents"
                                 />
                                 <p className="text-xs text-muted-foreground">
@@ -686,7 +761,12 @@ export function AdminApprovalTypes() {
                                   min="1"
                                   max="100"
                                   value={field.max_file_size_mb}
-                                  onChange={(e) => updateAttachmentField(idx, { max_file_size_mb: parseInt(e.target.value) || 10 })}
+                                  onChange={(e) =>
+                                    updateAttachmentField(idx, {
+                                      max_file_size_mb:
+                                        parseInt(e.target.value) || 10,
+                                    })
+                                  }
                                 />
                               </div>
 
@@ -697,7 +777,11 @@ export function AdminApprovalTypes() {
                                   min="1"
                                   max="10"
                                   value={field.max_files}
-                                  onChange={(e) => updateAttachmentField(idx, { max_files: parseInt(e.target.value) || 1 })}
+                                  onChange={(e) =>
+                                    updateAttachmentField(idx, {
+                                      max_files: parseInt(e.target.value) || 1,
+                                    })
+                                  }
                                 />
                               </div>
 
@@ -706,32 +790,59 @@ export function AdminApprovalTypes() {
                                 <div className="mt-2">
                                   <CheckboxInput
                                     checked={field.required}
-                                    onCheckedChange={(checked) => updateAttachmentField(idx, { required: !!checked })}
+                                    onCheckedChange={(checked) =>
+                                      updateAttachmentField(idx, {
+                                        required: !!checked,
+                                      })
+                                    }
                                   />
                                 </div>
                               </div>
                             </div>
 
-                              <div className="space-y-1.5">
-                                <Label>Allowed Extensions</Label>
-                                <div className="grid grid-cols-4 gap-2 mt-2">
-                                  {["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"].map((ext) => (
-                                    <div key={ext} className="flex items-center space-x-2">
-                                      <CheckboxInput
-                                        id={`ext-${ext}-${idx}`}
-                                        checked={field.allowed_extensions.includes(ext)}
-                                        onCheckedChange={(checked) => {
-                                          const extensions = checked
-                                            ? [...field.allowed_extensions, ext]
-                                            : field.allowed_extensions.filter(e => e !== ext);
-                                          updateAttachmentField(idx, { allowed_extensions: extensions });
-                                        }}
-                                      />
-                                      <Label htmlFor={`ext-${ext}-${idx}`} className="text-sm">.{ext}</Label>
-                                    </div>
-                                  ))}
-                                </div>
+                            <div className="space-y-1.5">
+                              <Label>Allowed Extensions</Label>
+                              <div className="grid grid-cols-4 gap-2 mt-2">
+                                {[
+                                  "pdf",
+                                  "doc",
+                                  "docx",
+                                  "xls",
+                                  "xlsx",
+                                  "jpg",
+                                  "jpeg",
+                                  "png",
+                                ].map((ext) => (
+                                  <div
+                                    key={ext}
+                                    className="flex items-center space-x-2"
+                                  >
+                                    <CheckboxInput
+                                      id={`ext-${ext}-${idx}`}
+                                      checked={field.allowed_extensions.includes(
+                                        ext,
+                                      )}
+                                      onCheckedChange={(checked) => {
+                                        const extensions = checked
+                                          ? [...field.allowed_extensions, ext]
+                                          : field.allowed_extensions.filter(
+                                              (e) => e !== ext,
+                                            );
+                                        updateAttachmentField(idx, {
+                                          allowed_extensions: extensions,
+                                        });
+                                      }}
+                                    />
+                                    <Label
+                                      htmlFor={`ext-${ext}-${idx}`}
+                                      className="text-sm"
+                                    >
+                                      .{ext}
+                                    </Label>
+                                  </div>
+                                ))}
                               </div>
+                            </div>
                           </div>
                         </Card>
                       ))}
@@ -786,6 +897,13 @@ export function AdminApprovalTypes() {
                   <p className="text-xs text-muted-foreground">
                     {type.description}
                   </p>
+                  {type.department_id && (
+                    <p className="text-xs text-blue-600">
+                      Department:{" "}
+                      {departments.find((d) => d.id === type.department_id)
+                        ?.name || "Unknown"}
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-1 mt-2">
                     {type.fields.map((f) => (
                       <Badge

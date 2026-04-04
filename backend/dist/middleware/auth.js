@@ -9,7 +9,7 @@ function extractBearer(req) {
     return h.slice(7).trim() || null;
 }
 async function loadProfile(userId) {
-    const { rows } = await pool.query(`SELECT p.id, p.is_admin, p.full_name, p.email, p.role_id, COALESCE(r.permissions, '{}') as permissions
+    const { rows } = await pool.query(`SELECT p.id, p.is_admin, p.full_name, p.email, p.department_id, p.role_id, COALESCE(r.permissions, '{}') as permissions
      FROM profiles p
      LEFT JOIN roles r ON p.role_id = r.id
      WHERE p.id = $1`, [userId]);

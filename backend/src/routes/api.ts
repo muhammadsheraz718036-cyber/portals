@@ -381,18 +381,8 @@ apiRouter.patch(
 apiRouter.get(
   "/departments",
   requireAuth,
-  asyncHandler(async (req: AuthedRequest, res) => {
-    // Check if user has admin access or manage_departments/manage_users permission
-    const isAdmin = req.profile?.is_admin;
-    const hasPermission =
-      req.profile?.permissions?.includes("manage_departments") ||
-      req.profile?.permissions?.includes("manage_users") ||
-      req.profile?.permissions?.includes("all");
-
-    if (!isAdmin && !hasPermission) {
-      throw new HttpError(403, "Forbidden");
-    }
-
+  asyncHandler(async (_req: AuthedRequest, res) => {
+    // Allow authenticated users to view departments for request selection
     const { rows } = await pool.query(
       `SELECT * FROM departments ORDER BY name`,
     );
@@ -732,9 +722,23 @@ apiRouter.get(
       throw new HttpError(403, "Forbidden");
     }
 
-    const { rows } = await pool.query(
-      `SELECT * FROM approval_types ORDER BY name`,
-    );
+    const departmentId =
+      (req.query.department_id as string | undefined) ??
+      req.profile?.department_id;
+
+    let query = "SELECT * FROM approval_types";
+    const params: unknown[] = [];
+
+    if (departmentId) {
+      query += " WHERE department_id = $1 OR department_id IS NULL";
+      params.push(departmentId);
+    } else if (!isAdmin) {
+      query += " WHERE department_id IS NULL";
+    }
+
+    query += " ORDER BY name";
+
+    const { rows } = await pool.query(query, params);
     res.json(rows);
   }),
 );
@@ -762,10 +766,11 @@ apiRouter.post(
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().default(false),
+        department_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8) RETURNING *`,
+      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [
         body.name.trim(),
         body.description ?? "",
@@ -774,6 +779,7 @@ apiRouter.post(
         body.pre_salutation ?? null,
         body.post_salutation ?? null,
         body.allow_attachments,
+        body.department_id ?? null,
         req.auth!.userId,
       ],
     );
@@ -814,6 +820,7 @@ apiRouter.patch(
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().optional(),
+        department_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -846,6 +853,10 @@ apiRouter.patch(
     if (body.allow_attachments !== undefined) {
       parts.push(`allow_attachments = $${n++}`);
       vals.push(body.allow_attachments);
+    }
+    if (body.department_id !== undefined) {
+      parts.push(`department_id = $${n++}`);
+      vals.push(body.department_id);
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -2234,6 +2245,28 @@ apiRouter.post(
 
     const body = createRequestBody.parse(req.body);
     const uid = req.auth!.userId;
+
+    const { rows: typeRows } = await pool.query(
+      `SELECT department_id FROM approval_types WHERE id = $1`,
+      [body.approval_type_id],
+    );
+    if (typeRows.length === 0) {
+      throw new HttpError(404, "Approval type not found");
+    }
+
+    const typeDeptId = typeRows[0].department_id as string | null;
+    const selectedDeptId =
+      body.department_id ?? req.profile?.department_id ?? null;
+
+    if (typeDeptId && selectedDeptId && typeDeptId !== selectedDeptId) {
+      throw new HttpError(
+        400,
+        "Department mismatch: approval type is restricted to its own department",
+      );
+    }
+
+    const requestDeptId = selectedDeptId ?? typeDeptId ?? null;
+
     const { rows } = await pool.query(
       `INSERT INTO approval_requests (
         approval_type_id, approval_chain_id, initiator_id, department_id,
@@ -2244,7 +2277,7 @@ apiRouter.post(
         body.approval_type_id,
         body.approval_chain_id ?? null,
         uid,
-        body.department_id ?? null,
+        requestDeptId,
         JSON.stringify(body.form_data),
         body.current_step,
         body.total_steps,

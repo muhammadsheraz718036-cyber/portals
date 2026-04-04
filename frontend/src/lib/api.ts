@@ -158,12 +158,19 @@ export const api = {
   },
 
   approvalTypes: {
-    list: () => request<unknown[]>("/api/approval-types"),
+    list: (departmentId?: string) =>
+      request<unknown[]>(
+        `/api/approval-types${departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : ""}`,
+      ),
     create: (body: {
       name: string;
       description?: string;
       fields: unknown[];
       page_layout?: string;
+      pre_salutation?: string | null;
+      post_salutation?: string | null;
+      allow_attachments?: boolean;
+      department_id?: string | null;
     }) =>
       request("/api/approval-types", {
         method: "POST",
@@ -176,6 +183,10 @@ export const api = {
         description?: string;
         fields?: unknown[];
         page_layout?: string;
+        pre_salutation?: string | null;
+        post_salutation?: string | null;
+        allow_attachments?: boolean;
+        department_id?: string | null;
       },
     ) =>
       request(`/api/approval-types/${id}`, {

@@ -10,3 +10,4 @@ export * from "./useAdmin";
 export * from "./useCompany";
 export * from "./useAudit";
 export * from "./useRequestAttachments";
+export { useDepartmentsForUsers } from "./useDepartments";

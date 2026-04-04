@@ -11,6 +11,7 @@ export interface AuthedRequest extends Request {
     is_admin: boolean;
     full_name: string;
     email: string;
+    department_id: string | null;
     role_id: string | null;
     permissions: string[];
   };
@@ -28,10 +29,11 @@ async function loadProfile(userId: string) {
     is_admin: boolean;
     full_name: string;
     email: string;
+    department_id: string | null;
     role_id: string | null;
     permissions: string[];
   }>(
-    `SELECT p.id, p.is_admin, p.full_name, p.email, p.role_id, COALESCE(r.permissions, '{}') as permissions
+    `SELECT p.id, p.is_admin, p.full_name, p.email, p.department_id, p.role_id, COALESCE(r.permissions, '{}') as permissions
      FROM profiles p
      LEFT JOIN roles r ON p.role_id = r.id
      WHERE p.id = $1`,

@@ -18,6 +18,18 @@ export const useDepartments = () => {
   });
 };
 
+// Hook for regular users to get departments (no management permissions required)
+export const useDepartmentsForUsers = () => {
+  const { user } = useAuth();
+  
+  return useQuery({
+    queryKey: ['departments', 'user'],
+    queryFn: () => services.departments.list(),
+    enabled: !!user, // Only enabled if user is authenticated
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+};
+
 export const useDepartment = (id: string) => {
   const { hasPermission } = useAuth();
   

@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS approval_types (
   page_layout VARCHAR(20) DEFAULT 'portrait',
   pre_salutation TEXT,
   post_salutation TEXT,
+  department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

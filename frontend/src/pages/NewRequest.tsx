@@ -12,12 +12,13 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { 
-  useApprovalTypes, 
-  useApprovalChains, 
+import {
+  useApprovalTypes,
+  useApprovalChains,
   useCreateApprovalRequest,
   useApprovalTypeAttachments,
-  useUploadRequestAttachments
+  useUploadRequestAttachments,
+  useDepartmentsForUsers,
 } from "@/hooks/services";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
@@ -38,21 +39,28 @@ export default function NewRequest() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const { settings } = useCompany();
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>("all");
   const [selectedType, setSelectedType] = useState<string>("");
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [items, setItems] = useState<LineItem[]>([]);
   const [preComments, setPreComments] = useState<string>("");
   const [postComments, setPostComments] = useState<string>("");
-  const [attachmentFiles, setAttachmentFiles] = useState<Record<string, File[]>>({});
+  const [attachmentFiles, setAttachmentFiles] = useState<
+    Record<string, File[]>
+  >({});
 
   // React Query hooks
-  const { data: types = [], isLoading: loading } = useApprovalTypes();
+  const { data: departments = [] } = useDepartmentsForUsers();
+  const { data: types = [], isLoading: loading } = useApprovalTypes(
+    selectedDepartment === "all" ? undefined : selectedDepartment,
+  );
   const { data: chains = [] } = useApprovalChains();
   const createMutation = useCreateApprovalRequest();
   const uploadMutation = useUploadRequestAttachments();
-  
+
   // Get attachment configurations for selected type
-  const { data: attachmentConfigs = [] } = useApprovalTypeAttachments(selectedType);
+  const { data: attachmentConfigs = [] } =
+    useApprovalTypeAttachments(selectedType);
 
   useEffect(() => {
     const approvalType = types.find((t) => t.id === selectedType);
@@ -63,8 +71,21 @@ export default function NewRequest() {
   }, [selectedType, types]);
 
   const approvalType = types.find((t) => t.id === selectedType);
-  const chainList = selectedType ? chains.filter((c) => c.approval_type_id === selectedType) : [];
+  const chainList = selectedType
+    ? chains.filter((c) => c.approval_type_id === selectedType)
+    : [];
   const chain = chainList[0];
+
+  useEffect(() => {
+    // Initialize to user's department if available, otherwise keep "all"
+    if (selectedDepartment === "all" && profile?.department_id) {
+      setSelectedDepartment(profile.department_id);
+    }
+  }, [profile, selectedDepartment]);
+
+  useEffect(() => {
+    setSelectedType("");
+  }, [selectedDepartment]);
   const safePreComments = preComments ? sanitizeHtml(preComments) : "";
   const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
@@ -89,7 +110,9 @@ export default function NewRequest() {
         return;
       }
       if (files.length > config.max_files) {
-        toast.error(`${config.label}: Maximum ${config.max_files} files allowed`);
+        toast.error(
+          `${config.label}: Maximum ${config.max_files} files allowed`,
+        );
         return;
       }
     }
@@ -124,10 +147,18 @@ export default function NewRequest() {
     const totalSteps = steps.length;
 
     try {
+      const selectedDept = selectedDepartment === "all" 
+        ? (profile?.department_id ?? null) 
+        : selectedDepartment;
+      if (!selectedDept) {
+        toast.error("Select a department");
+        return;
+      }
+
       const requestData = await createMutation.mutateAsync({
         approval_type_id: selectedType,
         approval_chain_id: chain.id,
-        department_id: profile?.department_id ?? null,
+        department_id: selectedDept,
         form_data: {
           ...formValues,
           items: items,
@@ -149,7 +180,7 @@ export default function NewRequest() {
               requestId: requestData.id,
               fieldName: config.field_name,
               files,
-            })
+            }),
           );
         }
       }
@@ -197,6 +228,29 @@ export default function NewRequest() {
             <CardTitle className="text-base">Select Request Type</CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="pb-4">
+              <p className="text-sm font-medium text-foreground mb-2">
+                Select Department
+              </p>
+              <Select
+                value={selectedDepartment ?? "all"}
+                onValueChange={(v) => {
+                  setSelectedDepartment(v === "all" ? null : v);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose department..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.id}>
+                      {dept.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <Select
               value={selectedType}
               onValueChange={(v) => {
@@ -302,10 +356,10 @@ export default function NewRequest() {
                       maxSizeMB={config.max_file_size_mb}
                       allowedExtensions={config.allowed_extensions}
                       value={attachmentFiles[config.field_name] || []}
-                      onChange={(files) => 
-                        setAttachmentFiles(prev => ({
+                      onChange={(files) =>
+                        setAttachmentFiles((prev) => ({
                           ...prev,
-                          [config.field_name]: files
+                          [config.field_name]: files,
                         }))
                       }
                     />
@@ -427,7 +481,9 @@ export default function NewRequest() {
                               fontSize: "14px",
                               fontFamily: "Arial, sans-serif",
                             }}
-                            dangerouslySetInnerHTML={{ __html: safePreComments }}
+                            dangerouslySetInnerHTML={{
+                              __html: safePreComments,
+                            }}
                           />
                         ) : null}
 
@@ -457,10 +513,7 @@ export default function NewRequest() {
                                 if (groupFields.length === 0) return null;
 
                                 return (
-                                  <div
-                                    key={group}
-                                    className="p-3"
-                                  >
+                                  <div key={group} className="p-3">
                                     <h3 className="text-sm font-semibold mb-2">
                                       {group}
                                     </h3>
@@ -530,7 +583,9 @@ export default function NewRequest() {
                               fontFamily: "Arial, sans-serif",
                               marginTop: "1rem",
                             }}
-                            dangerouslySetInnerHTML={{ __html: safePostComments }}
+                            dangerouslySetInnerHTML={{
+                              __html: safePostComments,
+                            }}
                           />
                         ) : null}
                       </div>
