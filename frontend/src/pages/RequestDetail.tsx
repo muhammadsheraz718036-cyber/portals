@@ -193,6 +193,7 @@ export default function RequestDetail() {
 
   const [initiatorName, setInitiatorName] = useState("");
   const [initiatorRole, setInitiatorRole] = useState("");
+  const [initiatorDepartment, setInitiatorDepartment] = useState("");
 
   useEffect(() => {
     if (request?.initiator?.full_name) {
@@ -200,6 +201,9 @@ export default function RequestDetail() {
     }
     if (initiatorProfile?.role_name) {
       setInitiatorRole(initiatorProfile.role_name);
+    }
+    if (initiatorProfile?.department_name) {
+      setInitiatorDepartment(initiatorProfile.department_name);
     }
   }, [request, initiatorProfile]);
 
@@ -347,6 +351,9 @@ export default function RequestDetail() {
       });
       setShowRequestChangesDialog(false);
       setChangesComment("");
+      toast.success("Changes requested. The request has been sent back to the initiator for updates.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to request changes");
     } finally {
       setActioning(false);
     }
@@ -372,7 +379,7 @@ export default function RequestDetail() {
       });
       setShowUpdateForm(false);
       setUpdatingFormData({});
-      toast.success("Request updated and resubmitted successfully");
+      toast.success("Request updated and resubmitted successfully. It is now active for approval again.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update request");
     } finally {
@@ -431,13 +438,14 @@ export default function RequestDetail() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  // Check if user can approve: they must have the role of at least one pending action
+  // Check if user can approve: they must be the current approver for the current step
   const canApprove = () => {
     if (
       !request ||
       !user ||
       !profile ||
-      !["in_progress", "pending"].includes(request.status)
+      !["in_progress", "pending"].includes(request.status) ||
+      request.status === "changes_requested"
     ) {
       return false;
     }
@@ -447,25 +455,31 @@ export default function RequestDetail() {
       return false;
     }
 
-    const pendingActions = actions.filter((a) =>
+    // Find the current pending action for the current step
+    const currentStepActions = actions.filter(
+      (a) => a.step_order === request.current_step
+    );
+    
+    const pendingActions = currentStepActions.filter((a) =>
       ["pending", "waiting"].includes(a.status),
     );
+    
     if (pendingActions.length === 0) {
       return false;
     }
 
-    if (
-      !profile.is_admin &&
-      !pendingActions.some((a) => profile.role_name === a.role_name)
-    ) {
-      return false;
-    }
+    // Check if user has the required role for any pending action
+    const canAct = pendingActions.some((a) => {
+      // Admin can act on any step
+      if (profile.is_admin) {
+        return true;
+      }
+      
+      // Check if user's role matches the action's role
+      return profile.role_name === a.role_name;
+    });
 
-    // Do not block on prior acted_by: the same approver may act again after
-    // "request changes" → resubmit (new pending row), or the same role may
-    // appear on multiple steps. The API enforces the current pending step + role.
-
-    if (!profile.role_id) {
+    if (!canAct) {
       return false;
     }
 
@@ -599,7 +613,7 @@ export default function RequestDetail() {
                     Department
                   </p>
                   <p className="font-medium">
-                    {request.departments?.name ?? "—"}
+                    {initiatorDepartment ?? "—"}
                   </p>
                 </div>
                 <div>
@@ -977,7 +991,7 @@ export default function RequestDetail() {
                           className="text-muted-foreground"
                           style={{ fontSize: "13px" }}
                         >
-                          {request.departments?.name ?? ""}
+                          {initiatorDepartment || ""}
                         </p>
                         <p
                           className="text-muted-foreground"
@@ -1064,12 +1078,34 @@ export default function RequestDetail() {
                         )}
                       </div>
                       <div className="pb-6">
-                        <p className="text-sm font-medium">
-                          Step {step.step_order}: {step.role_name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {step.action_label}
-                        </p>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium">
+                              Step {step.step_order}: {step.role_name}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {step.action_label}
+                            </p>
+                          </div>
+                          {/* Show "Your Turn" indicator if it's the current step and user can act */}
+                          {request && 
+                           step.step_order === request.current_step && 
+                           ["pending", "waiting"].includes(step.status) &&
+                           canApprove() && (
+                            <span className="px-2 py-1 text-xs font-medium bg-primary/10 text-primary border border-primary/20 rounded-full">
+                              Your Turn
+                            </span>
+                          )}
+                          {/* Show "Current Step" indicator if it's the current step but not user's turn */}
+                          {request && 
+                           step.step_order === request.current_step && 
+                           ["pending", "waiting"].includes(step.status) &&
+                           !canApprove() && (
+                            <span className="px-2 py-1 text-xs font-medium bg-muted text-muted-foreground border border-muted rounded-full">
+                              Current Step
+                            </span>
+                          )}
+                        </div>
                         {step.acted_by && (
                           <p className="text-xs text-muted-foreground">
                             By: {actorNames[step.acted_by] ?? "—"}
@@ -1147,6 +1183,14 @@ export default function RequestDetail() {
 
               {shouldShowButtons && (
                 <div className="mt-4 pt-4 border-t space-y-2">
+                  {request.status === "changes_requested" && (
+                    <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-sm text-amber-800">
+                        <strong>Changes Requested:</strong> This request has been sent back to the initiator for updates. 
+                        No approval actions can be taken until the request is updated and resubmitted.
+                      </p>
+                    </div>
+                  )}
                   <Button
                     onClick={handleApprove}
                     disabled={actioning}

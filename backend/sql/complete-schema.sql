@@ -1,7 +1,12 @@
--- Approval Central — standalone Postgres schema (no Supabase auth schema)
--- Apply to an empty database: psql $DATABASE_URL -f sql/schema.sql
+-- Approval Central — Complete Database Schema (Consolidated)
+-- This file contains the base schema plus all migrations
+-- Apply to an empty database: psql $DATABASE_URL -f sql/complete-schema.sql
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- ===============================
+-- BASE TABLES
+-- ===============================
 
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -53,6 +58,7 @@ CREATE TABLE IF NOT EXISTS approval_types (
   pre_salutation TEXT,
   post_salutation TEXT,
   department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
+  allow_attachments BOOLEAN NOT NULL DEFAULT false,
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -79,6 +85,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   current_step INTEGER NOT NULL DEFAULT 1,
   total_steps INTEGER NOT NULL DEFAULT 1,
   form_data JSONB NOT NULL DEFAULT '{}',
+  has_attachments BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -112,19 +119,64 @@ CREATE TABLE IF NOT EXISTS company_settings (
   logo_url TEXT,
   phone_number TEXT,
   landline_number TEXT,
+  contact_department TEXT DEFAULT 'MIS Department',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by UUID REFERENCES users(id) ON DELETE SET NULL
 );
 
+-- ===============================
+-- FILE ATTACHMENTS (Migration: add-file-attachments.sql)
+-- ===============================
+
+CREATE TABLE IF NOT EXISTS approval_type_attachments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  approval_type_id UUID NOT NULL REFERENCES approval_types(id) ON DELETE CASCADE,
+  field_name TEXT NOT NULL,
+  label TEXT NOT NULL,
+  required BOOLEAN NOT NULL DEFAULT false,
+  max_file_size_mb INTEGER NOT NULL DEFAULT 10,
+  allowed_extensions TEXT[] DEFAULT '{pdf,doc,docx,xls,xlsx,jpg,jpeg,png}',
+  max_files INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS request_attachments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  approval_type_attachment_id UUID NOT NULL REFERENCES approval_type_attachments(id) ON DELETE CASCADE,
+  field_name TEXT NOT NULL,
+  original_filename TEXT NOT NULL,
+  stored_filename TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  file_size_bytes BIGINT NOT NULL,
+  mime_type TEXT NOT NULL,
+  uploaded_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ===============================
+-- INDEXES
+-- ===============================
+
 CREATE INDEX IF NOT EXISTS idx_profiles_department ON profiles(department_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
+CREATE INDEX IF NOT EXISTS idx_profiles_is_locked ON profiles(is_locked) WHERE is_locked = true;
 CREATE INDEX IF NOT EXISTS idx_approval_requests_initiator ON approval_requests(initiator_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_type ON approval_requests(approval_type_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_chain ON approval_requests(approval_chain_id);
 CREATE INDEX IF NOT EXISTS idx_approval_actions_request ON approval_actions(request_id);
 CREATE INDEX IF NOT EXISTS idx_approval_chains_type ON approval_chains(approval_type_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approval_types_department_id ON approval_types(department_id);
+CREATE INDEX IF NOT EXISTS idx_approval_type_attachments_type ON approval_type_attachments(approval_type_id);
+CREATE INDEX IF NOT EXISTS idx_request_attachments_request ON request_attachments(request_id);
+CREATE INDEX IF NOT EXISTS idx_request_attachments_field ON request_attachments(request_id, field_name);
+
+-- ===============================
+-- FUNCTIONS AND TRIGGERS
+-- ===============================
 
 CREATE OR REPLACE FUNCTION generate_request_number()
 RETURNS TRIGGER
@@ -227,6 +279,91 @@ CREATE TRIGGER trg_create_approval_actions
   FOR EACH ROW
   EXECUTE PROCEDURE create_approval_actions_for_request();
 
+-- ===============================
+-- INITIAL DATA
+-- ===============================
+
 INSERT INTO company_settings (company_name)
 SELECT 'ApprovalHub'
 WHERE NOT EXISTS (SELECT 1 FROM company_settings LIMIT 1);
+
+-- ===============================
+-- MIGRATION LOG
+-- ===============================
+
+CREATE TABLE IF NOT EXISTS migration_log (
+    id SERIAL PRIMARY KEY,
+    migration_name VARCHAR(255) NOT NULL,
+    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(migration_name)
+);
+
+-- Record that this consolidated schema has been applied
+INSERT INTO migration_log (migration_name) 
+VALUES ('consolidated-schema-2024-04-06') 
+ON CONFLICT (migration_name) DO NOTHING;
+
+-- ===============================
+-- VERIFICATION QUERIES
+-- ===============================
+
+-- Verify all tables exist
+DO $$
+DECLARE
+    table_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO table_count
+    FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_type = 'BASE TABLE'
+    AND table_name IN (
+        'users', 'departments', 'roles', 'profiles', 'approval_types', 
+        'approval_chains', 'approval_requests', 'approval_actions', 
+        'audit_logs', 'company_settings', 'approval_type_attachments', 
+        'request_attachments', 'migration_log'
+    );
+    
+    IF table_count = 13 THEN
+        RAISE NOTICE '✓ All 13 tables created successfully';
+    ELSE
+        RAISE NOTICE '✗ Expected 13 tables, found %', table_count;
+    END IF;
+END $$;
+
+-- Verify all indexes exist
+DO $$
+DECLARE
+    index_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO index_count
+    FROM pg_indexes 
+    WHERE schemaname = 'public'
+    AND indexname LIKE 'idx_%';
+    
+    IF index_count >= 15 THEN
+        RAISE NOTICE '✓ All indexes created successfully';
+    ELSE
+        RAISE NOTICE '✗ Expected at least 15 indexes, found %', index_count;
+    END IF;
+END $$;
+
+-- Verify constraints exist
+DO $$
+DECLARE
+    constraint_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO constraint_count
+    FROM information_schema.check_constraints 
+    WHERE constraint_name IN ('approval_requests_status_check', 'approval_actions_status_check');
+    
+    IF constraint_count = 2 THEN
+        RAISE NOTICE '✓ All check constraints created successfully';
+    ELSE
+        RAISE NOTICE '✗ Expected 2 check constraints, found %', constraint_count;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    RAISE NOTICE '🎉 Complete schema setup finished!';
+END $$;

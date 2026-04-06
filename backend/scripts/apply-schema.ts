@@ -15,12 +15,13 @@ if (!url) {
   process.exit(1);
 }
 
-const sql = readFileSync(join(__dirname, "../sql/schema.sql"), "utf8");
+const sql = readFileSync(join(__dirname, "../sql/complete-schema.sql"), "utf8");
 const client = new pg.Client({ connectionString: url });
 await client.connect();
 try {
   await client.query(sql);
-  console.log("Schema applied.");
+  console.log("✅ Complete schema applied successfully!");
+  console.log("📊 All tables, indexes, constraints, and initial data created.");
 } finally {
   await client.end();
 }

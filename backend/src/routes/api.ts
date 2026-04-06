@@ -2392,18 +2392,25 @@ apiRouter.post(
       ["pending", "waiting"].includes(a.status),
     );
     let newStatus = request.status;
+    let newCurrentStep = request.current_step;
+    
     if (remainingPending.length === 0) {
       // All steps approved
       newStatus = "approved";
     } else {
-      // Still pending approvals
+      // Still pending approvals - check if we need to advance to next step
+      // Find the next step with pending actions
+      const nextPendingStep = Math.min(...remainingPending.map((a: any) => a.step_order));
+      if (nextPendingStep > request.current_step) {
+        newCurrentStep = nextPendingStep;
+      }
       newStatus = "in_progress";
     }
 
-    // Update the request status
+    // Update the request status and current_step
     await pool.query(
-      `UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`,
-      [newStatus, requestId],
+      `UPDATE approval_requests SET status = $1, current_step = $2, updated_at = now() WHERE id = $3`,
+      [newStatus, newCurrentStep, requestId],
     );
 
     // Return updated request
@@ -2625,10 +2632,12 @@ apiRouter.post(
       [userId, body.comment || null, currentAction.id],
     );
 
-    // Mark remaining pending/waiting actions as changes_requested
+    // For sequential approval: only mark actions in the same step as changes_requested
+    // For parallel approval: only mark actions in the same step as changes_requested
     await pool.query(
-      `UPDATE approval_actions SET status = 'changes_requested' WHERE request_id = $1 AND status IN ('pending', 'waiting')`,
-      [requestId],
+      `UPDATE approval_actions SET status = 'changes_requested' 
+       WHERE request_id = $1 AND step_order = $2 AND status IN ('pending', 'waiting')`,
+      [requestId, currentAction.step_order],
     );
 
     // Update request status to changes_requested
@@ -2767,27 +2776,40 @@ apiRouter.patch(
 
         const chainSteps = chainData[0].steps as any[];
 
+        // Only recreate actions from the current step onwards, not from the beginning
         for (let i = 0; i < chainSteps.length; i++) {
           const step = chainSteps[i];
           const stepRoleName = step.roleName || step.role_name || "";
+          const stepOrder = i + 1;
+
+          // Skip steps that were already completed (before current step)
+          if (stepOrder < changedStepOrder) {
+            continue;
+          }
 
           // Skip if this step's role matches the initiator's role
           if (stepRoleName === initiatorRoleName) {
             await pool.query(
               `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
                VALUES ($1, $2, $3, $4, 'skipped')`,
-              [requestId, i + 1, stepRoleName, step.action || "Review"],
+              [requestId, stepOrder, stepRoleName, step.action || "Review"],
             );
             continue;
           }
 
-          // Parallel approval: all non-skipped steps are pending
+          // For the current step and future steps, create pending actions
           await pool.query(
             `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
              VALUES ($1, $2, $3, $4, 'pending')`,
-            [requestId, i + 1, stepRoleName, step.action || "Review"],
+            [requestId, stepOrder, stepRoleName, step.action || "Review"],
           );
         }
+
+        // Update the request's current_step to point back to the step where changes were requested
+        await pool.query(
+          `UPDATE approval_requests SET current_step = $1, updated_at = now() WHERE id = $2`,
+          [changedStepOrder, requestId],
+        );
       }
 
       const { rows: updatedActions } = await pool.query(
