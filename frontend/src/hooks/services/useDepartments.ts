@@ -103,3 +103,57 @@ export const useDeleteDepartment = () => {
     },
   });
 };
+
+// Department Managers
+export const useDepartmentManagers = (departmentId: string) => {
+  const { hasPermission } = useAuth();
+  
+  return useQuery({
+    queryKey: ['departments', departmentId, 'managers'],
+    queryFn: () => services.departments.getManagers(departmentId),
+    enabled: !!departmentId && hasPermission('manage_departments'),
+    staleTime: 2 * 60 * 1000, // 2 minutes
+  });
+};
+
+export const useAddDepartmentManager = () => {
+  const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  
+  return useMutation({
+    mutationFn: ({ departmentId, userId }: { departmentId: string; userId: string }) => {
+      if (!hasPermission('manage_departments')) {
+        throw new Error('You do not have permission to manage departments');
+      }
+      return services.departments.addManager(departmentId, userId);
+    },
+    onSuccess: (_, { departmentId }) => {
+      queryClient.invalidateQueries({ queryKey: ['departments', departmentId, 'managers'] });
+      toast.success('Manager assigned successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to assign manager');
+    },
+  });
+};
+
+export const useRemoveDepartmentManager = () => {
+  const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  
+  return useMutation({
+    mutationFn: ({ departmentId, userId }: { departmentId: string; userId: string }) => {
+      if (!hasPermission('manage_departments')) {
+        throw new Error('You do not have permission to manage departments');
+      }
+      return services.departments.removeManager(departmentId, userId);
+    },
+    onSuccess: (_, { departmentId }) => {
+      queryClient.invalidateQueries({ queryKey: ['departments', departmentId, 'managers'] });
+      toast.success('Manager removed successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to remove manager');
+    },
+  });
+};

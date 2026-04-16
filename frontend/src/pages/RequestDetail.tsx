@@ -171,6 +171,13 @@ export default function RequestDetail() {
     isLoading: loading,
     error: notFound,
   } = useApprovalRequest(id || "");
+  
+  // Debug logging
+  useEffect(() => {
+    console.log("RequestDetail: URL id changed to", id);
+    console.log("RequestDetail: requestData?.request?.id =", requestData?.request?.id);
+  }, [id, requestData?.request?.id]);
+  
   const downloadMutation = useDownloadAttachment();
   const deleteMutation = useDeleteRequestAttachment();
 

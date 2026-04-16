@@ -41,4 +41,22 @@ export class DepartmentService extends BaseService {
       await api.departments.delete(id);
     });
   }
+
+  async getManagers(departmentId: string): Promise<any[]> {
+    return this.handleRequest(() => 
+      api.departments.getManagers(departmentId) as Promise<any[]>
+    );
+  }
+
+  async addManager(departmentId: string, userId: string): Promise<{ success: boolean }> {
+    return this.handleRequest(() => 
+      api.departments.addManager(departmentId, userId) as Promise<{ success: boolean }>
+    );
+  }
+
+  async removeManager(departmentId: string, userId: string): Promise<{ success: boolean }> {
+    return this.handleRequest(() => 
+      api.departments.removeManager(departmentId, userId) as Promise<{ success: boolean }>
+    );
+  }
 }

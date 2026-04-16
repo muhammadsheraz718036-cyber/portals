@@ -5,6 +5,7 @@ export interface RequestVisibilityFilter {
   include_initiated?: boolean;
   include_assigned?: boolean;
   include_previously_acted_on?: boolean;
+  include_department_managed?: boolean;
   status?: string;
   department_id?: string;
   page?: number;
@@ -27,6 +28,7 @@ export class RequestVisibilityService {
    * 1. Requests they created
    * 2. Requests assigned to them (request_steps.assigned_to)
    * 3. (Optional) Requests they previously acted on
+   * 4. (Optional) Requests from departments they manage
    */
   async getVisibleRequests(filter: RequestVisibilityFilter): Promise<RequestVisibilityResult> {
     const {
@@ -34,6 +36,7 @@ export class RequestVisibilityService {
       include_initiated = true,
       include_assigned = true,
       include_previously_acted_on = true,
+      include_department_managed = true,
       status,
       department_id,
       page = 1,
@@ -42,7 +45,8 @@ export class RequestVisibilityService {
 
     const offset = (page - 1) * limit;
 
-    // Build visibility conditions - NO role-based or department-wide visibility
+    // Build visibility conditions - NO role-based department-wide visibility
+    // Only department managers (via department_managers table) can see all requests from their department
     const visibilityConditions: string[] = [];
     const queryParams: any[] = [user_id];
     let paramIndex = 2;
@@ -68,6 +72,31 @@ export class RequestVisibilityService {
           SELECT 1 FROM request_steps rs 
           WHERE rs.request_id = ar.id 
           AND rs.acted_by = $1
+        )
+      `);
+    }
+
+    if (include_department_managed) {
+      visibilityConditions.push(`
+        (
+          ar.department_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM department_managers dm 
+            WHERE dm.department_id = ar.department_id 
+            AND dm.user_id = $1 
+            AND dm.is_active = true
+          )
+        )
+        OR
+        (
+          EXISTS (
+            SELECT 1 FROM profiles p
+            WHERE p.id = ar.initiator_id
+            AND p.department_id IN (
+              SELECT department_id FROM department_managers
+              WHERE user_id = $1 AND is_active = true
+            )
+          )
         )
       `);
     }
@@ -99,7 +128,7 @@ export class RequestVisibilityService {
 
     // Get total count
     const countQuery = `
-      SELECT COUNT(*) as total 
+      SELECT COUNT(DISTINCT ar.id) as total 
       FROM approval_requests ar 
       WHERE ${whereClause}${additionalWhere}
     `;
@@ -172,7 +201,7 @@ export class RequestVisibilityService {
    */
   async canAccessRequest(userId: string, requestId: string): Promise<{
     can_access: boolean;
-    access_reason: 'initiator' | 'assigned' | 'acted_on' | 'none';
+    access_reason: 'initiator' | 'assigned' | 'acted_on' | 'department_manager' | 'none';
   }> {
     const { rows } = await pool.query(
       `
@@ -190,6 +219,15 @@ export class RequestVisibilityService {
             WHERE rs.request_id = ar.id 
             AND rs.acted_by = $1
           ) THEN 'acted_on'
+          WHEN (
+            ar.department_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM department_managers dm
+              WHERE dm.department_id = ar.department_id
+              AND dm.user_id = $1
+              AND dm.is_active = true
+            )
+          ) THEN 'department_manager'
           ELSE 'none'
         END as access_reason
       FROM approval_requests ar
@@ -215,7 +253,7 @@ export class RequestVisibilityService {
   async getRequestWithAccess(userId: string, requestId: string): Promise<{
     request: any;
     can_access: boolean;
-    access_reason: 'initiator' | 'assigned' | 'acted_on' | 'none';
+    access_reason: 'initiator' | 'assigned' | 'acted_on' | 'department_manager' | 'none';
   }> {
     const accessCheck = await this.canAccessRequest(userId, requestId);
 

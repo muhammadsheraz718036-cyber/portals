@@ -47,7 +47,7 @@ export class CompatibleApproversResolver {
         success: result.success,
         approvers: result.approvers,
         warnings: result.warnings,
-        used_legacy_logic: result.used_legacy_logic,
+        used_legacy_logic: result.usedLegacyLogic,
         error: result.error
       };
 

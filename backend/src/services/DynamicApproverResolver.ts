@@ -1,5 +1,28 @@
 import { pool } from '../db.js';
-import { User, RequestStep, WorkflowRequest } from '../types.js';
+
+// Type definitions (moved inline)
+export interface User {
+  id: string;
+  email: string;
+  full_name: string;
+  department_id?: string | null;
+  role_id?: string | null;
+  manager_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface RequestStep {
+  id: string;
+  request_id: string;
+  step_id?: string;
+  status: string;
+}
+
+export interface WorkflowRequest {
+  id: string;
+  status: string;
+  department_id?: string;
+}
 
 export interface ApproverResolution {
   success: boolean;
@@ -60,9 +83,9 @@ export class DynamicApproverResolver {
       // Resolve approvers based on actor type
       const result = await this.resolveByActorType(
         stepDetails.actor_type,
-        stepDetails.actor_value,
-        requestDetails.department_id,
-        requestDetails.initiator_id
+        stepDetails.actor_value || null,
+        requestDetails.department_id || null,
+        requestDetails.initiator_id || null
       );
 
       return result;

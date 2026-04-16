@@ -33,6 +33,13 @@ export class RefactoredApprovalService {
   constructor(private approverResolver: DynamicApproverResolver) {}
 
   /**
+   * Get the approver resolver (public accessor)
+   */
+  getApproverResolver(): DynamicApproverResolver {
+    return this.approverResolver;
+  }
+
+  /**
    * Create a new approval request with dynamic approver resolution
    */
   async createRequest(userId: string, data: RequestCreationData): Promise<any> {
@@ -231,9 +238,21 @@ export class RefactoredApprovalService {
 
       // Apply visibility rules
       if (!hasManageApprovals) {
-        // Non-admin users can only see requests from their department
-        whereClause += ` AND (ar.department_id = $${paramIndex++} OR ar.initiator_id = $${paramIndex++})`;
+        // Non-admin users can see:
+        // 1. Requests assigned to their department
+        // 2. Requests they initiated
+        // 3. Requests initiated by someone in their department (for department managers)
+        whereClause += ` AND (
+          ar.department_id = $${paramIndex} 
+          OR ar.initiator_id = $${paramIndex + 1}
+          OR EXISTS (
+            SELECT 1 FROM profiles p 
+            WHERE p.id = ar.initiator_id 
+            AND p.department_id = $${paramIndex}
+          )
+        )`;
         queryParams.push(user.department_id, userId);
+        paramIndex += 2;
       }
 
       // Apply filters

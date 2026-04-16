@@ -7,8 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "db:schema": "tsx scripts/apply-schema.ts",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:schema": "tsx scripts/apply-schema.ts"
   },
   "dependencies": {
     "@types/multer": "^2.1.0",

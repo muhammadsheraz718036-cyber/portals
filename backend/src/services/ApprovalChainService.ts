@@ -405,7 +405,7 @@ export class ApprovalChainService {
 
       await client.query('COMMIT');
 
-      return { success: true, migrated_steps };
+      return { success: true, migrated_steps: migratedSteps };
 
     } catch (error) {
       await client.query('ROLLBACK');

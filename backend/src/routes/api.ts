@@ -407,12 +407,11 @@ apiRouter.post(
     const body = z
       .object({
         name: z.string().min(1),
-        head_name: z.string().nullable().optional(),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO departments (name, head_name) VALUES ($1, $2) RETURNING *`,
-      [body.name.trim(), body.head_name ?? null],
+      `INSERT INTO departments (name) VALUES ($1) RETURNING *`,
+      [body.name.trim()],
     );
 
     // Log audit event
@@ -444,7 +443,6 @@ apiRouter.patch(
     const body = z
       .object({
         name: z.string().min(1).optional(),
-        head_name: z.string().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -453,10 +451,6 @@ apiRouter.patch(
     if (body.name !== undefined) {
       parts.push(`name = $${n++}`);
       vals.push(body.name);
-    }
-    if (body.head_name !== undefined) {
-      parts.push(`head_name = $${n++}`);
-      vals.push(body.head_name);
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -470,8 +464,6 @@ apiRouter.patch(
     // Log audit event
     const changes: string[] = [];
     if (body.name !== undefined) changes.push(`name: "${body.name}"`);
-    if (body.head_name !== undefined)
-      changes.push(`head_name: "${body.head_name}"`);
 
     await logAudit(
       req.auth!.userId,
@@ -521,6 +513,139 @@ apiRouter.delete(
     );
 
     res.status(204).end();
+  }),
+);
+
+// Department Managers
+apiRouter.get(
+  "/admin/departments/:departmentId/managers",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_departments") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const { rows } = await pool.query(
+      `SELECT dm.id, dm.user_id, p.full_name, p.email, dm.is_active, dm.assigned_at
+       FROM department_managers dm
+       JOIN profiles p ON p.id = dm.user_id
+       WHERE dm.department_id = $1
+       ORDER BY dm.assigned_at DESC`,
+      [req.params.departmentId],
+    );
+
+    res.json(rows);
+  }),
+);
+
+apiRouter.post(
+  "/admin/departments/:departmentId/managers",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_departments") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const body = z.object({
+      user_id: z.string().uuid(),
+    }).parse(req.body);
+
+    // Check if department exists
+    const deptCheck = await pool.query(
+      "SELECT id, name FROM departments WHERE id = $1",
+      [req.params.departmentId],
+    );
+    if (deptCheck.rowCount === 0) {
+      throw new HttpError(404, "Department not found");
+    }
+    const deptName = deptCheck.rows[0].name;
+
+    // Check if user exists
+    const userCheck = await pool.query(
+      "SELECT id, full_name FROM profiles WHERE id = $1",
+      [body.user_id],
+    );
+    if (userCheck.rowCount === 0) {
+      throw new HttpError(404, "User not found");
+    }
+    const userName = userCheck.rows[0].full_name;
+
+    // Assign as department manager
+    await pool.query(
+      `INSERT INTO department_managers (department_id, user_id, assigned_by, is_active) 
+       VALUES ($1, $2, $3, true) 
+       ON CONFLICT (department_id, user_id) DO UPDATE SET is_active = true`,
+      [req.params.departmentId, body.user_id, req.auth!.userId],
+    );
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Department",
+      `Assigned ${userName} as manager of ${deptName}`,
+    );
+
+    res.json({ success: true });
+  }),
+);
+
+apiRouter.delete(
+  "/admin/departments/:departmentId/managers/:userId",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_departments") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    // Get info for audit
+    const deptRes = await pool.query(
+      "SELECT name FROM departments WHERE id = $1",
+      [req.params.departmentId],
+    );
+    const deptName = deptRes.rows[0]?.name || "Unknown";
+
+    const userRes = await pool.query(
+      "SELECT full_name FROM profiles WHERE id = $1",
+      [req.params.userId],
+    );
+    const userName = userRes.rows[0]?.full_name || "Unknown";
+
+    const result = await pool.query(
+      "DELETE FROM department_managers WHERE department_id = $1 AND user_id = $2",
+      [req.params.departmentId, req.params.userId],
+    );
+
+    if (result.rowCount === 0) {
+      throw new HttpError(404, "Department manager not found");
+    }
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "Department",
+      `Removed ${userName} as manager of ${deptName}`,
+    );
+
+    res.json({ success: true });
   }),
 );
 
@@ -1673,6 +1798,7 @@ const createUserBody = z.object({
   full_name: z.string().min(1),
   department_id: z.string().uuid().nullable().optional(),
   role_id: z.string().uuid().nullable().optional(),
+  role_ids: z.array(z.string().uuid()).optional(), // Support multiple roles on creation
   is_admin: z.boolean().optional(),
 });
 
@@ -1712,6 +1838,17 @@ apiRouter.post(
           body.is_admin ?? false,
         ],
       );
+
+      // Add multiple roles if provided
+      if (body.role_ids && body.role_ids.length > 0) {
+        for (const roleId of body.role_ids) {
+          await client.query(
+            "INSERT INTO user_roles (user_id, role_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            [id, roleId, req.auth!.userId],
+          );
+        }
+      }
+
       await client.query("COMMIT");
       const profile = await loadProfileById(id);
 
@@ -1794,6 +1931,7 @@ const updateUserBody = z.object({
   full_name: z.string().min(1).optional(),
   department_id: z.string().uuid().nullable().optional(),
   role_id: z.string().uuid().nullable().optional(),
+  role_ids: z.array(z.string().uuid()).optional(), // Support multiple roles
   is_admin: z.boolean().optional(),
   is_active: z.boolean().optional(),
   unlock_account: z.boolean().optional(),
@@ -1882,7 +2020,7 @@ apiRouter.patch(
       updates.push(`last_failed_login_at = null`);
     }
 
-    if (updates.length === 0) {
+    if (updates.length === 0 && !body.role_ids) {
       throw new HttpError(400, "No fields to update");
     }
 
@@ -1895,6 +2033,29 @@ apiRouter.patch(
 
     if (r.rowCount === 0) throw new HttpError(404, "User not found");
 
+    // Handle multiple roles if provided
+    if (body.role_ids !== undefined) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // Clear existing roles
+        await client.query("DELETE FROM user_roles WHERE user_id = $1", [req.params.userId]);
+        // Add new roles
+        for (const roleId of body.role_ids) {
+          await client.query(
+            "INSERT INTO user_roles (user_id, role_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            [req.params.userId, roleId, req.auth!.userId],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+
     // Log audit event
     const targetUser = r.rows[0];
     const changes: string[] = [];
@@ -1903,6 +2064,8 @@ apiRouter.patch(
     if (body.department_id !== undefined)
       changes.push(`department_id: "${body.department_id}"`);
     if (body.role_id !== undefined) changes.push(`role_id: "${body.role_id}"`);
+    if (body.role_ids !== undefined)
+      changes.push(`roles: [${body.role_ids.join(", ")}]`);
     if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
     if (body.is_active !== undefined)
       changes.push(`is_active: ${body.is_active}`);
@@ -1986,6 +2149,155 @@ apiRouter.delete(
   }),
 );
 
+// User Roles Management (Multiple Roles Per User)
+apiRouter.get(
+  "/admin/users/:userId/roles",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_users") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const { rows } = await pool.query(
+      `SELECT r.id, r.name, r.description, r.permissions
+       FROM roles r
+       JOIN user_roles ur ON r.id = ur.role_id
+       WHERE ur.user_id = $1
+       ORDER BY r.name`,
+      [req.params.userId],
+    );
+
+    res.json({ roles: rows });
+  }),
+);
+
+apiRouter.post(
+  "/admin/users/:userId/roles",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_users") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const body = z.object({
+      role_id: z.string().uuid(),
+    }).parse(req.body);
+
+    // Check if role exists
+    const roleCheck = await pool.query(
+      "SELECT id FROM roles WHERE id = $1",
+      [body.role_id],
+    );
+    if (roleCheck.rowCount === 0) {
+      throw new HttpError(404, "Role not found");
+    }
+
+    // Check if user exists
+    const userCheck = await pool.query(
+      "SELECT id FROM profiles WHERE id = $1",
+      [req.params.userId],
+    );
+    if (userCheck.rowCount === 0) {
+      throw new HttpError(404, "User not found");
+    }
+
+    // Add role to user
+    try {
+      await pool.query(
+        "INSERT INTO user_roles (user_id, role_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        [req.params.userId, body.role_id, req.auth!.userId],
+      );
+    } catch (e) {
+      throw new HttpError(400, "Failed to assign role");
+    }
+
+    // Get user info for audit
+    const userRes = await pool.query(
+      "SELECT full_name FROM profiles WHERE id = $1",
+      [req.params.userId],
+    );
+    const userName = userRes.rows[0]?.full_name || "Unknown";
+
+    // Get role name for audit
+    const roleRes = await pool.query(
+      "SELECT name FROM roles WHERE id = $1",
+      [body.role_id],
+    );
+    const roleName = roleRes.rows[0]?.name || "Unknown";
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "User",
+      `Assigned role "${roleName}" to user ${userName}`,
+    );
+
+    res.json({ success: true });
+  }),
+);
+
+apiRouter.delete(
+  "/admin/users/:userId/roles/:roleId",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_users") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    // Remove role from user
+    const result = await pool.query(
+      "DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2",
+      [req.params.userId, req.params.roleId],
+    );
+
+    if (result.rowCount === 0) {
+      throw new HttpError(404, "User role assignment not found");
+    }
+
+    // Get user info for audit
+    const userRes = await pool.query(
+      "SELECT full_name FROM profiles WHERE id = $1",
+      [req.params.userId],
+    );
+    const userName = userRes.rows[0]?.full_name || "Unknown";
+
+    // Get role name for audit
+    const roleRes = await pool.query(
+      "SELECT name FROM roles WHERE id = $1",
+      [req.params.roleId],
+    );
+    const roleName = roleRes.rows[0]?.name || "Unknown";
+
+    // Log audit event
+    await logAudit(
+      req.auth!.userId,
+      req.profile!.full_name,
+      "UPDATE",
+      "User",
+      `Removed role "${roleName}" from user ${userName}`,
+    );
+
+    res.json({ success: true });
+  }),
+);
+
 // Approval requests
 apiRouter.get(
   "/approval-requests",
@@ -2024,8 +2336,9 @@ apiRouter.get(
     } else if (userPermissions.includes("all")) {
       scopeClause = "TRUE";
     } else if (userPermissions.includes("view_department_requests")) {
+      // Check if user is an initiator OR if they manage the request's department OR if initiator is from their department
       scopeClause =
-        "(ar.initiator_id = $1 OR d.id = (SELECT department_id FROM profiles WHERE id = $1))";
+        "(ar.initiator_id = $1 OR ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)))";
     } else if (
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("initiate_request")
@@ -2044,6 +2357,9 @@ apiRouter.get(
           WHERE aa_pend.request_id = ar.id
           AND r_pend.id = $2::uuid
           AND aa_pend.status IN ('pending', 'waiting')
+          AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)
+               OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $1)
+               OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)))
         )`
         : "FALSE";
 
@@ -2120,7 +2436,7 @@ apiRouter.get(
       scopeClause = "ar.id = $1";
     } else if (userPermissions.includes("view_department_requests")) {
       scopeClause =
-        "ar.id = $1 AND (ar.initiator_id = $2 OR d.id = (SELECT department_id FROM profiles WHERE id = $2))";
+        "ar.id = $1 AND (ar.initiator_id = $2 OR ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR d.id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true)))";
     } else if (
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("initiate_request")
@@ -2140,16 +2456,16 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE (${scopeClause}
-        OR EXISTS (
+      WHERE ${scopeClause}
+        OR (ar.id = $1 AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true))) AND EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.status IN ('pending', 'waiting')
           AND (aa.role_name = (SELECT r.name FROM profiles p
             INNER JOIN roles r ON r.id = p.role_id
             WHERE p.id = $2) OR $3)
-        )
-        OR EXISTS (
+        ))
+        OR (ar.id = $1 AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true))) AND EXISTS (
           SELECT 1 FROM approval_actions aa
           WHERE aa.request_id = ar.id
           AND aa.acted_by = $2

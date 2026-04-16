@@ -17,7 +17,7 @@ export interface AdapterResult {
   success: boolean;
   approvers: any[];
   warnings: string[];
-  used_legacy_logic: boolean;
+  usedLegacyLogic: boolean;
   error?: string;
 }
 
@@ -61,7 +61,7 @@ export class BackwardCompatibilityAdapter {
         step_order: step.step_order,
         name: step.name,
         description: step.description,
-        actor_type: step.actor_type,
+        actor_type: (step.actor_type || 'ROLE') as 'ROLE' | 'USER_MANAGER' | 'DEPARTMENT_MANAGER' | 'SPECIFIC_USER',
         actor_value: step.actor_value,
         role_id: step.role_id,  // Include for compatibility
         user_id: step.user_id,   // Include for compatibility
@@ -75,7 +75,7 @@ export class BackwardCompatibilityAdapter {
         success: result.success,
         approvers: result.approvers,
         warnings: [...warnings, ...(result.warnings || [])],
-        used_legacy_logic: false,
+        usedLegacyLogic: false,
         error: result.error
       };
 
@@ -84,7 +84,7 @@ export class BackwardCompatibilityAdapter {
         success: false,
         approvers: [],
         warnings,
-        used_legacy_logic,
+        usedLegacyLogic,
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
@@ -140,7 +140,7 @@ export class BackwardCompatibilityAdapter {
         success: assignments.length > 0,
         approvers: assignments,
         warnings,
-        used_legacy_logic
+        usedLegacyLogic
       };
 
     } catch (error) {
@@ -148,7 +148,7 @@ export class BackwardCompatibilityAdapter {
         success: false,
         approvers: [],
         warnings,
-        used_legacy_logic,
+        usedLegacyLogic,
         error: error instanceof Error ? error.message : 'Legacy resolution failed'
       };
     }

@@ -457,14 +457,30 @@ export const createRefactoredWorkflowRouter = () => {
       const { stepId } = req.params;
       const userId = req.auth!.userId;
 
+      // Get request step first (stepId is a request_step id)
+      const { rows: requestStepRows } = await pool.query(
+        'SELECT request_id, step_id FROM request_steps WHERE id = $1',
+        [stepId]
+      );
+      
+      if (requestStepRows.length === 0) {
+        throw new HttpError(404, "Request step not found");
+      }
+
+      const requestId = requestStepRows[0].request_id;
+      const approvalStepId = requestStepRows[0].step_id;
+
+      // Get request definition
+      const request = await approversResolver.getRequestDefinition(requestId);
+      if (!request) {
+        throw new HttpError(404, "Request not found");
+      }
+
       // Get step definition
-      const step = await approversResolver.getStepDefinition(stepId);
+      const step = await approversResolver.getStepDefinition(approvalStepId);
       if (!step) {
         throw new HttpError(404, "Step not found");
       }
-
-      // Get request definition
-      const request = await approversResolver.getRequestDefinition(step.request_id || '');
       if (!request) {
         throw new HttpError(404, "Request not found");
       }

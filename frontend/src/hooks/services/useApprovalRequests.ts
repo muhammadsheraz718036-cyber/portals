@@ -18,9 +18,16 @@ export const useApprovalRequests = () => {
 };
 
 export const useApprovalRequest = (id: string) => {
+  console.log("🎣 useApprovalRequest hook called with id:", id);
+  
   return useQuery({
     queryKey: QUERY_KEYS.REQUEST_DETAIL(id),
-    queryFn: () => services.approvalRequests.get(id),
+    queryFn: async () => {
+      console.log("🔄 Fetching request details for id:", id);
+      const result = await services.approvalRequests.get(id);
+      console.log("✅ Received data for id:", id, "request.id =", result.request?.id);
+      return result;
+    },
     enabled: !!id,
     staleTime: 1 * 60 * 1000, // 1 minute - very fresh data for individual requests
   });

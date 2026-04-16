@@ -345,6 +345,14 @@ export class WorkflowEngine {
   /**
    * Get user's requests with visibility rules
    */
+  /**
+   * Get user's requests with visibility rules
+   * Users can see requests where they:
+   * 1. Are the initiator
+   * 2. Are assigned to the current step
+   * 3. Are a department manager for the request's department
+   * 4. Have manage_approvals permission (admins)
+   */
   async getUserRequests(userId: string, filters: {
     status?: string;
     department_id?: string;
@@ -355,9 +363,9 @@ export class WorkflowEngine {
     const offset = (page - 1) * limit;
 
     try {
-      // Get user's permissions
+      // Get user's permissions and department
       const { rows: userRows } = await pool.query(
-        `SELECT p.department_id, p.is_admin, r.permissions
+        `SELECT p.id, p.department_id, p.is_admin, r.permissions
          FROM profiles p
          LEFT JOIN roles r ON p.role_id = r.id
          WHERE p.id = $1`,
@@ -379,9 +387,31 @@ export class WorkflowEngine {
       let paramIndex = 1;
 
       if (!hasManageApprovals) {
-        // Non-admin users only see their department's requests
-        whereClause += ` AND (ar.department_id = $${paramIndex++} OR ar.initiator_id = $${paramIndex++})`;
-        queryParams.push(user.department_id, userId);
+        // Non-admin users can only see requests where they are:
+        // 1. The initiator OR
+        // 2. Assigned to the current step OR
+        // 3. A department manager for the request's department
+        whereClause += `
+          AND (
+            ar.initiator_id = $${paramIndex++}
+            OR EXISTS (
+              SELECT 1 FROM request_steps rs 
+              WHERE rs.request_id = ar.id 
+              AND rs.assigned_to = $${paramIndex++}
+              AND rs.status IN ('PENDING', 'WAITING')
+            )
+            OR (
+              ar.department_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM department_managers dm 
+                WHERE dm.department_id = ar.department_id 
+                AND dm.user_id = $${paramIndex++}
+                AND dm.is_active = true
+              )
+            )
+          )
+        `;
+        queryParams.push(userId, userId, userId);
       }
 
       if (status) {
@@ -394,15 +424,15 @@ export class WorkflowEngine {
         queryParams.push(department_id);
       }
 
-      // Get total count
+      // Get total count with DISTINCT to avoid duplicates from multiple visibility conditions
       const { rows: countRows } = await pool.query(
-        `SELECT COUNT(*) as total FROM approval_requests ar ${whereClause}`,
+        `SELECT COUNT(DISTINCT ar.id) as total FROM approval_requests ar ${whereClause}`,
         queryParams
       );
 
-      // Get requests
+      // Get requests with DISTINCT
       const { rows } = await pool.query(
-        `SELECT ar.*, p.full_name as initiator_name, d.name as department_name
+        `SELECT DISTINCT ar.*, p.full_name as initiator_name, d.name as department_name
          FROM approval_requests ar
          JOIN profiles p ON ar.initiator_id = p.id
          LEFT JOIN departments d ON ar.department_id = d.id
@@ -432,9 +462,9 @@ export class WorkflowEngine {
       [requestId]
     );
 
-    const allApproved = steps.every(s => s.status === 'APPROVED');
-    const anyRejected = steps.some(s => s.status === 'REJECTED');
-    const anyChangesRequested = steps.some(s => s.status === 'CHANGES_REQUESTED');
+    const allApproved = steps.every((s: any) => s.status === 'APPROVED');
+    const anyRejected = steps.some((s: any) => s.status === 'REJECTED');
+    const anyChangesRequested = steps.some((s: any) => s.status === 'CHANGES_REQUESTED');
 
     let newStatus = 'in_progress';
     if (anyRejected) {
@@ -480,7 +510,7 @@ export class WorkflowEngine {
         due_days: step.due_days
       };
 
-      const requestDefinition: RequestDefinition = await this.getRequestDefinition(requestId);
+      const requestDefinition: RequestDefinition | null = await this.getRequestDefinition(requestId);
 
       if (requestDefinition) {
         const resolverResult = await this.resolver.resolveApprovers(stepDefinition, requestDefinition);

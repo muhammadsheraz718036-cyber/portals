@@ -117,7 +117,10 @@ export default function Approvals() {
             <tr
               key={req.id}
               className="hover:bg-muted/30 cursor-pointer transition-snappy"
-              onClick={() => navigate(`/approvals/${req.id}`)}
+              onClick={() => {
+                console.log("Navigating to request ID:", req.id, "Number:", req.request_number);
+                navigate(`/approvals/${req.id}`);
+              }}
             >
               <td className="px-4 py-3 font-medium text-primary">
                 {req.request_number}

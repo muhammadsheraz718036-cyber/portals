@@ -11,6 +11,13 @@ export class BackwardCompatibilityWrapper {
   }
 
   /**
+   * Get the refactored service (public accessor)
+   */
+  getRefactoredService(): RefactoredApprovalService {
+    return this.refactoredService;
+  }
+
+  /**
    * Wrapper for existing create request API
    */
   async createRequestLegacy(userId: string, data: any): Promise<any> {

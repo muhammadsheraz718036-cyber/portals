@@ -131,10 +131,35 @@ export const createRefactoredApiRouter = () => {
           userPermissions.includes("all") ||
           req.profile?.is_admin;
 
-        if (!hasManageApprovals && 
-            request.initiator_id !== userId && 
-            request.department_id !== req.profile?.department_id) {
-          throw new HttpError(403, "Access denied");
+        if (!hasManageApprovals) {
+          // Check if user can access: is initiator OR assigned to current step OR is department manager
+          const isInitiator = request.initiator_id === userId;
+          
+          // Check if assigned to current step
+          const { rows: steps } = await pool.query(
+            `SELECT 1 FROM request_steps 
+             WHERE request_id = $1 
+             AND assigned_to = $2 
+             AND status IN ('PENDING', 'WAITING')
+             LIMIT 1`,
+            [requestId, userId]
+          );
+          const isAssignedToStep = steps.length > 0;
+
+          // Check if is department manager for request's department
+          const { rows: deptMgr } = await pool.query(
+            `SELECT 1 FROM department_managers 
+             WHERE department_id = $1 
+             AND user_id = $2 
+             AND is_active = true 
+             LIMIT 1`,
+            [request.department_id, userId]
+          );
+          const isDepartmentManager = deptMgr.length > 0;
+
+          if (!isInitiator && !isAssignedToStep && !isDepartmentManager) {
+            throw new HttpError(403, "Access denied");
+          }
         }
 
         res.json(request);
@@ -279,7 +304,7 @@ export const createRefactoredApiRouter = () => {
           throw new HttpError(400, "No pending approval step found for this user");
         }
 
-        const result = await legacyWrapper.refactoredService.processAction(userId, {
+        const result = await legacyWrapper.getRefactoredService().processAction(userId, {
           request_id: requestId,
           step_id: rows[0].step_id,
           action: 'REQUEST_CHANGES',
@@ -321,7 +346,7 @@ export const createRefactoredApiRouter = () => {
       const userId = req.auth!.userId;
 
       try {
-        const result = await legacyWrapper.refactoredService.resumeRequest(userId, requestId, body);
+        const result = await legacyWrapper.getRefactoredService().resumeRequest(userId, requestId, body);
 
         // Log audit event
         await logAudit(
@@ -427,7 +452,7 @@ export const createRefactoredApiRouter = () => {
       }
 
       try {
-        await legacyWrapper.refactoredService.approverResolver.setupDepartmentManager(
+        await legacyWrapper.getRefactoredService().getApproverResolver().setupDepartmentManager(
           departmentId,
           body.user_id,
           userId
@@ -475,7 +500,7 @@ export const createRefactoredApiRouter = () => {
       }
 
       try {
-        await legacyWrapper.refactoredService.approverResolver.setupManagerRelationship(
+        await legacyWrapper.getRefactoredService().getApproverResolver().setupManagerRelationship(
           targetUserId,
           body.manager_id,
           userId

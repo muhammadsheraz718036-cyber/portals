@@ -11,14 +11,12 @@ import { toast } from "sonner";
 interface Department {
   id: string;
   name: string;
-  head_name: string | null;
 }
 
 export function AdminDepartments() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDept, setEditDept] = useState<Department | null>(null);
   const [name, setName] = useState("");
-  const [head, setHead] = useState("");
 
   const { data: departments = [], isLoading: loading } = useDepartments();
   
@@ -26,8 +24,8 @@ export function AdminDepartments() {
   const updateMutation = useUpdateDepartment();
   const deleteMutation = useDeleteDepartment();
 
-  const openCreate = () => { setEditDept(null); setName(""); setHead(""); setDialogOpen(true); };
-  const openEdit = (d: Department) => { setEditDept(d); setName(d.name); setHead(d.head_name || ""); setDialogOpen(true); };
+  const openCreate = () => { setEditDept(null); setName(""); setDialogOpen(true); };
+  const openEdit = (d: Department) => { setEditDept(d); setName(d.name); setDialogOpen(true); };
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -35,13 +33,12 @@ export function AdminDepartments() {
       if (editDept) {
         await updateMutation.mutateAsync({
           id: editDept.id,
-          data: { name, head_name: head || null },
+          data: { name },
         });
         toast.success("Department updated");
       } else {
         await createMutation.mutateAsync({
           name,
-          head_name: head || null,
         });
         toast.success("Department created");
       }
@@ -73,7 +70,6 @@ export function AdminDepartments() {
             <DialogHeader><DialogTitle>{editDept ? "Edit" : "Create"} Department</DialogTitle></DialogHeader>
             <div className="space-y-4 mt-4">
               <div className="space-y-1.5"><Label>Department Name</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
-              <div className="space-y-1.5"><Label>Department Head</Label><Input value={head} onChange={e => setHead(e.target.value)} /></div>
               <Button onClick={handleSave} className="w-full">{editDept ? "Update" : "Create"}</Button>
             </div>
           </DialogContent>
@@ -89,7 +85,6 @@ export function AdminDepartments() {
                 <div className="flex items-start justify-between">
                   <div>
                     <h3 className="text-sm font-semibold">{dept.name}</h3>
-                    {dept.head_name && <p className="text-xs text-muted-foreground mt-0.5">Head: {dept.head_name}</p>}
                   </div>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(dept)}><Edit className="h-3.5 w-3.5" /></Button>
