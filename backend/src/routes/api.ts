@@ -2517,11 +2517,21 @@ apiRouter.get(
         json_build_object('name', at.name) AS approval_types,
         json_build_object('name', d.name) AS departments,
         (ar.initiator_id = $1) AS is_initiator,
-        EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-            AND aa.approver_user_id = $1
-            AND aa.status IN ('pending', 'waiting')
+        (
+          EXISTS (
+            SELECT 1 FROM approval_actions aa
+             WHERE aa.request_id = ar.id
+               AND aa.approver_user_id = $1
+               AND aa.status IN ('pending', 'waiting')
+          )
+          OR EXISTS (
+            SELECT 1 FROM approval_actions aa
+              JOIN profiles p ON p.id = $1
+              JOIN roles r ON r.id = p.role_id
+             WHERE aa.request_id = ar.id
+               AND aa.status = 'pending'
+               AND lower(trim(aa.role_name)) = lower(r.name)
+          )
         ) AS needs_approval,
         (
           SELECT aa.role_name FROM approval_actions aa
