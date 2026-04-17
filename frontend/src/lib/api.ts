@@ -27,6 +27,8 @@ export interface Profile {
   email: string;
   department_id: string | null;
   role_id: string | null;
+  role_name: string | null;
+  department_name: string | null;
   is_admin: boolean;
   is_active: boolean;
   permissions: string[];

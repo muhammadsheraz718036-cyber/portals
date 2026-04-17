@@ -108,6 +108,7 @@ type RequestRow = {
   created_at: string;
   form_data: Record<string, unknown>;
   initiator_id: string;
+  department_id: string | null;
   initiator?: { full_name: string };
   approval_types: {
     name: string;
@@ -128,6 +129,7 @@ type ActionRow = {
   acted_by: string | null;
   acted_at: string | null;
   comment: string | null;
+  approver_user_id: string | null;
 };
 
 const uuidRe =
@@ -445,52 +447,67 @@ export default function RequestDetail() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  // Check if user can approve: they must be the current approver for the current step
+  // Mirror backend `findActionableStep` exactly so buttons appear ONLY for the
+  // user who is genuinely the current approver. After acting, the request is
+  // refetched, the lowest pending step advances, and this returns false → the
+  // buttons disable automatically and the next approver's UI lights up.
   const canApprove = () => {
     if (
       !request ||
       !user ||
       !profile ||
-      !["in_progress", "pending"].includes(request.status) ||
-      request.status === "changes_requested"
+      !["in_progress", "pending"].includes(request.status)
     ) {
       return false;
     }
 
-    // Hide buttons if user is the initiator
+    // Initiator can never approve their own request.
     if (request.initiator_id === user.id) {
       return false;
     }
 
-    // Find the current pending action for the current step
-    const currentStepActions = actions.filter(
-      (a) => a.step_order === request.current_step
-    );
-    
-    const pendingActions = currentStepActions.filter((a) =>
-      ["pending", "waiting"].includes(a.status),
-    );
-    
+    // Find the lowest currently-pending step (don't trust request.current_step
+    // alone — the source of truth is approval_actions).
+    const pendingActions = actions
+      .filter((a) => a.status === "pending")
+      .sort((a, b) => a.step_order - b.step_order);
+
     if (pendingActions.length === 0) {
       return false;
     }
+    const lowestPendingOrder = pendingActions[0].step_order;
+    const activeActions = pendingActions.filter(
+      (a) => a.step_order === lowestPendingOrder,
+    );
 
-    // Check if user has the required role for any pending action
-    const canAct = pendingActions.some((a) => {
-      // Admin can act on any step
-      if (profile.is_admin) {
-        return true;
-      }
-      
-      // Check if user's role matches the action's role
-      return profile.role_name === a.role_name;
+    return activeActions.some((a) => {
+      // Already acted on by this user → don't let them act again.
+      if (a.acted_by === user.id) return false;
+
+      // Admins may act on any open step.
+      if (profile.is_admin) return true;
+
+      // Pre-resolved assignee for this step.
+      if (a.approver_user_id && a.approver_user_id === user.id) return true;
+
+      // Same role + STRICT department isolation: the user must belong to the
+      // same department as the request (or the request has no department).
+      // Cross-department same-role users must NOT see action buttons.
+      const sameRole =
+        !!profile.role_name &&
+        profile.role_name.trim().toLowerCase() ===
+          (a.role_name || "").trim().toLowerCase();
+      if (!sameRole) return false;
+
+      // If the action has a specific assignee that isn't this user, defer to
+      // that assignee — same-role peers don't get to act.
+      if (a.approver_user_id && a.approver_user_id !== user.id) return false;
+
+      const sameDept =
+        !request.department_id ||
+        request.department_id === profile.department_id;
+      return sameDept;
     });
-
-    if (!canAct) {
-      return false;
-    }
-
-    return true;
   };
 
   const shouldShowButtons =
