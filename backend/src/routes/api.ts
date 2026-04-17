@@ -2919,29 +2919,15 @@ apiRouter.post(
       throw new HttpError(403, "You cannot approve your own request");
     }
 
-    // Find the lowest-step pending/waiting action targeted at THIS user.
-    // Admins fall back to the lowest pending step (any approver).
-    let actionRows: { rows: Array<Record<string, unknown>> };
-    if (isAdmin) {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1 AND status IN ('pending', 'waiting')
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId],
-      );
-    } else {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1
-            AND status IN ('pending', 'waiting')
-            AND approver_user_id = $2
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId, userId],
-      );
-    }
-    if (actionRows.rows.length === 0)
+    // Find the lowest open step the user is allowed to act on (assigned by id,
+    // or matching role + same department; admins may act on any open step).
+    const currentAction = await findActionableStep(pool, {
+      requestId,
+      userId,
+      isAdmin,
+    });
+    if (!currentAction)
       throw new HttpError(403, "You are not an approver for any pending step on this request");
-    const currentAction = actionRows.rows[0];
 
     const client = await pool.connect();
     try {
