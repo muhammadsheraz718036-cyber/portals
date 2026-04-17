@@ -2487,15 +2487,30 @@ apiRouter.get(
       scopeClause = "FALSE";
     }
 
-    // Approver visibility: any request where this user is the assigned approver
-    // for ANY step (pending, waiting, or already acted) is visible.
+    // Approver visibility (assigned actor):
+    //   any request where this user is the assigned approver for ANY step
+    //   (pending, waiting, or already acted) is visible.
     const approverVisibility = `EXISTS (
       SELECT 1 FROM approval_actions aa
        WHERE aa.request_id = ar.id
          AND (aa.approver_user_id = $1 OR aa.acted_by = $1)
     )`;
 
-    const whereCombined = `(${scopeClause} OR ${approverVisibility})`;
+    // Chain-role visibility:
+    //   if the user's role appears in ANY step of the request's chain, they can
+    //   see the request — regardless of department — so they can act on it
+    //   when their step becomes active. This is the explicit rule:
+    //   "If a role is in the approval chain, that user sees the request."
+    const chainRoleVisibility = `EXISTS (
+      SELECT 1
+        FROM approval_chains ac
+        JOIN jsonb_array_elements(ac.steps) step ON true
+        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $1)
+       WHERE ac.id = ar.approval_chain_id
+         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
+    )`;
+
+    const whereCombined = `(${scopeClause} OR ${approverVisibility} OR ${chainRoleVisibility})`;
 
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
