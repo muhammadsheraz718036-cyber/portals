@@ -100,11 +100,17 @@ CREATE TABLE IF NOT EXISTS approval_actions (
   role_name TEXT NOT NULL,
   action_label TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested', 'resubmitted')),
+  approver_user_id UUID REFERENCES users(id),
   acted_by UUID REFERENCES users(id),
   comment TEXT,
   acted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Ensure column exists on pre-existing databases
+ALTER TABLE approval_actions ADD COLUMN IF NOT EXISTS approver_user_id UUID REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_approval_actions_approver_user ON approval_actions(approver_user_id);
+CREATE INDEX IF NOT EXISTS idx_approval_actions_request_step ON approval_actions(request_id, step_order);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
