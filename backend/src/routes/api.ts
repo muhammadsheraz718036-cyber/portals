@@ -2424,7 +2424,6 @@ apiRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const admin = req.profile!.is_admin;
     const uid = req.auth!.userId;
-    const roleId = req.profile!.role_id;
     const userPermissions = req.profile!.permissions || [];
 
     const canApprove =
@@ -2447,50 +2446,47 @@ apiRouter.get(
       );
     }
 
+    // Build the visibility scope.
+    // Visibility model:
+    //   * Initiators always see their own requests.
+    //   * Department-scope viewers see requests originating from their department
+    //     OR departments they manage.
+    //   * Org-wide viewers / admins see everything.
+    //   * Approvers ALWAYS see requests where they are (or were) the assigned
+    //     approver, regardless of view permission. This is the fix for the
+    //     "approving authority sees nothing" bug.
     let scopeClause = "";
-    const queryParams: any[] = [uid, roleId];
+    const queryParams: unknown[] = [uid];
 
-    if (admin || userPermissions.includes("view_all_requests")) {
-      scopeClause = "TRUE";
-    } else if (userPermissions.includes("all")) {
+    if (admin || userPermissions.includes("view_all_requests") || userPermissions.includes("all")) {
       scopeClause = "TRUE";
     } else if (userPermissions.includes("view_department_requests")) {
-      // Check if user is an initiator OR if they manage the request's department OR if initiator is from their department
-      scopeClause =
-        "(ar.initiator_id = $1 OR ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)))";
+      scopeClause = `(
+        ar.initiator_id = $1
+        OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $1)
+        OR ar.department_id IN (
+          SELECT department_id FROM department_managers
+           WHERE user_id = $1 AND is_active = true
+        )
+      )`;
     } else if (
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("initiate_request")
     ) {
       scopeClause = "ar.initiator_id = $1";
     } else {
-      // approve_reject only: no broad list scope until pending/acted clauses apply
       scopeClause = "FALSE";
     }
 
-    const pendingForMyRoleClause =
-      canApprove && roleId
-        ? `EXISTS (
-          SELECT 1 FROM approval_actions aa_pend
-          JOIN roles r_pend ON r_pend.name = aa_pend.role_name
-          WHERE aa_pend.request_id = ar.id
-          AND r_pend.id = $2::uuid
-          AND aa_pend.status IN ('pending', 'waiting')
-          AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)
-               OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $1)
-               OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $1 AND is_active = true)))
-        )`
-        : "FALSE";
-
-    const whereCombined = `(
-      ${scopeClause}
-      OR EXISTS (
-        SELECT 1 FROM approval_actions aa_hist
-        WHERE aa_hist.request_id = ar.id
-        AND aa_hist.acted_by = $1
-      )
-      OR ${pendingForMyRoleClause}
+    // Approver visibility: any request where this user is the assigned approver
+    // for ANY step (pending, waiting, or already acted) is visible.
+    const approverVisibility = `EXISTS (
+      SELECT 1 FROM approval_actions aa
+       WHERE aa.request_id = ar.id
+         AND (aa.approver_user_id = $1 OR aa.acted_by = $1)
     )`;
+
+    const whereCombined = `(${scopeClause} OR ${approverVisibility})`;
 
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
@@ -2499,17 +2495,20 @@ apiRouter.get(
         (ar.initiator_id = $1) AS is_initiator,
         EXISTS (
           SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
           WHERE aa.request_id = ar.id
-          AND ($2::uuid IS NULL OR r.id = $2::uuid)
-          AND aa.status IN ('pending', 'waiting')
+            AND aa.approver_user_id = $1
+            AND aa.status IN ('pending', 'waiting')
         ) AS needs_approval,
-        aa.role_name AS current_step_role
+        (
+          SELECT aa.role_name FROM approval_actions aa
+           WHERE aa.request_id = ar.id
+             AND aa.status IN ('pending', 'waiting')
+           ORDER BY aa.step_order ASC
+           LIMIT 1
+        ) AS current_step_role
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
-      LEFT JOIN approval_actions aa ON aa.request_id = ar.id AND aa.status IN ('pending', 'waiting')
-      LEFT JOIN roles r ON r.name = aa.role_name
       WHERE ${whereCombined}
       ORDER BY ar.id, ar.created_at DESC`,
       queryParams,
@@ -2547,15 +2546,19 @@ apiRouter.get(
     }
 
     let scopeClause = "";
-    const queryParams: any[] = [req.params.id, uid, canApprove];
+    const queryParams: unknown[] = [req.params.id, uid];
 
-    if (admin || userPermissions.includes("view_all_requests")) {
-      scopeClause = "ar.id = $1";
-    } else if (userPermissions.includes("all")) {
+    if (admin || userPermissions.includes("view_all_requests") || userPermissions.includes("all")) {
       scopeClause = "ar.id = $1";
     } else if (userPermissions.includes("view_department_requests")) {
-      scopeClause =
-        "ar.id = $1 AND (ar.initiator_id = $2 OR ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR d.id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true)))";
+      scopeClause = `ar.id = $1 AND (
+        ar.initiator_id = $2
+        OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2)
+        OR ar.department_id IN (
+          SELECT department_id FROM department_managers
+           WHERE user_id = $2 AND is_active = true
+        )
+      )`;
     } else if (
       userPermissions.includes("view_own_requests") ||
       userPermissions.includes("initiate_request")
@@ -2565,30 +2568,28 @@ apiRouter.get(
       scopeClause = "ar.id = $1 AND FALSE";
     }
 
-    // Allow users with approve_reject permission to see all requests with pending actions
+    const approverVisibility = `ar.id = $1 AND EXISTS (
+      SELECT 1 FROM approval_actions aa
+       WHERE aa.request_id = ar.id
+         AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
+    )`;
+
     const { rows } = await pool.query(
       `SELECT ar.*,
-        json_build_object('name', at.name, 'description', at.description, 'fields', at.fields, 'page_layout', at.page_layout) AS approval_types,
+        json_build_object(
+          'name', at.name,
+          'description', at.description,
+          'fields', at.fields,
+          'page_layout', at.page_layout
+        ) AS approval_types,
         json_build_object('name', d.name) AS departments,
         json_build_object('full_name', ip.full_name) AS initiator
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE ${scopeClause}
-        OR (ar.id = $1 AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true))) AND EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-          AND aa.status IN ('pending', 'waiting')
-          AND (aa.role_name = (SELECT r.name FROM profiles p
-            INNER JOIN roles r ON r.id = p.role_id
-            WHERE p.id = $2) OR $3)
-        ))
-        OR (ar.id = $1 AND (ar.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true) OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2) OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = ar.initiator_id AND p.department_id IN (SELECT department_id FROM department_managers WHERE user_id = $2 AND is_active = true))) AND EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-          AND aa.acted_by = $2
-        ))`,
+      WHERE (${scopeClause}) OR (${approverVisibility})
+      LIMIT 1`,
       queryParams,
     );
     if (rows.length === 0) throw new HttpError(404, "Not found");
@@ -2624,25 +2625,18 @@ apiRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const admin = req.profile!.is_admin;
     const uid = req.auth!.userId;
-    const roleId = req.profile!.role_id;
     const { rows } = await pool.query(
       `SELECT ar.id FROM approval_requests ar
-      WHERE ar.request_number = $1 AND ($2::boolean 
-        OR ar.initiator_id = $3
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          JOIN roles r ON r.name = aa.role_name
-          WHERE aa.request_id = ar.id
-          AND r.id = $4
-          AND aa.status IN ('pending', 'waiting')
-        )
-        OR EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-          AND aa.acted_by = $3
-        )
-      )`,
-      [req.params.num, admin, uid, roleId],
+        WHERE ar.request_number = $1 AND (
+          $2::boolean
+          OR ar.initiator_id = $3
+          OR EXISTS (
+            SELECT 1 FROM approval_actions aa
+             WHERE aa.request_id = ar.id
+               AND (aa.approver_user_id = $3 OR aa.acted_by = $3)
+          )
+        )`,
+      [req.params.num, admin, uid],
     );
     if (rows.length === 0) throw new HttpError(404, "Not found");
     res.json({ id: rows[0].id });
