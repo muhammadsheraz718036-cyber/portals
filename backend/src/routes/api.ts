@@ -3229,18 +3229,24 @@ apiRouter.patch(
           throw new HttpError(400, "No approval chain steps found");
         }
 
-        const chainSteps = chainData[0].steps as any[];
+        const chainSteps = chainData[0].steps as Array<{
+          order?: number;
+          roleName?: string;
+          role_name?: string;
+          action?: string;
+        }>;
 
-        // Only recreate actions from the current step onwards, not from the beginning
+        // Recreate actions from the changed step onwards. Steps prior to the
+        // changed step were already completed and remain untouched. Each new
+        // action gets its specific approver re-resolved against the current
+        // department, so role-collision across departments stays distinct.
         for (let i = 0; i < chainSteps.length; i++) {
           const step = chainSteps[i];
-          const stepRoleName = step.roleName || step.role_name || "";
-          const stepOrder = i + 1;
+          const stepRoleName = (step.roleName || step.role_name || "").trim();
+          const stepOrder = step.order ?? i + 1;
 
-          // Skip steps that were already completed (before current step)
-          if (stepOrder < changedStepOrder) {
-            continue;
-          }
+          if (stepOrder < changedStepOrder) continue;
+          if (!stepRoleName) continue;
 
           // Skip if this step's role matches the initiator's role
           if (stepRoleName === initiatorRoleName) {
@@ -3252,11 +3258,26 @@ apiRouter.patch(
             continue;
           }
 
-          // For the current step and future steps, create pending actions
+          const approverId = await resolveStepApprover(pool, {
+            roleName: stepRoleName,
+            departmentId: request.department_id ?? null,
+            initiatorId: request.initiator_id,
+          });
+
+          // The step where changes were requested becomes pending; the rest wait.
+          const status = stepOrder === changedStepOrder ? "pending" : "waiting";
           await pool.query(
-            `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
-             VALUES ($1, $2, $3, $4, 'pending')`,
-            [requestId, stepOrder, stepRoleName, step.action || "Review"],
+            `INSERT INTO approval_actions
+               (request_id, step_order, role_name, action_label, status, approver_user_id)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              requestId,
+              stepOrder,
+              stepRoleName,
+              step.action || "Review",
+              status,
+              approverId,
+            ],
           );
         }
 
