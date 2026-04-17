@@ -105,6 +105,15 @@ async function resolveStepApprover(
   );
   if (anyRows.length > 0) return anyRows[0].id;
 
+  // 4. Final fallback: assign to an admin so the workflow can still move.
+  const { rows: adminRows } = await client.query<{ id: string }>(
+    `SELECT id FROM profiles
+      WHERE is_admin = true AND is_active = true AND id <> $1
+      ORDER BY created_at ASC LIMIT 1`,
+    [initiatorId],
+  );
+  if (adminRows.length > 0) return adminRows[0].id;
+
   return null;
 }
 
