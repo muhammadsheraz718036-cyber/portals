@@ -2608,6 +2608,16 @@ apiRouter.get(
          AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
     )`;
 
+    // Chain-role visibility: user's role appears in any step of the request's chain.
+    const chainRoleVisibility = `ar.id = $1 AND EXISTS (
+      SELECT 1
+        FROM approval_chains ac
+        JOIN jsonb_array_elements(ac.steps) step ON true
+        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $2)
+       WHERE ac.id = ar.approval_chain_id
+         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
+    )`;
+
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object(
@@ -2622,7 +2632,7 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE (${scopeClause}) OR (${approverVisibility})
+      WHERE (${scopeClause}) OR (${approverVisibility}) OR (${chainRoleVisibility})
       LIMIT 1`,
       queryParams,
     );
@@ -2668,6 +2678,14 @@ apiRouter.get(
             SELECT 1 FROM approval_actions aa
              WHERE aa.request_id = ar.id
                AND (aa.approver_user_id = $3 OR aa.acted_by = $3)
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM approval_chains ac
+              JOIN jsonb_array_elements(ac.steps) step ON true
+              JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $3)
+             WHERE ac.id = ar.approval_chain_id
+               AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
           )
         )`,
       [req.params.num, admin, uid],
