@@ -164,6 +164,61 @@ async function generateApprovalActionsForRequest(
   return inserted;
 }
 
+/**
+ * Find the lowest open approval_action on a request that the given user is
+ * authorized to act on. Rules:
+ *   * Admins may act on the lowest open step (any approver).
+ *   * The pre-resolved assignee (approver_user_id) may act on their step.
+ *   * A user whose role matches the step's role_name may act on it, with
+ *     STRICT department isolation: the user must belong to the request's
+ *     department, manage it, or the request must have no department.
+ */
+async function findActionableStep(
+  client: { query: typeof pool.query },
+  opts: { requestId: string; userId: string; isAdmin: boolean },
+): Promise<Record<string, unknown> | null> {
+  const { requestId, userId, isAdmin } = opts;
+  if (isAdmin) {
+    const { rows } = await client.query(
+      `SELECT * FROM approval_actions
+        WHERE request_id = $1 AND status IN ('pending', 'waiting')
+        ORDER BY step_order ASC, created_at ASC LIMIT 1`,
+      [requestId],
+    );
+    return rows[0] ?? null;
+  }
+  const { rows } = await client.query(
+    `SELECT aa.*
+       FROM approval_actions aa
+       JOIN approval_requests ar ON ar.id = aa.request_id
+       JOIN profiles p ON p.id = $2
+       LEFT JOIN roles r ON r.id = p.role_id
+      WHERE aa.request_id = $1
+        AND aa.status = 'pending'
+        AND (
+          aa.approver_user_id = $2
+          OR (
+            r.name IS NOT NULL
+            AND lower(trim(aa.role_name)) = lower(r.name)
+            AND (
+              ar.department_id IS NULL
+              OR p.department_id = ar.department_id
+              OR EXISTS (
+                SELECT 1 FROM department_managers dm
+                 WHERE dm.user_id = $2
+                   AND dm.department_id = ar.department_id
+                   AND dm.is_active = true
+              )
+            )
+          )
+        )
+      ORDER BY aa.step_order ASC, aa.created_at ASC
+      LIMIT 1`,
+    [requestId, userId],
+  );
+  return rows[0] ?? null;
+}
+
 // Helper function to log audit events
 async function logAudit(
   userId: string,
