@@ -2702,23 +2702,71 @@ apiRouter.post(
 
     const requestDeptId = selectedDeptId ?? typeDeptId ?? null;
 
-    const { rows } = await pool.query(
-      `INSERT INTO approval_requests (
-        approval_type_id, approval_chain_id, initiator_id, department_id,
-        form_data, current_step, total_steps, status
-      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
-      RETURNING *`,
-      [
-        body.approval_type_id,
-        body.approval_chain_id ?? null,
-        uid,
-        requestDeptId,
-        JSON.stringify(body.form_data),
-        body.current_step,
-        body.total_steps,
-        body.status,
-      ],
-    );
+    // Resolve chain steps up-front so we can populate approval_actions atomically.
+    let chainSteps: Array<{
+      order?: number;
+      roleName?: string;
+      role_name?: string;
+      action?: string;
+    }> = [];
+    if (body.approval_chain_id) {
+      const { rows: chainRows } = await pool.query<{ steps: unknown }>(
+        `SELECT steps FROM approval_chains WHERE id = $1`,
+        [body.approval_chain_id],
+      );
+      if (chainRows.length === 0) {
+        throw new HttpError(404, "Approval chain not found");
+      }
+      const raw = chainRows[0].steps;
+      chainSteps = Array.isArray(raw)
+        ? (raw as typeof chainSteps)
+        : typeof raw === "string"
+          ? (JSON.parse(raw) as typeof chainSteps)
+          : [];
+      if (chainSteps.length === 0) {
+        throw new HttpError(400, "Approval chain has no steps configured");
+      }
+    }
+
+    const client = await pool.connect();
+    let createdRequest: Record<string, unknown>;
+    try {
+      await client.query("BEGIN");
+      const ins = await client.query(
+        `INSERT INTO approval_requests (
+          approval_type_id, approval_chain_id, initiator_id, department_id,
+          form_data, current_step, total_steps, status
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+        RETURNING *`,
+        [
+          body.approval_type_id,
+          body.approval_chain_id ?? null,
+          uid,
+          requestDeptId,
+          JSON.stringify(body.form_data),
+          1,
+          chainSteps.length || body.total_steps,
+          chainSteps.length > 0 ? "in_progress" : body.status,
+        ],
+      );
+      createdRequest = ins.rows[0];
+
+      if (chainSteps.length > 0) {
+        await generateApprovalActionsForRequest(client, {
+          requestId: createdRequest.id as string,
+          chainSteps,
+          departmentId: requestDeptId,
+          initiatorId: uid,
+        });
+      }
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
 
     // Log audit event
     await logAudit(
@@ -2726,10 +2774,10 @@ apiRouter.post(
       req.profile!.full_name,
       "CREATE",
       "Approval Request",
-      `Created approval request: ${rows[0].request_number}`,
+      `Created approval request: ${createdRequest.request_number}`,
     );
 
-    res.status(201).json(rows[0]);
+    res.status(201).json(createdRequest);
   }),
 );
 
