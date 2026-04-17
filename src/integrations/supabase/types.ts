@@ -19,6 +19,7 @@ export type Database = {
           acted_at: string | null
           acted_by: string | null
           action_label: string
+          approver_user_id: string | null
           comment: string | null
           created_at: string
           id: string
@@ -31,6 +32,7 @@ export type Database = {
           acted_at?: string | null
           acted_by?: string | null
           action_label: string
+          approver_user_id?: string | null
           comment?: string | null
           created_at?: string
           id?: string
@@ -43,6 +45,7 @@ export type Database = {
           acted_at?: string | null
           acted_by?: string | null
           action_label?: string
+          approver_user_id?: string | null
           comment?: string | null
           created_at?: string
           id?: string
@@ -249,6 +252,41 @@ export type Database = {
           updated_by?: string | null
         }
         Relationships: []
+      }
+      department_managers: {
+        Row: {
+          assigned_at: string
+          assigned_by: string | null
+          department_id: string
+          id: string
+          is_active: boolean
+          user_id: string
+        }
+        Insert: {
+          assigned_at?: string
+          assigned_by?: string | null
+          department_id: string
+          id?: string
+          is_active?: boolean
+          user_id: string
+        }
+        Update: {
+          assigned_at?: string
+          assigned_by?: string | null
+          department_id?: string
+          id?: string
+          is_active?: boolean
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "department_managers_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       departments: {
         Row: {
