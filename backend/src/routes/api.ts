@@ -164,6 +164,61 @@ async function generateApprovalActionsForRequest(
   return inserted;
 }
 
+/**
+ * Find the lowest open approval_action on a request that the given user is
+ * authorized to act on. Rules:
+ *   * Admins may act on the lowest open step (any approver).
+ *   * The pre-resolved assignee (approver_user_id) may act on their step.
+ *   * A user whose role matches the step's role_name may act on it, with
+ *     STRICT department isolation: the user must belong to the request's
+ *     department, manage it, or the request must have no department.
+ */
+async function findActionableStep(
+  client: { query: typeof pool.query },
+  opts: { requestId: string; userId: string; isAdmin: boolean },
+): Promise<Record<string, unknown> | null> {
+  const { requestId, userId, isAdmin } = opts;
+  if (isAdmin) {
+    const { rows } = await client.query(
+      `SELECT * FROM approval_actions
+        WHERE request_id = $1 AND status IN ('pending', 'waiting')
+        ORDER BY step_order ASC, created_at ASC LIMIT 1`,
+      [requestId],
+    );
+    return rows[0] ?? null;
+  }
+  const { rows } = await client.query(
+    `SELECT aa.*
+       FROM approval_actions aa
+       JOIN approval_requests ar ON ar.id = aa.request_id
+       JOIN profiles p ON p.id = $2
+       LEFT JOIN roles r ON r.id = p.role_id
+      WHERE aa.request_id = $1
+        AND aa.status = 'pending'
+        AND (
+          aa.approver_user_id = $2
+          OR (
+            r.name IS NOT NULL
+            AND lower(trim(aa.role_name)) = lower(r.name)
+            AND (
+              ar.department_id IS NULL
+              OR p.department_id = ar.department_id
+              OR EXISTS (
+                SELECT 1 FROM department_managers dm
+                 WHERE dm.user_id = $2
+                   AND dm.department_id = ar.department_id
+                   AND dm.is_active = true
+              )
+            )
+          )
+        )
+      ORDER BY aa.step_order ASC, aa.created_at ASC
+      LIMIT 1`,
+    [requestId, userId],
+  );
+  return rows[0] ?? null;
+}
+
 // Helper function to log audit events
 async function logAudit(
   userId: string,
@@ -2487,26 +2542,51 @@ apiRouter.get(
       scopeClause = "FALSE";
     }
 
-    // Approver visibility: any request where this user is the assigned approver
-    // for ANY step (pending, waiting, or already acted) is visible.
+    // Approver visibility (assigned actor):
+    //   any request where this user is the assigned approver for ANY step
+    //   (pending, waiting, or already acted) is visible.
     const approverVisibility = `EXISTS (
       SELECT 1 FROM approval_actions aa
        WHERE aa.request_id = ar.id
          AND (aa.approver_user_id = $1 OR aa.acted_by = $1)
     )`;
 
-    const whereCombined = `(${scopeClause} OR ${approverVisibility})`;
+    // Chain-role visibility:
+    //   if the user's role appears in ANY step of the request's chain, they can
+    //   see the request — regardless of department — so they can act on it
+    //   when their step becomes active. This is the explicit rule:
+    //   "If a role is in the approval chain, that user sees the request."
+    const chainRoleVisibility = `EXISTS (
+      SELECT 1
+        FROM approval_chains ac
+        JOIN jsonb_array_elements(ac.steps) step ON true
+        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $1)
+       WHERE ac.id = ar.approval_chain_id
+         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
+    )`;
+
+    const whereCombined = `(${scopeClause} OR ${approverVisibility} OR ${chainRoleVisibility})`;
 
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
         json_build_object('name', at.name) AS approval_types,
         json_build_object('name', d.name) AS departments,
         (ar.initiator_id = $1) AS is_initiator,
-        EXISTS (
-          SELECT 1 FROM approval_actions aa
-          WHERE aa.request_id = ar.id
-            AND aa.approver_user_id = $1
-            AND aa.status IN ('pending', 'waiting')
+        (
+          EXISTS (
+            SELECT 1 FROM approval_actions aa
+             WHERE aa.request_id = ar.id
+               AND aa.approver_user_id = $1
+               AND aa.status IN ('pending', 'waiting')
+          )
+          OR EXISTS (
+            SELECT 1 FROM approval_actions aa
+              JOIN profiles p ON p.id = $1
+              JOIN roles r ON r.id = p.role_id
+             WHERE aa.request_id = ar.id
+               AND aa.status = 'pending'
+               AND lower(trim(aa.role_name)) = lower(r.name)
+          )
         ) AS needs_approval,
         (
           SELECT aa.role_name FROM approval_actions aa
@@ -2583,6 +2663,16 @@ apiRouter.get(
          AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
     )`;
 
+    // Chain-role visibility: user's role appears in any step of the request's chain.
+    const chainRoleVisibility = `ar.id = $1 AND EXISTS (
+      SELECT 1
+        FROM approval_chains ac
+        JOIN jsonb_array_elements(ac.steps) step ON true
+        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $2)
+       WHERE ac.id = ar.approval_chain_id
+         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
+    )`;
+
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object(
@@ -2597,7 +2687,7 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE (${scopeClause}) OR (${approverVisibility})
+      WHERE (${scopeClause}) OR (${approverVisibility}) OR (${chainRoleVisibility})
       LIMIT 1`,
       queryParams,
     );
@@ -2643,6 +2733,14 @@ apiRouter.get(
             SELECT 1 FROM approval_actions aa
              WHERE aa.request_id = ar.id
                AND (aa.approver_user_id = $3 OR aa.acted_by = $3)
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM approval_chains ac
+              JOIN jsonb_array_elements(ac.steps) step ON true
+              JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $3)
+             WHERE ac.id = ar.approval_chain_id
+               AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
           )
         )`,
       [req.params.num, admin, uid],
@@ -2821,29 +2919,15 @@ apiRouter.post(
       throw new HttpError(403, "You cannot approve your own request");
     }
 
-    // Find the lowest-step pending/waiting action targeted at THIS user.
-    // Admins fall back to the lowest pending step (any approver).
-    let actionRows: { rows: Array<Record<string, unknown>> };
-    if (isAdmin) {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1 AND status IN ('pending', 'waiting')
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId],
-      );
-    } else {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1
-            AND status IN ('pending', 'waiting')
-            AND approver_user_id = $2
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId, userId],
-      );
-    }
-    if (actionRows.rows.length === 0)
+    // Find the lowest open step the user is allowed to act on (assigned by id,
+    // or matching role + same department; admins may act on any open step).
+    const currentAction = await findActionableStep(pool, {
+      requestId,
+      userId,
+      isAdmin,
+    });
+    if (!currentAction)
       throw new HttpError(403, "You are not an approver for any pending step on this request");
-    const currentAction = actionRows.rows[0];
 
     const client = await pool.connect();
     try {
@@ -2951,27 +3035,13 @@ apiRouter.post(
       throw new HttpError(403, "You cannot reject your own request");
     }
 
-    let actionRows: { rows: Array<Record<string, unknown>> };
-    if (isAdmin) {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1 AND status IN ('pending', 'waiting')
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId],
-      );
-    } else {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1
-            AND status IN ('pending', 'waiting')
-            AND approver_user_id = $2
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId, userId],
-      );
-    }
-    if (actionRows.rows.length === 0)
+    const currentAction = await findActionableStep(pool, {
+      requestId,
+      userId,
+      isAdmin,
+    });
+    if (!currentAction)
       throw new HttpError(403, "You are not an approver for any pending step on this request");
-    const currentAction = actionRows.rows[0];
 
     const client = await pool.connect();
     try {
@@ -3060,27 +3130,13 @@ apiRouter.post(
       );
     }
 
-    let actionRows: { rows: Array<Record<string, unknown>> };
-    if (isAdmin) {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1 AND status IN ('pending', 'waiting')
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId],
-      );
-    } else {
-      actionRows = await pool.query(
-        `SELECT * FROM approval_actions
-          WHERE request_id = $1
-            AND status IN ('pending', 'waiting')
-            AND approver_user_id = $2
-          ORDER BY step_order ASC, created_at ASC LIMIT 1`,
-        [requestId, userId],
-      );
-    }
-    if (actionRows.rows.length === 0)
+    const currentAction = await findActionableStep(pool, {
+      requestId,
+      userId,
+      isAdmin,
+    });
+    if (!currentAction)
       throw new HttpError(403, "You are not an approver for any pending step on this request");
-    const currentAction = actionRows.rows[0];
 
     const client = await pool.connect();
     try {
