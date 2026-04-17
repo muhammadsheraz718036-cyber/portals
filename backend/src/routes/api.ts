@@ -36,6 +36,125 @@ function isFileInsideUploads(filePath: string): boolean {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Approval routing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve which specific user must act on a given chain step for a request.
+ *
+ * Priority:
+ *   1. Active user in the request's department whose role matches the step's role.
+ *   2. Active department manager of the request's department (if the step role
+ *      could not be resolved within the department).
+ *   3. Any active user (across departments) holding the step's role — last resort
+ *      so an unscoped role like a global "General Manager" still routes somewhere.
+ *
+ * Returns null only if the role cannot be resolved at all (caller decides fallback).
+ */
+async function resolveStepApprover(
+  client: { query: typeof pool.query },
+  opts: { roleName: string; departmentId: string | null; initiatorId: string },
+): Promise<string | null> {
+  const { roleName, departmentId, initiatorId } = opts;
+  if (!roleName) return null;
+
+  // 1. Same department + same role, never the initiator themselves.
+  if (departmentId) {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT p.id
+         FROM profiles p
+         JOIN roles r ON r.id = p.role_id
+        WHERE p.department_id = $1
+          AND r.name = $2
+          AND p.is_active = true
+          AND p.id <> $3
+        ORDER BY p.created_at ASC
+        LIMIT 1`,
+      [departmentId, roleName, initiatorId],
+    );
+    if (rows.length > 0) return rows[0].id;
+
+    // 2. Active department manager (only if no role match in dept).
+    const { rows: mgrRows } = await client.query<{ id: string }>(
+      `SELECT p.id
+         FROM department_managers dm
+         JOIN profiles p ON p.id = dm.user_id
+        WHERE dm.department_id = $1
+          AND dm.is_active = true
+          AND p.is_active = true
+          AND p.id <> $2
+        ORDER BY dm.assigned_at ASC
+        LIMIT 1`,
+      [departmentId, initiatorId],
+    );
+    if (mgrRows.length > 0) return mgrRows[0].id;
+  }
+
+  // 3. Any active user with the role anywhere.
+  const { rows: anyRows } = await client.query<{ id: string }>(
+    `SELECT p.id
+       FROM profiles p
+       JOIN roles r ON r.id = p.role_id
+      WHERE r.name = $1
+        AND p.is_active = true
+        AND p.id <> $2
+      ORDER BY p.created_at ASC
+      LIMIT 1`,
+    [roleName, initiatorId],
+  );
+  if (anyRows.length > 0) return anyRows[0].id;
+
+  return null;
+}
+
+/**
+ * Build approval_actions rows for a brand-new request from its chain steps.
+ * The first step is set to 'pending' (actionable now); subsequent steps are
+ * 'waiting' until earlier steps complete.
+ */
+async function generateApprovalActionsForRequest(
+  client: { query: typeof pool.query },
+  opts: {
+    requestId: string;
+    chainSteps: Array<{ order?: number; roleName?: string; role_name?: string; action?: string }>;
+    departmentId: string | null;
+    initiatorId: string;
+  },
+): Promise<number> {
+  const sorted = [...opts.chainSteps].sort(
+    (a, b) => (a.order ?? 0) - (b.order ?? 0),
+  );
+  let inserted = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const step = sorted[i];
+    const roleName = (step.roleName || step.role_name || "").trim();
+    if (!roleName) continue;
+    const stepOrder = step.order ?? i + 1;
+    const approverId = await resolveStepApprover(client, {
+      roleName,
+      departmentId: opts.departmentId,
+      initiatorId: opts.initiatorId,
+    });
+    const status = i === 0 ? "pending" : "waiting";
+    await client.query(
+      `INSERT INTO approval_actions
+         (request_id, step_order, role_name, action_label, status, approver_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        opts.requestId,
+        stepOrder,
+        roleName,
+        step.action || "Review",
+        status,
+        approverId,
+      ],
+    );
+    inserted += 1;
+  }
+  return inserted;
+}
+
 // Helper function to log audit events
 async function logAudit(
   userId: string,
