@@ -1,6 +1,8 @@
 /**
  * HTTP client for approval-central-api (Express + Postgres).
- * In dev, Vite proxies /api → backend. Set VITE_API_URL to full URL if needed.
+ * In development, Vite proxies /api → backend.
+ * In production, frontend and backend share the same origin.
+ * Leave VITE_API_URL empty so API calls remain relative to /api.
  */
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 

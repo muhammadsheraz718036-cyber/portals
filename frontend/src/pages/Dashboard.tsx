@@ -48,7 +48,7 @@ type AuditRow = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
+  const { profile, isAdmin } = useAuth();
 
   const { data: requests = [], isLoading: loading } = useApprovalRequests() as {
     data: RequestRow[];
@@ -107,6 +107,14 @@ export default function Dashboard() {
         <p className="text-sm text-muted-foreground mt-1">
           Overview of approval requests and activity
         </p>
+        <div className="mt-4 rounded-lg border border-muted/70 bg-muted/40 p-4">
+          <p className="text-sm text-foreground/90">
+            Welcome back, <span className="font-semibold">{profile?.full_name ?? "there"}</span>!
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Here's a quick summary of your approval activity.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

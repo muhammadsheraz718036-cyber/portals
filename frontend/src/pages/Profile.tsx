@@ -97,6 +97,13 @@ export default function Profile() {
             <Label>Email</Label>
             <Input value={profile?.email || ""} disabled />
           </div>
+          <div className="space-y-1.5">
+            <Label>Department</Label>
+            <Input
+              value={profile?.department_name || "Unassigned"}
+              disabled
+            />
+          </div>
           <Button
             onClick={handleUpdateProfile}
             disabled={updatingProfile}

@@ -315,22 +315,182 @@ Open the frontend and navigate to:
 
 Create the first administrator account through the setup page.
 
-### Production Mode
+### Production Deployment
 
-#### Backend
+#### Backend Deployment
 
-```bash
-cd backend
-npm run build
-npm start
+1. **Build the backend:**
+   ```bash
+   cd backend
+   npm run build
+   ```
+
+2. **Configure environment variables:**
+   - Copy `backend/.env.example` to `backend/.env`
+   - Set `DATABASE_URL` to your production database
+   - Set `JWT_SECRET` to a secure random string
+   - Set `CORS_ORIGIN` to your frontend domain (e.g., `https://yourdomain.com`)
+   - Set `NODE_ENV=production`
+
+3. **Start the backend:**
+   ```bash
+   npm start
+   ```
+
+#### Frontend Deployment
+
+1. **Build the frontend:**
+   ```bash
+   cd frontend
+   npm run build
+   ```
+
+2. **Configure environment variables:**
+   - Copy `frontend/.env.example` to `frontend/.env`
+   - Set `VITE_API_URL` to your backend API URL (e.g., `https://api.yourdomain.com`)
+
+3. **Deploy the `dist/` folder:**
+   - Upload the contents of `frontend/dist/` to your web server
+   - Configure your web server to serve the static files
+   - Set up SSL certificates for HTTPS
+
+#### Example Nginx Configuration
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name yourdomain.com;
+    root /path/to/frontend/dist;
+    index index.html;
+
+    ssl_certificate /path/to/ssl/cert.pem;
+    ssl_certificate_key /path/to/ssl/private.key;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:4000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
-#### Frontend
+#### Docker Deployment (Optional)
 
-```bash
-cd frontend
-npm run build
-npm run preview
+**backend/Dockerfile:**
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY dist/ ./dist/
+EXPOSE 4000
+CMD ["npm", "start"]
+```
+
+**frontend/Dockerfile:**
+```dockerfile
+FROM nginx:alpine
+COPY dist/ /usr/share/nginx/html/
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"
+```
+
+The production build is available in `frontend/dist/`.
+
+#### Backend Deployment
+
+1. **Build the backend:**
+   ```bash
+   cd backend
+   npm run build
+   ```
+
+2. **Configure environment variables:**
+   - Copy `backend/.env.example` to `backend/.env`
+   - Set `DATABASE_URL` to your production database
+   - Set `JWT_SECRET` to a secure random string
+   - Set `CORS_ORIGIN` to your frontend domain (e.g., `https://yourdomain.com`)
+   - Set `NODE_ENV=production`
+
+3. **Start the backend:**
+   ```bash
+   npm start
+   ```
+
+#### Frontend Deployment
+
+1. **Build the frontend:**
+   ```bash
+   cd frontend
+   npm run build
+   ```
+
+2. **Configure environment variables:**
+   - Copy `frontend/.env.example` to `frontend/.env`
+   - Set `VITE_API_URL` to your backend API URL (e.g., `https://api.yourdomain.com`)
+
+3. **Deploy the `dist/` folder:**
+   - Upload the contents of `frontend/dist/` to your web server
+   - Configure your web server to serve the static files
+   - Set up SSL certificates for HTTPS
+
+#### Example Nginx Configuration
+
+```nginx
+# Frontend (port 80/443)
+server {
+    listen 443 ssl;
+    server_name yourdomain.com;
+    root /path/to/frontend/dist;
+    index index.html;
+
+    # SSL configuration
+    ssl_certificate /path/to/ssl/cert.pem;
+    ssl_certificate_key /path/to/ssl/private.key;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy API requests to backend
+    location /api {
+        proxy_pass http://localhost:4000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Backend API (internal, port 4000)
+# The backend runs on localhost:4000 and is proxied through the frontend
+```
+
+#### Docker Deployment (Optional)
+
+**backend/Dockerfile:**
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY dist/ ./dist/
+EXPOSE 4000
+CMD ["npm", "start"]
+```
+
+**frontend/Dockerfile:**
+```dockerfile
+FROM nginx:alpine
+COPY dist/ /usr/share/nginx/html/
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 ```
 
 The production build is available in `frontend/dist/`.
@@ -367,21 +527,89 @@ npm run test:watch
 
 ## Building for Production
 
-### Backend
+### Environment Configuration
+
+1. **Backend Environment Variables**:
+   - Copy `backend/.env.example` to `backend/.env`
+   - Configure your production database URL, JWT secrets, and other settings
+
+2. **Frontend Environment Variables**:
+   - Copy `frontend/.env.example` to `frontend/.env`
+   - Set `VITE_API_URL` to your production backend URL (e.g., `https://api.yourdomain.com`)
+
+### Backend Deployment
 
 ```bash
 cd backend
+npm install --production
 npm run build
-PORT=4000 npm start
+npm start
 ```
 
-### Frontend
+The backend will run on the port specified by the `PORT` environment variable (default: 4000).
+
+### Frontend Deployment
 
 ```bash
 cd frontend
+npm install --production
 npm run build
-npm run preview
 ```
+
+This creates a `dist/` directory with static files that can be served by any web server (nginx, Apache, etc.).
+
+**Example nginx configuration:**
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com;
+    root /path/to/frontend/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:4000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Docker Deployment (Optional)
+
+If you prefer containerized deployment, you can create Dockerfiles for both services:
+
+**backend/Dockerfile:**
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY dist/ ./dist/
+EXPOSE 4000
+CMD ["npm", "start"]
+```
+
+**frontend/Dockerfile:**
+```dockerfile
+FROM nginx:alpine
+COPY dist/ /usr/share/nginx/html/
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### Production Checklist
+
+- [ ] Set secure JWT secrets
+- [ ] Configure production database
+- [ ] Set up SSL/TLS certificates
+- [ ] Configure CORS for your domain
+- [ ] Set up proper logging and monitoring
+- [ ] Configure backup strategies for database
+- [ ] Test all features in production environment
 
 ---
 

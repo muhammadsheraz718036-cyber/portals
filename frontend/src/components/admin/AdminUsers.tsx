@@ -428,18 +428,6 @@ export function AdminUsers() {
                 </div>
 
                 <div className="grid gap-4">
-                  {canToggleAdmin && (
-                    <div className="flex items-center justify-between rounded-lg border p-3">
-                      <div>
-                        <p className="text-sm font-medium">Admin Access</p>
-                        <p className="text-xs text-muted-foreground">
-                          Admin users can create users without department or role assignments.
-                        </p>
-                      </div>
-                      <Switch checked={isAdmin} onCheckedChange={setIsAdmin} />
-                    </div>
-                  )}
-
                   {editUser && (
                     <div className="flex items-center justify-between rounded-lg border p-3">
                       <div>

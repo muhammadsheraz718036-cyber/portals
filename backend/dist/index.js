@@ -1,6 +1,9 @@
 import "./env.js";
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { ZodError } from "zod";
 import { verifyDatabaseReady } from "./verifyDb.js";
 import { apiRouter } from "./routes/api.js";
@@ -14,9 +17,40 @@ function isPgError(err) {
 async function main() {
     await verifyDatabaseReady();
     const app = express();
-    // CORS configuration - restrict in production
+    const port = Number(process.env.PORT) || 4000;
+    // CORS configuration - allow localhost and LAN IPs in development
+    const corsOrigin = process.env.CORS_ORIGIN;
+    const allowedOrigins = [
+        `http://localhost:${port}`,
+        `http://127.0.0.1:${port}`,
+    ];
+    if (corsOrigin) {
+        allowedOrigins.push(...corsOrigin.split(',').map(origin => origin.trim()).filter(origin => origin.length > 0));
+    }
+    if (process.env.NODE_ENV !== "production") {
+        allowedOrigins.push(
+            new RegExp(`^http://192\\.168\\.\\d+\\.\\d+:${port}$`),
+            new RegExp(`^http://10\\.\\d+\\.\\d+\\.\\d+:${port}$`),
+            new RegExp(`^http://172\\.(1[6-9]|2[0-9]|3[0-1])\\.\\d+\\.\\d+:${port}$`),
+        );
+    }
     app.use(cors({
-        origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+        origin: (origin, callback) => {
+            if (!origin)
+                return callback(null, true);
+            const isAllowed = allowedOrigins.some(allowed => {
+                if (typeof allowed === 'string') {
+                    return allowed === origin;
+                }
+                return allowed.test(origin);
+            });
+            if (isAllowed) {
+                callback(null, true);
+            }
+            else {
+                callback(new Error(`CORS policy violation: ${origin} not allowed`));
+            }
+        },
         credentials: true,
         methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],
@@ -33,6 +67,20 @@ async function main() {
         res.set("X-XSS-Protection", "1; mode=block");
         res.set("Referrer-Policy", "strict-origin-when-cross-origin");
         next();
+    });
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    // Serve static files from frontend dist directory
+    const frontendDistPath = path.resolve(__dirname, "../../frontend/dist");
+    if (!fs.existsSync(frontendDistPath)) {
+        throw new Error(`Frontend build output not found at ${frontendDistPath}. Run npm run build in frontend first.`);
+    }
+    app.use(express.static(frontendDistPath));
+    // Handle SPA routing - serve index.html for all non-API routes
+    app.get("/*", (req, res, next) => {
+        if (req.path.startsWith("/api")) {
+            return next();
+        }
+        res.sendFile(path.join(frontendDistPath, "index.html"));
     });
     app.get("/health", (_req, res) => {
         res.json({ ok: true });
@@ -86,9 +134,9 @@ async function main() {
                 : "Internal server error",
         });
     });
-    const port = Number(process.env.PORT) || 4000;
-    app.listen(port, () => {
-        console.log(`approval-central-api listening on http://localhost:${port}`);
+    app.listen(port, "0.0.0.0", () => {
+        console.log(`approval-central-api listening on http://0.0.0.0:${port}`);
+        console.log(`Accessible at: http://localhost:${port} (local) and http://<your-ip>:${port} (LAN)`);
     });
 }
 main().catch((e) => {
