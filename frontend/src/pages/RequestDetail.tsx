@@ -4,6 +4,7 @@ import { useReactToPrint } from "react-to-print";
 import {
   ArrowLeft,
   Printer,
+  Eye,
   CheckCircle,
   XCircle,
   Clock,
@@ -48,6 +49,7 @@ import type { ApprovalFormField } from "@/lib/constants";
 import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import type { RequestAttachment } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
+import { formatExistingActionLabel } from "@/lib/workflowLabels";
 
 const actionIcons: Record<string, React.ReactNode> = {
   Approved: <CheckCircle className="h-5 w-5 text-success" />,
@@ -99,6 +101,77 @@ const getActionLabel = (action: ActionRow) => {
   }
 };
 
+const timelineStatusStyles: Record<string, string> = {
+  approved:
+    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300",
+  rejected:
+    "border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300",
+  changes_requested:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300",
+  pending:
+    "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300",
+  waiting:
+    "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300",
+  skipped:
+    "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300",
+  resubmitted:
+    "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/40 dark:bg-violet-950/30 dark:text-violet-300",
+};
+
+function formatTimelineComment(comment: string): string[] {
+  return comment
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function getActionTime(action: ActionRow): number {
+  return new Date(action.acted_at ?? action.created_at).getTime();
+}
+
+function getTimelineRoleTitle(action: ActionRow): string {
+  const formattedActionLabel = formatExistingActionLabel(
+    action.role_name,
+    action.action_label,
+  );
+  const trimmedRole = action.role_name.trim();
+
+  if (trimmedRole.toLowerCase() === "department manager") {
+    const managerMatch = formattedActionLabel.match(/^(.+?)\s+Manager approval$/i);
+    if (managerMatch?.[1]) {
+      return `${managerMatch[1].trim()} Manager`;
+    }
+  }
+
+  if (trimmedRole.toLowerCase() === "initiator") {
+    return "Initiator";
+  }
+
+  return trimmedRole || "Approval Step";
+}
+
+function getTimelineActionSummary(action: ActionRow): string {
+  const actor = action.acted_by ? "by" : "";
+  switch (action.status) {
+    case "approved":
+      return actor ? "Approved by" : "Approved";
+    case "rejected":
+      return actor ? "Rejected by" : "Rejected";
+    case "changes_requested":
+      return actor ? "Changes requested by" : "Changes requested";
+    case "resubmitted":
+      return actor ? "Resubmitted by" : "Resubmitted";
+    case "pending":
+      return "Awaiting approval from";
+    case "waiting":
+      return "Queued after previous step";
+    case "skipped":
+      return "Skipped";
+    default:
+      return getActionLabel(action);
+  }
+}
+
 type RequestRow = {
   id: string;
   request_number: string;
@@ -130,6 +203,7 @@ type ActionRow = {
   acted_at: string | null;
   comment: string | null;
   approver_user_id: string | null;
+  created_at: string;
 };
 
 const uuidRe =
@@ -157,6 +231,7 @@ export default function RequestDetail() {
     useState(false);
   const [changesComment, setChangesComment] = useState("");
   const [showUpdateForm, setShowUpdateForm] = useState(false);
+  const [showLetterPreview, setShowLetterPreview] = useState(false);
   const [updatingFormData, setUpdatingFormData] = useState<
     Record<string, unknown>
   >({});
@@ -225,18 +300,6 @@ export default function RequestDetail() {
   const pageHeight = isLandscape ? "8.5in" : "11in";
   const pageSize = isLandscape ? "11in 8.5in" : "8.5in 11in";
 
-  // Group actions by step_order to show history
-  const groupedActions = useMemo(() => {
-    const groups: Record<number, ActionRow[]> = {};
-    actions.forEach((action) => {
-      if (!groups[action.step_order]) {
-        groups[action.step_order] = [];
-      }
-      groups[action.step_order].push(action);
-    });
-    return groups;
-  }, [actions]);
-
   // One row per step for the timeline "current" line: prefer active pending/waiting, else latest by time
   const currentActions = useMemo(() => {
     const byStep: Record<number, ActionRow[]> = {};
@@ -256,6 +319,55 @@ export default function RequestDetail() {
         return rows.reduce((best, r) =>
           new Date(r.created_at) > new Date(best.created_at) ? r : best,
         );
+      });
+  }, [actions]);
+
+  const timelineSteps = useMemo(() => {
+    const displayGroups = new Map<number, ActionRow[]>();
+
+    for (const action of actions) {
+      if (action.status === "skipped") continue;
+
+      let displayStepOrder = action.step_order;
+      if (action.status === "resubmitted") {
+        const relatedChangeRequest = actions
+          .filter(
+            (candidate) =>
+              candidate.status === "changes_requested" &&
+              getActionTime(candidate) <= getActionTime(action),
+          )
+          .sort((a, b) => getActionTime(b) - getActionTime(a))[0];
+
+        if (relatedChangeRequest) {
+          displayStepOrder = relatedChangeRequest.step_order;
+        }
+      }
+
+      const existing = displayGroups.get(displayStepOrder) ?? [];
+      existing.push(action);
+      displayGroups.set(displayStepOrder, existing);
+    }
+
+    return Array.from(displayGroups.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([stepOrder, grouped]) => {
+        const events = [...grouped].sort((a, b) => getActionTime(a) - getActionTime(b));
+        const active = events.find(
+          (event) => event.status === "pending" || event.status === "waiting",
+        );
+        const primary =
+          active ??
+          [...events]
+            .reverse()
+            .find((event) => event.status !== "resubmitted") ??
+          events[events.length - 1];
+        const history = events.filter((event) => event.id !== primary.id);
+
+        return {
+          stepOrder,
+          primary,
+          history,
+        };
       });
   }, [actions]);
 
@@ -447,10 +559,8 @@ export default function RequestDetail() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  // Mirror backend `findActionableStep` exactly so buttons appear ONLY for the
-  // user who is genuinely the current approver. After acting, the request is
-  // refetched, the lowest pending step advances, and this returns false → the
-  // buttons disable automatically and the next approver's UI lights up.
+  // Mirror backend `findActionableStep`: only the concrete assignee for the
+  // lowest pending step may act. Shared-role peers must not see action buttons.
   const canApprove = () => {
     if (
       !request ||
@@ -466,8 +576,6 @@ export default function RequestDetail() {
       return false;
     }
 
-    // Find the lowest currently-pending step (don't trust request.current_step
-    // alone — the source of truth is approval_actions).
     const pendingActions = actions
       .filter((a) => a.status === "pending")
       .sort((a, b) => a.step_order - b.step_order);
@@ -481,32 +589,9 @@ export default function RequestDetail() {
     );
 
     return activeActions.some((a) => {
-      // Already acted on by this user → don't let them act again.
       if (a.acted_by === user.id) return false;
-
-      // Admins may act on any open step.
       if (profile.is_admin) return true;
-
-      // Pre-resolved assignee for this step.
-      if (a.approver_user_id && a.approver_user_id === user.id) return true;
-
-      // Same role + STRICT department isolation: the user must belong to the
-      // same department as the request (or the request has no department).
-      // Cross-department same-role users must NOT see action buttons.
-      const sameRole =
-        !!profile.role_name &&
-        profile.role_name.trim().toLowerCase() ===
-          (a.role_name || "").trim().toLowerCase();
-      if (!sameRole) return false;
-
-      // If the action has a specific assignee that isn't this user, defer to
-      // that assignee — same-role peers don't get to act.
-      if (a.approver_user_id && a.approver_user_id !== user.id) return false;
-
-      const sameDept =
-        !request.department_id ||
-        request.department_id === profile.department_id;
-      return sameDept;
+      return a.approver_user_id === user.id;
     });
   };
 
@@ -559,6 +644,330 @@ export default function RequestDetail() {
       key !== "pre_comments" &&
       key !== "post_comments",
   );
+  const displayId = request?.request_number ?? "";
+  const letterContent = (
+    <div
+      className="relative w-full"
+      style={{
+        fontFamily: "Arial, sans-serif",
+        fontSize: "16px",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: "100%",
+        height: "100%",
+        width: "100%",
+        padding: "0.5in",
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] rotate-[-35deg]">
+        <span
+          className="font-bold tracking-widest whitespace-nowrap select-none"
+          style={{
+            fontFamily: "Arial, sans-serif",
+            fontSize: "6rem",
+          }}
+        >
+          {user?.email}
+        </span>
+      </div>
+      <div className="relative z-10 flex-1 flex flex-col">
+        <div className="text-center border-b-2 border-foreground pb-3">
+          {settings?.logo_url && (
+            <img
+              src={settings.logo_url}
+              alt="Logo"
+              className="h-20 mx-auto mb-1 object-contain"
+            />
+          )}
+          <h2
+            className="font-bold tracking-wide"
+            style={{
+              fontFamily: "Arial, sans-serif",
+              fontSize: "20px",
+            }}
+          >
+            {companyName.toUpperCase()}
+          </h2>
+          <p>{request?.approval_types?.name ?? "—"}</p>
+        </div>
+        <div className="flex justify-between mt-4" style={{ fontSize: "14px" }}>
+          <div>
+            <p>
+              <strong>Request ID:</strong> {displayId}
+            </p>
+            <p>
+              <strong>Status:</strong>{" "}
+              {request?.status.replace("_", " ").toUpperCase()}
+            </p>
+          </div>
+          <div className="text-right">
+            <p>
+              <strong>Date:</strong>{" "}
+              {request ? new Date(request.created_at).toLocaleDateString() : "—"}
+            </p>
+          </div>
+        </div>
+        {richContent ? (
+          <div className="relative">
+            {request?.status === "changes_requested" && (
+              <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
+                <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
+                  <p className="font-semibold text-foreground text-lg">
+                    Changes Requested
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    The request has been sent back for revisions. Please update
+                    the form data and resubmit.
+                  </p>
+                </div>
+              </div>
+            )}
+            <div
+              className={
+                request?.status === "changes_requested"
+                  ? "opacity-75 pointer-events-none"
+                  : ""
+              }
+            >
+              <div
+                className="my-3 prose max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
+                style={{
+                  fontFamily: "Arial, sans-serif",
+                  fontSize: "14px",
+                }}
+                dangerouslySetInnerHTML={{
+                  __html: safeRichContent,
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 space-y-3">
+            {request?.status === "changes_requested" ? (
+              <div className="relative">
+                <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
+                  <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
+                    <p className="font-semibold text-foreground text-lg">
+                      Changes Requested
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      The request has been sent back for revisions. Please
+                      update the form data and resubmit.
+                    </p>
+                  </div>
+                </div>
+                <div className="opacity-75 pointer-events-none">
+                  {preComments && (
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontFamily: "Arial, sans-serif",
+                      }}
+                      dangerouslySetInnerHTML={{
+                        __html: safePreComments,
+                      }}
+                    />
+                  )}
+                  {repeatableFields.length > 0 && (
+                    <div className="space-y-6 my-4">
+                      {Array.from(
+                        new Set(repeatableFields.map((f) => f.group || "General")),
+                      )
+                        .sort((a, b) => {
+                          if (a === "General") return -1;
+                          if (b === "General") return 1;
+                          return a.localeCompare(b);
+                        })
+                        .map((group) => {
+                          const groupFields = repeatableFields.filter(
+                            (f) => (f.group || "General") === group,
+                          );
+                          const groupItems = items.filter(
+                            (item: LineItem) =>
+                              String(item.__group || "General") === group,
+                          );
+
+                          if (groupFields.length === 0) return null;
+
+                          return (
+                            <div key={group} className="p-3">
+                              <h3 className="text-sm font-semibold mb-2">
+                                {group}
+                              </h3>
+                              {groupItems.length === 0 ? (
+                                <p className="text-sm text-muted-foreground py-2">
+                                  No entries for this group.
+                                </p>
+                              ) : (
+                                <table
+                                  className="w-full border-collapse"
+                                  style={{ fontSize: "12px" }}
+                                >
+                                  <thead>
+                                    <tr>
+                                      {groupFields.map((field) => (
+                                        <th
+                                          key={`${group}-${field.name}-header`}
+                                          className="border border-foreground p-2 bg-muted font-semibold text-center"
+                                        >
+                                          {field.label || field.name}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {groupItems.map((item: LineItem, idx: number) => (
+                                      <tr key={idx}>
+                                        {groupFields.map((field) => (
+                                          <td
+                                            key={`${idx}-${field.name}`}
+                                            className="border border-foreground p-2 text-center"
+                                          >
+                                            {item[field.name] ?? "—"}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                  {postComments && (
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontFamily: "Arial, sans-serif",
+                        marginTop: "1rem",
+                      }}
+                      dangerouslySetInnerHTML={{
+                        __html: safePostComments,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
+                {preComments && (
+                  <div
+                    style={{
+                      fontSize: "14px",
+                      fontFamily: "Arial, sans-serif",
+                    }}
+                    dangerouslySetInnerHTML={{
+                      __html: safePreComments,
+                    }}
+                  />
+                )}
+                {repeatableFields.length > 0 && (
+                  <div className="space-y-6 my-4">
+                    {Array.from(
+                      new Set(repeatableFields.map((f) => f.group || "General")),
+                    )
+                      .sort((a, b) => {
+                        if (a === "General") return -1;
+                        if (b === "General") return 1;
+                        return a.localeCompare(b);
+                      })
+                      .map((group) => {
+                        const groupFields = repeatableFields.filter(
+                          (f) => (f.group || "General") === group,
+                        );
+                        const groupItems = items.filter(
+                          (item: LineItem) =>
+                            String(item.__group || "General") === group,
+                        );
+
+                        if (groupFields.length === 0) return null;
+
+                        return (
+                          <div key={group} className="p-3">
+                            <h3 className="text-sm font-semibold mb-2">
+                              {group}
+                            </h3>
+                            {groupItems.length === 0 ? (
+                              <p className="text-sm text-muted-foreground py-2">
+                                No entries for this group.
+                              </p>
+                            ) : (
+                              <table
+                                className="w-full border-collapse"
+                                style={{ fontSize: "12px" }}
+                              >
+                                <thead>
+                                  <tr>
+                                    {groupFields.map((field) => (
+                                      <th
+                                        key={`${group}-${field.name}-header`}
+                                        className="border border-foreground p-2 bg-muted font-semibold text-center"
+                                      >
+                                        {field.label || field.name}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {groupItems.map((item: LineItem, idx: number) => (
+                                    <tr key={idx}>
+                                      {groupFields.map((field) => (
+                                        <td
+                                          key={`${idx}-${field.name}`}
+                                          className="border border-foreground p-2 text-center"
+                                        >
+                                          {item[field.name] ?? "—"}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+                {postComments && (
+                  <div
+                    style={{
+                      fontSize: "14px",
+                      fontFamily: "Arial, sans-serif",
+                      marginTop: "1rem",
+                    }}
+                    dangerouslySetInnerHTML={{
+                      __html: safePostComments,
+                    }}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
+        <div className="mt-12 flex justify-start">
+          <div className="text-left w-full max-w-[210px]">
+            <p className="font-bold" style={{ fontSize: "14px" }}>
+              {initiatorName}
+            </p>
+            <p className="text-muted-foreground" style={{ fontSize: "13px" }}>
+              {initiatorRole || "No Role Assigned"}
+            </p>
+            <p className="text-muted-foreground" style={{ fontSize: "13px" }}>
+              {initiatorDepartment || ""}
+            </p>
+            <p className="text-muted-foreground" style={{ fontSize: "13px" }}>
+              {companyName ?? ""}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   if (loading) {
     return (
@@ -582,8 +991,6 @@ export default function RequestDetail() {
       </div>
     );
   }
-
-  const displayId = request.request_number;
 
   return (
     <div className="p-6 space-y-6">
@@ -610,38 +1017,48 @@ export default function RequestDetail() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="space-y-6 lg:contents">
-          <Card className="border no-print lg:col-span-2 lg:row-start-1">
+      <div
+        className="print-only"
+        id="print-letter"
+        ref={printLetterRef}
+        style={{
+          display: "none",
+          width: pageWidth,
+          height: pageHeight,
+          boxSizing: "border-box",
+        }}
+      >
+        {letterContent}
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+        <div className="space-y-6">
+          <Card className="border no-print">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Request Details</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4 text-sm">
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
                 <div>
-                  <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                     Type
                   </p>
-                  <p className="font-medium">
-                    {request.approval_types?.name ?? "—"}
-                  </p>
+                  <p className="font-medium">{request.approval_types?.name ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                     Initiator
                   </p>
                   <p className="font-medium">{initiatorName || "—"}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                     Department
                   </p>
-                  <p className="font-medium">
-                    {initiatorDepartment ?? "—"}
-                  </p>
+                  <p className="font-medium">{initiatorDepartment ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                     Date
                   </p>
                   <p className="font-medium">
@@ -649,551 +1066,263 @@ export default function RequestDetail() {
                   </p>
                 </div>
               </div>
+
+              <div className="rounded-xl border bg-muted/20 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-foreground">
+                      Letter Preview
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Open the formatted request letter in a dialog so the page
+                      stays compact and easier to scan.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => setShowLetterPreview(true)}
+                  >
+                    <Eye className="h-4 w-4" />
+                    Open Preview
+                  </Button>
+                </div>
+              </div>
+
+              {(regularFields.length > 0 || formEntries.length > 0) && (
+                <div className="rounded-xl border p-4">
+                  <p className="mb-3 text-sm font-semibold text-foreground">
+                    Captured Fields
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {formEntries.map(([key, value]) => (
+                      <div key={key}>
+                        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                          {key.replace(/_/g, " ")}
+                        </p>
+                        <p className="text-sm font-medium text-foreground">
+                          {String(value || "—")}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          <div className="lg:col-span-3 lg:row-start-2">
-            {/* Shared letter content used for both print and preview */}
-            {(() => {
-              const pageLayout =
-                request.approval_types?.page_layout || "portrait";
-              // Standard US Letter size (inches)
-              const pageWidth = pageLayout === "portrait" ? "8.5in" : "11in";
-              const pageHeight = pageLayout === "portrait" ? "11in" : "8.5in";
-              const pageOrientation =
-                pageLayout === "portrait" ? "portrait" : "landscape";
-
-              const letterContent = (
-                <div
-                  className="relative w-full"
-                  style={{
-                    fontFamily: "Arial, sans-serif",
-                    fontSize: "16px",
-                    display: "flex",
-                    flexDirection: "column",
-                    minHeight: "100%",
-                    height: "100%",
-                    width: "100%",
-                    padding: "0.5in",
-                    boxSizing: "border-box",
-                    overflow: "hidden",
-                  }}
-                >
-                  {/* Watermark */}
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] rotate-[-35deg]">
-                    <span
-                      className="font-bold tracking-widest whitespace-nowrap select-none"
-                      style={{
-                        fontFamily: "Arial, sans-serif",
-                        fontSize: "6rem",
-                      }}
-                    >
-                      {user?.email}
-                    </span>
-                  </div>
-                  <div className="relative z-10 flex-1 flex flex-col">
-                    <div className="text-center border-b-2 border-foreground pb-3">
-                      {settings?.logo_url && (
-                        <img
-                          src={settings.logo_url}
-                          alt="Logo"
-                          className="h-20 mx-auto mb-1 object-contain"
-                        />
-                      )}
-                      <h2
-                        className="font-bold tracking-wide"
-                        style={{
-                          fontFamily: "Arial, sans-serif",
-                          fontSize: "20px",
-                        }}
-                      >
-                        {companyName.toUpperCase()}
-                      </h2>
-                      <p>{request.approval_types?.name ?? "—"}</p>
-                    </div>
+          {attachments.length > 0 && (
+            <Card className="border no-print">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Paperclip className="h-4 w-4" />
+                  File Attachments
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {attachments.map((attachment) => (
                     <div
-                      className="flex justify-between mt-4"
-                      style={{ fontSize: "14px" }}
+                      key={attachment.id}
+                      className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border"
                     >
-                      <div>
-                        <p>
-                          <strong>Request ID:</strong> {displayId}
-                        </p>
-                        <p>
-                          <strong>Status:</strong>{" "}
-                          {request.status.replace("_", " ").toUpperCase()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p>
-                          <strong>Date:</strong>{" "}
-                          {new Date(request.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                    </div>
-                    {richContent ? (
-                      <div className="relative">
-                        {request.status === "changes_requested" && (
-                          <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
-                            <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
-                              <p className="font-semibold text-foreground text-lg">
-                                Changes Requested
-                              </p>
-                              <p className="text-sm text-muted-foreground mt-2">
-                                The request has been sent back for revisions.
-                                Please update the form data and resubmit.
-                              </p>
-                            </div>
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="flex-shrink-0">
+                          <div className="w-8 h-8 bg-blue-100 rounded flex items-center justify-center">
+                            <Paperclip className="h-4 w-4 text-blue-600" />
                           </div>
-                        )}
-                        <div
-                          className={
-                            request.status === "changes_requested"
-                              ? "opacity-75 pointer-events-none"
-                              : ""
-                          }
-                        >
-                          <div
-                            className="my-3 prose max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
-                            style={{
-                              fontFamily: "Arial, sans-serif",
-                              fontSize: "14px",
-                            }}
-                            dangerouslySetInnerHTML={{
-                              __html: safeRichContent,
-                            }}
-                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            {attachment.original_filename}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span>{formatFileSize(attachment.file_size_bytes)}</span>
+                            <span>•</span>
+                            <span>{attachment.field_label || attachment.field_name}</span>
+                            <span>•</span>
+                            <span>
+                              {new Date(attachment.created_at!).toLocaleDateString()}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    ) : (
-                      <div className="mt-6 space-y-3">
-                        {request.status === "changes_requested" ? (
-                          <div className="relative">
-                            <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
-                              <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
-                                <p className="font-semibold text-foreground text-lg">
-                                  Changes Requested
-                                </p>
-                                <p className="text-sm text-muted-foreground mt-2">
-                                  The request has been sent back for revisions.
-                                  Please update the form data and resubmit.
-                                </p>
-                              </div>
-                            </div>
-                            <div className="opacity-75 pointer-events-none">
-                              {preComments && (
-                                <div
-                                  style={{
-                                    fontSize: "14px",
-                                    fontFamily: "Arial, sans-serif",
-                                  }}
-                                  dangerouslySetInnerHTML={{
-                                    __html: safePreComments,
-                                  }}
-                                />
-                              )}
-                              {repeatableFields.length > 0 && (
-                                <div className="space-y-6 my-4">
-                                  {Array.from(
-                                    new Set(
-                                      repeatableFields.map(
-                                        (f) => f.group || "General",
-                                      ),
-                                    ),
-                                  )
-                                    .sort((a, b) => {
-                                      if (a === "General") return -1;
-                                      if (b === "General") return 1;
-                                      return a.localeCompare(b);
-                                    })
-                                    .map((group) => {
-                                      const groupFields =
-                                        repeatableFields.filter(
-                                          (f) =>
-                                            (f.group || "General") === group,
-                                        );
-                                      const groupItems = items.filter(
-                                        (item: LineItem) =>
-                                          String(item.__group || "General") ===
-                                          group,
-                                      );
-
-                                      if (groupFields.length === 0) return null;
-
-                                      return (
-                                        <div key={group} className="p-3">
-                                          <h3 className="text-sm font-semibold mb-2">
-                                            {group}
-                                          </h3>
-                                          {groupItems.length === 0 ? (
-                                            <p className="text-sm text-muted-foreground py-2">
-                                              No entries for this group.
-                                            </p>
-                                          ) : (
-                                            <table
-                                              className="w-full border-collapse"
-                                              style={{ fontSize: "12px" }}
-                                            >
-                                              <thead>
-                                                <tr>
-                                                  {groupFields.map((field) => (
-                                                    <th
-                                                      key={`${group}-${field.name}-header`}
-                                                      className="border border-foreground p-2 bg-muted font-semibold text-center"
-                                                    >
-                                                      {field.label ||
-                                                        field.name}
-                                                    </th>
-                                                  ))}
-                                                </tr>
-                                              </thead>
-                                              <tbody>
-                                                {groupItems.map(
-                                                  (
-                                                    item: LineItem,
-                                                    idx: number,
-                                                  ) => (
-                                                    <tr key={idx}>
-                                                      {groupFields.map(
-                                                        (field) => (
-                                                          <td
-                                                            key={`${idx}-${field.name}`}
-                                                            className="border border-foreground p-2 text-center"
-                                                          >
-                                                            {item[field.name] ??
-                                                              "—"}
-                                                          </td>
-                                                        ),
-                                                      )}
-                                                    </tr>
-                                                  ),
-                                                )}
-                                              </tbody>
-                                            </table>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              )}
-                              {postComments && (
-                                <div
-                                  style={{
-                                    fontSize: "14px",
-                                    fontFamily: "Arial, sans-serif",
-                                    marginTop: "1rem",
-                                  }}
-                                  dangerouslySetInnerHTML={{
-                                    __html: safePostComments,
-                                  }}
-                                />
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            {preComments && (
-                              <div
-                                style={{
-                                  fontSize: "14px",
-                                  fontFamily: "Arial, sans-serif",
-                                }}
-                                dangerouslySetInnerHTML={{
-                                  __html: safePreComments,
-                                }}
-                              />
-                            )}
-                            {repeatableFields.length > 0 && (
-                              <div className="space-y-6 my-4">
-                                {Array.from(
-                                  new Set(
-                                    repeatableFields.map(
-                                      (f) => f.group || "General",
-                                    ),
-                                  ),
-                                )
-                                  .sort((a, b) => {
-                                    if (a === "General") return -1;
-                                    if (b === "General") return 1;
-                                    return a.localeCompare(b);
-                                  })
-                                  .map((group) => {
-                                    const groupFields = repeatableFields.filter(
-                                      (f) => (f.group || "General") === group,
-                                    );
-                                    const groupItems = items.filter(
-                                      (item: LineItem) =>
-                                        String(item.__group || "General") ===
-                                        group,
-                                    );
-
-                                    if (groupFields.length === 0) return null;
-
-                                    return (
-                                      <div key={group} className="p-3">
-                                        <h3 className="text-sm font-semibold mb-2">
-                                          {group}
-                                        </h3>
-                                        {groupItems.length === 0 ? (
-                                          <p className="text-sm text-muted-foreground py-2">
-                                            No entries for this group.
-                                          </p>
-                                        ) : (
-                                          <table
-                                            className="w-full border-collapse"
-                                            style={{ fontSize: "12px" }}
-                                          >
-                                            <thead>
-                                              <tr>
-                                                {groupFields.map((field) => (
-                                                  <th
-                                                    key={`${group}-${field.name}-header`}
-                                                    className="border border-foreground p-2 bg-muted font-semibold text-center"
-                                                  >
-                                                    {field.label || field.name}
-                                                  </th>
-                                                ))}
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {groupItems.map(
-                                                (
-                                                  item: LineItem,
-                                                  idx: number,
-                                                ) => (
-                                                  <tr key={idx}>
-                                                    {groupFields.map(
-                                                      (field) => (
-                                                        <td
-                                                          key={`${idx}-${field.name}`}
-                                                          className="border border-foreground p-2 text-center"
-                                                        >
-                                                          {item[field.name] ??
-                                                            "—"}
-                                                        </td>
-                                                      ),
-                                                    )}
-                                                  </tr>
-                                                ),
-                                              )}
-                                            </tbody>
-                                          </table>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            )}
-                            {postComments && (
-                              <div
-                                style={{
-                                  fontSize: "14px",
-                                  fontFamily: "Arial, sans-serif",
-                                  marginTop: "1rem",
-                                }}
-                                dangerouslySetInnerHTML={{
-                                  __html: safePostComments,
-                                }}
-                              />
-                            )}
-                          </>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDownloadFile(attachment)}
+                          className="text-blue-600 hover:text-blue-700"
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        {canDeleteFiles() && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteFile(attachment)}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         )}
                       </div>
-                    )}
-                    <div className="mt-12 flex justify-start">
-                      <div className="text-left w-full max-w-[210px]">
-                        <p className="font-bold" style={{ fontSize: "14px" }}>
-                          {initiatorName}
-                        </p>
-                        <p
-                          className="text-muted-foreground"
-                          style={{ fontSize: "13px" }}
-                        >
-                          {initiatorRole || "No Role Assigned"}
-                        </p>
-                        <p
-                          className="text-muted-foreground"
-                          style={{ fontSize: "13px" }}
-                        >
-                          {initiatorDepartment || ""}
-                        </p>
-                        <p
-                          className="text-muted-foreground"
-                          style={{ fontSize: "13px" }}
-                        >
-                          {companyName ?? ""}
-                        </p>
-                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              );
-
-              return (
-                <>
-                  {/* Print version (hidden on screen) */}
-                  <div
-                    className="print-only"
-                    id="print-letter"
-                    ref={printLetterRef}
-                    style={{
-                      display: "none",
-                      width: pageWidth,
-                      height: pageHeight,
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    {letterContent}
-                  </div>
-
-                  {/* On-screen preview */}
-                  <Card className="border no-print">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">
-                        Letter Preview
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div
-                        className="bg-card border rounded shadow-sm"
-                        style={{
-                          width: pageWidth,
-                          margin: "0 auto",
-                          height: pageHeight,
-                          overflow: "hidden",
-                          boxSizing: "border-box",
-                          display: "flex",
-                          flexDirection: "column",
-                        }}
-                      >
-                        {letterContent}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </>
-              );
-            })()}
-          </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
-        <div className="lg:col-start-3 lg:row-start-1 lg:col-span-1">
-          <Card className="border sticky top-6 no-print">
+        <div className="space-y-6">
+          <Card className="border no-print xl:sticky xl:top-6">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Approval Timeline</CardTitle>
+              <CardTitle className="text-base">Approval Flow</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-0">
-                {currentActions.map((step, idx) => {
-                  const iconKey = iconKeyForAction(step.status);
-                  const stepHistory = groupedActions[step.step_order] || [];
-                  const hasHistory = stepHistory.length > 1;
+                {timelineSteps.map(({ stepOrder, primary, history }, idx) => {
+                  const iconKey = iconKeyForAction(primary.status);
+                  const roleTitle = getTimelineRoleTitle(primary);
+                  const actionSummary = getTimelineActionSummary(primary);
 
                   return (
                     <div
-                      key={`${step.step_order}-${step.id}`}
+                      key={`${stepOrder}-${primary.id}`}
                       className="flex gap-3"
                     >
                       <div className="flex flex-col items-center">
                         <div className="flex-shrink-0">
                           {actionIcons[iconKey] || actionIcons.Waiting}
                         </div>
-                        {idx < currentActions.length - 1 && (
+                        {idx < timelineSteps.length - 1 && (
                           <div className="w-px h-full min-h-[40px] bg-border my-1" />
                         )}
                       </div>
-                      <div className="pb-6">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-medium">
-                              Step {step.step_order}: {step.role_name}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {step.action_label}
-                            </p>
+                      <div className="pb-6 flex-1">
+                        <div className="rounded-xl border bg-card/80 p-4 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-semibold text-foreground">
+                                  Step {stepOrder}
+                                </p>
+                                <span
+                                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+                                    timelineStatusStyles[primary.status] ??
+                                    timelineStatusStyles.waiting
+                                  }`}
+                                >
+                                  {getActionLabel(primary)}
+                                </span>
+                              </div>
+                              <p className="text-sm font-medium text-foreground">
+                                {roleTitle}
+                              </p>
+                            </div>
                           </div>
-                          {/* Show "Your Turn" indicator if it's the current step and user can act */}
-                          {request && 
-                           step.step_order === request.current_step && 
-                           ["pending", "waiting"].includes(step.status) &&
-                           canApprove() && (
-                            <span className="px-2 py-1 text-xs font-medium bg-primary/10 text-primary border border-primary/20 rounded-full">
-                              Your Turn
-                            </span>
-                          )}
-                          {/* Show "Current Step" indicator if it's the current step but not user's turn */}
-                          {request && 
-                           step.step_order === request.current_step && 
-                           ["pending", "waiting"].includes(step.status) &&
-                           !canApprove() && (
-                            <span className="px-2 py-1 text-xs font-medium bg-muted text-muted-foreground border border-muted rounded-full">
-                              Current Step
-                            </span>
-                          )}
-                        </div>
-                        {step.acted_by && (
-                          <p className="text-xs text-muted-foreground">
-                            By: {actorNames[step.acted_by] ?? "—"}
-                          </p>
-                        )}
-                        {step.acted_at && (
-                          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-                            {new Date(step.acted_at).toLocaleString()}
-                          </p>
-                        )}
-                        {step.comment && (
-                          <p className="text-xs text-foreground mt-1 bg-muted/50 rounded px-2 py-1">
-                            &quot;{step.comment}&quot;
-                          </p>
-                        )}
+                          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            {primary.acted_by && (
+                              <span>
+                                <span className="font-medium text-foreground">
+                                  {actorNames[primary.acted_by] ?? "Unknown approver"}
+                                </span>{" "}
+                                <span>{actionSummary.toLowerCase().replace(/\s+by$/, "")}</span>
+                              </span>
+                            )}
+                            {!primary.acted_by && (
+                              <span>{actionSummary}</span>
+                            )}
+                            {primary.acted_at && (
+                              <span>{new Date(primary.acted_at).toLocaleString()}</span>
+                            )}
+                            {request &&
+                              stepOrder === request.current_step &&
+                              ["pending", "waiting"].includes(primary.status) &&
+                              canApprove() && (
+                                <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 font-medium text-primary">
+                                  Your turn
+                                </span>
+                              )}
+                            {request &&
+                              stepOrder === request.current_step &&
+                              ["pending", "waiting"].includes(primary.status) &&
+                              !canApprove() && (
+                                <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 font-medium text-muted-foreground">
+                                  Current step
+                                </span>
+                              )}
+                          </div>
 
-                        {/* Show history for this step */}
-                        {hasHistory && (
-                          <div className="mt-3 border-t pt-3">
-                            <p className="text-xs font-medium text-muted-foreground mb-2">
-                              History:
-                            </p>
-                            <div className="space-y-2">
-                              {stepHistory
-                                .filter((h) => h.id !== step.id) // Filter out current action
-                                .sort(
-                                  (a, b) =>
-                                    new Date(a.created_at).getTime() -
-                                    new Date(b.created_at).getTime(),
-                                )
-                                .map((historyAction, histIdx) => (
+                          {primary.comment && (
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                Notes
+                              </p>
+                              <div className="mt-2 space-y-2 text-sm leading-6 text-foreground">
+                                {formatTimelineComment(primary.comment).map((line, lineIdx) => (
+                                  <p key={`${primary.id}-comment-${lineIdx}`}>{line}</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {history.length > 0 && (
+                            <div className="mt-4 border-t pt-4">
+                              <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                Step Activity
+                              </p>
+                              <div className="space-y-2">
+                                {history.map((historyAction) => (
                                   <div
                                     key={historyAction.id}
-                                    className="text-xs border-l-2 border-muted pl-2 py-1"
+                                    className="rounded-lg border border-border/60 bg-background/70 p-3"
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-medium text-muted-foreground">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span
+                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                          timelineStatusStyles[historyAction.status] ??
+                                          timelineStatusStyles.waiting
+                                        }`}
+                                      >
                                         {getActionLabel(historyAction)}
                                       </span>
-                                      {historyAction.acted_at && (
-                                        <span className="text-[10px] text-muted-foreground/70">
-                                          {new Date(
-                                            historyAction.acted_at,
-                                          ).toLocaleString()}
-                                        </span>
-                                      )}
+                                      <span className="text-[11px] text-muted-foreground">
+                                        {new Date(
+                                          historyAction.acted_at ?? historyAction.created_at,
+                                        ).toLocaleString()}
+                                      </span>
                                     </div>
-                                    {historyAction.acted_by && (
-                                      <p className="text-muted-foreground">
-                                        By:{" "}
-                                        {actorNames[historyAction.acted_by] ??
-                                          "—"}
-                                      </p>
-                                    )}
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                      {historyAction.acted_by
+                                        ? `${getTimelineActionSummary(historyAction)} ${actorNames[historyAction.acted_by] ?? "Unknown approver"}`
+                                        : getTimelineActionSummary(historyAction)}
+                                    </p>
                                     {historyAction.comment && (
-                                      <p className="text-muted-foreground italic mt-1">
-                                        &quot;{historyAction.comment}&quot;
-                                      </p>
+                                      <div className="mt-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-slate-900/40">
+                                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                                          Note
+                                        </p>
+                                        <div className="space-y-1.5 text-xs leading-5 text-foreground">
+                                          {formatTimelineComment(historyAction.comment).map(
+                                            (line, lineIdx) => (
+                                              <p
+                                                key={`${historyAction.id}-history-comment-${lineIdx}`}
+                                              >
+                                                {line}
+                                              </p>
+                                            ),
+                                          )}
+                                        </div>
+                                      </div>
                                     )}
                                   </div>
                                 ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1279,78 +1408,30 @@ export default function RequestDetail() {
               )}
             </CardContent>
           </Card>
-
-          {/* File Attachments */}
-          {attachments.length > 0 && (
-            <Card className="border no-print">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Paperclip className="h-4 w-4" />
-                  File Attachments
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {attachments.map((attachment) => (
-                    <div
-                      key={attachment.id}
-                      className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border"
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="flex-shrink-0">
-                          <div className="w-8 h-8 bg-blue-100 rounded flex items-center justify-center">
-                            <Paperclip className="h-4 w-4 text-blue-600" />
-                          </div>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">
-                            {attachment.original_filename}
-                          </p>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>
-                              {formatFileSize(attachment.file_size_bytes)}
-                            </span>
-                            <span>•</span>
-                            <span>
-                              {attachment.field_label || attachment.field_name}
-                            </span>
-                            <span>•</span>
-                            <span>
-                              {new Date(
-                                attachment.created_at!,
-                              ).toLocaleDateString()}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDownloadFile(attachment)}
-                          className="text-blue-600 hover:text-blue-700"
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                        {canDeleteFiles() && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteFile(attachment)}
-                            className="text-red-600 hover:text-red-700"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
+
+      <Dialog open={showLetterPreview} onOpenChange={setShowLetterPreview}>
+        <DialogContent className="w-[96vw] max-w-6xl max-h-[92vh] overflow-auto p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Letter Preview</DialogTitle>
+          </DialogHeader>
+          <div className="overflow-auto rounded-lg border bg-muted/20 p-3 sm:p-6">
+            <div
+              className="bg-card border rounded shadow-sm mx-auto"
+              style={{
+                width: pageWidth,
+                minHeight: pageHeight,
+                boxSizing: "border-box",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              {letterContent}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Request Changes Dialog */}
       <Dialog

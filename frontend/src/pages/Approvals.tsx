@@ -31,6 +31,7 @@ type RequestRow = {
   departments: { name: string } | null;
   is_initiator: boolean;
   needs_approval: boolean;
+  has_acted?: boolean;
 };
 
 export default function Approvals() {
@@ -50,13 +51,16 @@ export default function Approvals() {
   const segregated = useMemo(() => {
     const myRequests = rows.filter((r) => r.is_initiator);
     
-    // Backend computes needs_approval using current role assignment.
+    // Keep both pending approvals and requests the current user already acted on
+    // in the approver-facing list so approval history remains accessible.
     const approvalRequests = rows.filter((r) => {
-      if (!r.needs_approval) return false;
+      if (!(r.needs_approval || r.has_acted)) return false;
       return isAdmin || hasPermission("approve_reject") || hasPermission("all");
     });
     
-    const allOther = rows.filter((r) => !r.is_initiator && !r.needs_approval);
+    const allOther = rows.filter(
+      (r) => !r.is_initiator && !r.needs_approval && !r.has_acted,
+    );
     return { myRequests, approvalRequests, allOther };
   }, [rows, isAdmin, hasPermission]);
 

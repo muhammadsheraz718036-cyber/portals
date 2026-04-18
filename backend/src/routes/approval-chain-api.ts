@@ -36,9 +36,9 @@ export const createApprovalChainAPIRouter = () => {
   const chainStepSchema: z.ZodType<ChainStepDefinition> = z.object({
     step_order: z.number().int().positive(),
     name: z.string().min(1),
-    description: z.string().optional(),
-    actor_type: z.enum(['ROLE', 'USER_MANAGER', 'DEPARTMENT_MANAGER', 'SPECIFIC_USER']),
-    actor_value: z.string().optional(),
+    role: z.string().min(1),
+    scope_type: z.enum(['initiator_department', 'fixed_department', 'static', 'expression']),
+    scope_value: z.string().optional(),
     action_label: z.string().min(1),
     due_days: z.number().int().min(0).max(365).optional(),
     is_parallel: z.boolean().optional(),

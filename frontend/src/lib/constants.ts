@@ -88,9 +88,12 @@ export type ApprovalTypeRow = {
 } | null;
 
 export type ChainStep = {
-  order: number;
-  roleName: string;
-  action: string;
+  step_order: number;
+  name: string;
+  role: string;
+  scope_type: "initiator_department" | "fixed_department" | "static" | "expression";
+  scope_value?: string | null;
+  action_label: string;
 };
 
 export type ChainRow = {

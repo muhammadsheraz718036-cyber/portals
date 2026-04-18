@@ -1,6 +1,13 @@
 import { useState } from "react";
 
-export type ChainStep = { order: number; roleName: string; action: string };
+export type ChainStep = {
+  step_order: number;
+  name: string;
+  role: string;
+  scope_type: "initiator_department" | "fixed_department" | "static" | "expression";
+  scope_value?: string;
+  action_label: string;
+};
 
 export function useApprovalChainSteps(initialSteps: ChainStep[] = []) {
   const [steps, setSteps] = useState<ChainStep[]>(initialSteps);
@@ -14,7 +21,14 @@ export function useApprovalChainSteps(initialSteps: ChainStep[] = []) {
   const addStep = () => {
     setSteps((prev) => [
       ...prev,
-      { order: prev.length + 1, roleName: "", action: "" },
+      {
+        step_order: prev.length + 1,
+        name: "",
+        role: "",
+        scope_type: "initiator_department",
+        scope_value: "",
+        action_label: "",
+      },
     ]);
   };
 
@@ -26,7 +40,7 @@ export function useApprovalChainSteps(initialSteps: ChainStep[] = []) {
     setSteps((prev) =>
       prev
         .filter((_, i) => i !== idx)
-        .map((s, i) => ({ ...s, order: i + 1 })),
+        .map((s, i) => ({ ...s, step_order: i + 1 })),
     );
   };
 
@@ -49,7 +63,7 @@ export function useApprovalChainSteps(initialSteps: ChainStep[] = []) {
       const next = [...prev];
       const [draggedItem] = next.splice(draggedStepIdx, 1);
       next.splice(targetIdx, 0, draggedItem);
-      return next.map((s, i) => ({ ...s, order: i + 1 }));
+      return next.map((s, i) => ({ ...s, step_order: i + 1 }));
     });
 
     setDraggedStepIdx(null);

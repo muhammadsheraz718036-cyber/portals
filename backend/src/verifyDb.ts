@@ -132,4 +132,30 @@ export async function verifyDatabaseReady(): Promise<void> {
      WHERE aa.id = c.id
        AND c.resolved IS NOT NULL
   `);
+
+  await pool.query(`
+    UPDATE department_managers dm
+       SET is_active = false
+      FROM profiles p
+      LEFT JOIN roles r ON r.id = p.role_id
+     WHERE dm.user_id = p.id
+       AND (
+         p.is_active = false
+         OR p.department_id IS NULL
+         OR lower(trim(COALESCE(r.name, ''))) <> lower('Department Manager')
+         OR dm.department_id <> p.department_id
+       )
+  `);
+
+  await pool.query(`
+    INSERT INTO department_managers (department_id, user_id, is_active)
+    SELECT p.department_id, p.id, true
+      FROM profiles p
+      JOIN roles r ON r.id = p.role_id
+     WHERE p.is_active = true
+       AND p.department_id IS NOT NULL
+       AND lower(trim(r.name)) = lower('Department Manager')
+    ON CONFLICT (department_id, user_id)
+    DO UPDATE SET is_active = true
+  `);
 }

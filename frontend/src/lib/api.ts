@@ -204,7 +204,14 @@ export const api = {
     create: (body: {
       name: string;
       approval_type_id: string;
-      steps: unknown[];
+      steps: Array<{
+        step_order: number;
+        name: string;
+        role: string;
+        scope_type: "initiator_department" | "fixed_department" | "static" | "expression";
+        scope_value?: string | null;
+        action_label: string;
+      }>;
     }) =>
       request("/api/approval-chains", {
         method: "POST",
@@ -212,7 +219,18 @@ export const api = {
       }),
     update: (
       id: string,
-      body: { name?: string; approval_type_id?: string; steps?: unknown[] },
+      body: {
+        name?: string;
+        approval_type_id?: string;
+        steps?: Array<{
+          step_order: number;
+          name: string;
+          role: string;
+          scope_type: "initiator_department" | "fixed_department" | "static" | "expression";
+          scope_value?: string | null;
+          action_label: string;
+        }>;
+      },
     ) =>
       request(`/api/approval-chains/${id}`, {
         method: "PATCH",

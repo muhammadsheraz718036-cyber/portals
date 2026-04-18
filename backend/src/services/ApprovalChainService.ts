@@ -3,9 +3,9 @@ import { pool } from '../db.js';
 export interface ChainStepDefinition {
   step_order: number;
   name: string;
-  description?: string;
-  actor_type: 'ROLE' | 'USER_MANAGER' | 'DEPARTMENT_MANAGER' | 'SPECIFIC_USER';
-  actor_value?: string; // Role name, Department ID, or User ID
+  role: string;
+  scope_type: 'initiator_department' | 'fixed_department' | 'static' | 'expression';
+  scope_value?: string;
   action_label: string;
   due_days?: number;
   is_parallel?: boolean;
@@ -168,15 +168,15 @@ export class ApprovalChainService {
   private async createChainStep(client: any, chainId: string, step: ChainStepDefinition): Promise<void> {
     await client.query(
       `INSERT INTO approval_steps 
-       (chain_id, step_order, name, description, actor_type, actor_value, action_label, due_days, is_parallel, parallel_group)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (chain_id, step_order, name, role, scope_type, scope_value, actor_type, actor_value, action_label, due_days, is_parallel, parallel_group)
+       VALUES ($1, $2, $3, $4, $5, $6, 'ROLE', $4, $7, $8, $9, $10)`,
       [
         chainId,
         step.step_order,
         step.name,
-        step.description || null,
-        step.actor_type,
-        step.actor_value || null,
+        step.role,
+        step.scope_type,
+        step.scope_value || null,
         step.action_label,
         step.due_days || 3,
         step.is_parallel || false,
@@ -227,36 +227,20 @@ export class ApprovalChainService {
           errors.push(`Step ${stepNumber}: name is required`);
         }
 
-        // Actor type validation
-        if (!step.actor_type) {
-          errors.push(`Step ${stepNumber}: actor_type is required`);
-        } else if (!['ROLE', 'USER_MANAGER', 'DEPARTMENT_MANAGER', 'SPECIFIC_USER'].includes(step.actor_type)) {
-          errors.push(`Step ${stepNumber}: invalid actor_type ${step.actor_type}`);
+        if (!step.role || step.role.trim().length === 0) {
+          errors.push(`Step ${stepNumber}: role is required`);
         }
 
-        // Actor value validation based on type
-        if (step.actor_type === 'ROLE' && !step.actor_value) {
-          errors.push(`Step ${stepNumber}: actor_value is required for ROLE type`);
-        } else if (step.actor_type === 'DEPARTMENT_MANAGER' && step.actor_value) {
-          // Validate department exists
-          const { rows: departments } = await pool.query(
-            'SELECT id FROM departments WHERE id = $1',
-            [step.actor_value]
-          );
-          if (departments.length === 0) {
-            errors.push(`Step ${stepNumber}: department not found for DEPARTMENT_MANAGER type`);
-          }
-        } else if (step.actor_type === 'SPECIFIC_USER' && !step.actor_value) {
-          errors.push(`Step ${stepNumber}: actor_value (user_id) is required for SPECIFIC_USER type`);
-        } else if (step.actor_type === 'SPECIFIC_USER' && step.actor_value) {
-          // Validate user exists
-          const { rows: users } = await pool.query(
-            'SELECT id FROM users WHERE id = $1',
-            [step.actor_value]
-          );
-          if (users.length === 0) {
-            errors.push(`Step ${stepNumber}: user not found for SPECIFIC_USER type`);
-          }
+        if (!['initiator_department', 'fixed_department', 'static', 'expression'].includes(step.scope_type)) {
+          errors.push(`Step ${stepNumber}: invalid scope_type ${step.scope_type}`);
+        }
+
+        if (step.scope_type === 'fixed_department' && !step.scope_value) {
+          errors.push(`Step ${stepNumber}: scope_value is required for fixed_department`);
+        }
+
+        if (step.scope_type === 'expression' && !step.scope_value) {
+          errors.push(`Step ${stepNumber}: scope_value is required for expression`);
         }
 
         // Action label validation
@@ -278,11 +262,15 @@ export class ApprovalChainService {
 
     // Check for logical flow issues
     if (chainDefinition.steps && chainDefinition.steps.length > 0) {
-      const hasUserManager = chainDefinition.steps.some(step => step.actor_type === 'USER_MANAGER');
-      const hasDepartmentManager = chainDefinition.steps.some(step => step.actor_type === 'DEPARTMENT_MANAGER');
+      const hasExpressionManager = chainDefinition.steps.some(
+        step => step.scope_type === 'expression' && step.scope_value === 'initiator_manager'
+      );
+      const hasInitiatorDepartment = chainDefinition.steps.some(
+        step => step.scope_type === 'initiator_department'
+      );
       
-      if (hasUserManager && hasDepartmentManager) {
-        warnings.push('Chain has both USER_MANAGER and DEPARTMENT_MANAGER steps - consider if both are needed');
+      if (hasExpressionManager && hasInitiatorDepartment) {
+        warnings.push('Chain mixes initiator manager and initiator department scopes - verify this sequence is intentional');
       }
 
       // Check if all steps are parallel (might be a configuration error)
@@ -388,12 +376,12 @@ export class ApprovalChainService {
         const jsonStep = jsonSteps[i];
         
         const newStep: ChainStepDefinition = {
-          step_order: jsonStep.order || (i + 1),
+          step_order: jsonStep.step_order || jsonStep.order || (i + 1),
           name: jsonStep.name || `Step ${i + 1}`,
-          description: jsonStep.description,
-          actor_type: this.inferActorTypeFromJson(jsonStep),
-          actor_value: this.getActorValueFromJson(jsonStep),
-          action_label: jsonStep.action || 'Review',
+          role: this.getRoleFromJson(jsonStep),
+          scope_type: this.inferScopeTypeFromJson(jsonStep),
+          scope_value: this.getScopeValueFromJson(jsonStep),
+          action_label: jsonStep.action_label || jsonStep.action || 'Review',
           due_days: jsonStep.due_days,
           is_parallel: jsonStep.is_parallel,
           parallel_group: jsonStep.parallel_group
@@ -422,28 +410,48 @@ export class ApprovalChainService {
   /**
    * Infer actor type from JSON step (backward compatibility)
    */
-  private inferActorTypeFromJson(jsonStep: any): 'ROLE' | 'USER_MANAGER' | 'DEPARTMENT_MANAGER' | 'SPECIFIC_USER' {
-    if (jsonStep.type === 'user') {
-      return 'SPECIFIC_USER';
-    } else if (jsonStep.type === 'manager') {
-      return 'USER_MANAGER';
-    } else if (jsonStep.type === 'department_manager') {
-      return 'DEPARTMENT_MANAGER';
-    } else {
-      return 'ROLE'; // Default to role-based
+  private inferScopeTypeFromJson(jsonStep: any): 'initiator_department' | 'fixed_department' | 'static' | 'expression' {
+    if (jsonStep.scope_type) {
+      return jsonStep.scope_type;
     }
+    if (jsonStep.type === 'manager') {
+      return 'expression';
+    }
+    if (jsonStep.type === 'department_manager') {
+      return jsonStep.actor_value || jsonStep.scope_value ? 'fixed_department' : 'initiator_department';
+    }
+    if (jsonStep.type === 'user') {
+      return 'expression';
+    }
+    return 'static';
   }
 
   /**
-   * Get actor value from JSON step (backward compatibility)
+   * Get role from JSON step (backward compatibility)
    */
-  private getActorValueFromJson(jsonStep: any): string | undefined {
-    if (jsonStep.type === 'user') {
-      return jsonStep.userEmail || jsonStep.userName;
-    } else if (jsonStep.type === 'role' || !jsonStep.type) {
-      return jsonStep.roleName;
+  private getRoleFromJson(jsonStep: any): string {
+    return jsonStep.role || jsonStep.roleName || jsonStep.role_name || (
+      jsonStep.type === 'department_manager' ? 'Department Manager' :
+      jsonStep.type === 'manager' ? 'Line Manager' :
+      jsonStep.type === 'user' ? 'Specific User' :
+      'Approver'
+    );
+  }
+
+  /**
+   * Get scope value from JSON step (backward compatibility)
+   */
+  private getScopeValueFromJson(jsonStep: any): string | undefined {
+    if (jsonStep.scope_value) {
+      return jsonStep.scope_value;
     }
-    // For manager types, actor_value can be null (resolved dynamically)
+    if (jsonStep.type === 'user') {
+      return jsonStep.userId ? `user:${jsonStep.userId}` : undefined;
+    } else if (jsonStep.type === 'manager') {
+      return 'initiator_manager';
+    } else if (jsonStep.type === 'department_manager') {
+      return jsonStep.departmentId || jsonStep.actor_value;
+    }
     return undefined;
   }
 
@@ -451,7 +459,7 @@ export class ApprovalChainService {
    * Get available options for UI
    */
   async getChainOptions(): Promise<{
-    actor_types: { value: string; label: string; description: string }[];
+    scope_types: { value: string; label: string; description: string }[];
     departments: { value: string; label: string }[];
     users: { value: string; label: string; email: string }[];
     roles: { value: string; label: string }[];
@@ -476,26 +484,26 @@ export class ApprovalChainService {
     );
 
     return {
-      actor_types: [
+      scope_types: [
         {
-          value: 'ROLE',
-          label: 'Role-based Approval',
-          description: 'Assign to all users with a specific role'
+          value: 'initiator_department',
+          label: 'Initiator Department',
+          description: 'Resolve the approver in the request initiator department'
         },
         {
-          value: 'USER_MANAGER',
-          label: 'Initiator Manager',
-          description: 'Assign to the direct manager of the request initiator'
+          value: 'fixed_department',
+          label: 'Fixed Department',
+          description: 'Resolve the approver in a specific department'
         },
         {
-          value: 'DEPARTMENT_MANAGER',
-          label: 'Department Manager',
-          description: 'Assign to the manager of a specific department'
+          value: 'static',
+          label: 'Global Static',
+          description: 'Resolve the approver by role without department scoping'
         },
         {
-          value: 'SPECIFIC_USER',
-          label: 'Specific User',
-          description: 'Assign to a specific user'
+          value: 'expression',
+          label: 'Expression',
+          description: 'Resolve the approver from a supported expression such as initiator_manager'
         }
       ],
       departments: departments.map(d => ({ value: d.id, label: d.name })),

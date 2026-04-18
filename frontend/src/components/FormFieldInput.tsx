@@ -61,6 +61,7 @@ export function FormFieldInput({
             type="number"
             value={value}
             onChange={(e) => onChange(e.target.value)}
+            inputMode="decimal"
             onFocus={(e) => {
               // Auto-clear common default values when user focuses
               const currentValue = e.target.value;
@@ -69,21 +70,6 @@ export function FormFieldInput({
                 currentValue === "000" ||
                 currentValue === "0000" ||
                 currentValue === "00000"
-              ) {
-                onChange("");
-              }
-            }}
-            onKeyDown={(e) => {
-              // Also clear on first keystroke if still showing defaults
-              const currentValue = e.currentTarget.value;
-              if (
-                (currentValue === "0" ||
-                  currentValue === "000" ||
-                  currentValue === "0000" ||
-                  currentValue === "00000") &&
-                e.key !== "Backspace" &&
-                e.key !== "Delete" &&
-                e.key !== "Tab"
               ) {
                 onChange("");
               }

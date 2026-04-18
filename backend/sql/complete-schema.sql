@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS approval_actions (
 ALTER TABLE approval_actions ADD COLUMN IF NOT EXISTS approver_user_id UUID REFERENCES users(id);
 CREATE INDEX IF NOT EXISTS idx_approval_actions_approver_user ON approval_actions(approver_user_id);
 CREATE INDEX IF NOT EXISTS idx_approval_actions_request_step ON approval_actions(request_id, step_order);
+CREATE INDEX IF NOT EXISTS idx_approval_actions_pending_assignee ON approval_actions(approver_user_id, request_id, step_order)
+  WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -174,6 +176,9 @@ CREATE TABLE IF NOT EXISTS approval_steps (
   chain_id UUID NOT NULL REFERENCES approval_chains(id) ON DELETE CASCADE,
   step_order INTEGER NOT NULL,
   name TEXT NOT NULL,
+  role TEXT,
+  scope_type TEXT CHECK (scope_type IN ('initiator_department', 'fixed_department', 'static', 'expression')),
+  scope_value TEXT,
   description TEXT,
   actor_type TEXT NOT NULL CHECK (actor_type IN ('ROLE', 'USER_MANAGER', 'DEPARTMENT_MANAGER', 'SPECIFIC_USER')),
   actor_value TEXT,
@@ -193,12 +198,16 @@ CREATE TABLE IF NOT EXISTS request_steps (
   step_id UUID REFERENCES approval_steps(id),
   step_order INTEGER NOT NULL,
   name TEXT NOT NULL,
+  role TEXT,
+  scope_type TEXT CHECK (scope_type IN ('initiator_department', 'fixed_department', 'static', 'expression')),
+  scope_value TEXT,
   description TEXT,
   actor_type TEXT NOT NULL,
   actor_value TEXT,
   action_label TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'PENDING', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'SKIPPED')),
   assigned_to UUID REFERENCES profiles(id),
+  approver_user_id UUID REFERENCES profiles(id),
   acted_by UUID REFERENCES profiles(id),
   remarks TEXT,
   action_data JSONB DEFAULT '{}',
@@ -209,6 +218,14 @@ CREATE TABLE IF NOT EXISTS request_steps (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE approval_steps ADD COLUMN IF NOT EXISTS role TEXT;
+ALTER TABLE approval_steps ADD COLUMN IF NOT EXISTS scope_type TEXT;
+ALTER TABLE approval_steps ADD COLUMN IF NOT EXISTS scope_value TEXT;
+ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS role TEXT;
+ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS scope_type TEXT;
+ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS scope_value TEXT;
+ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS approver_user_id UUID REFERENCES profiles(id);
 
 -- Department manager assignments (CRITICAL: for new visibility feature)
 CREATE TABLE IF NOT EXISTS department_managers (
@@ -284,6 +301,7 @@ SELECT
   rs.request_id,
   rs.step_order,
   COALESCE(
+    rs.role,
     CASE 
       WHEN rs.actor_type = 'ROLE' THEN rs.actor_value
       WHEN rs.actor_type = 'DEPARTMENT_MANAGER' THEN 'Department Manager'
@@ -329,6 +347,8 @@ CREATE INDEX IF NOT EXISTS idx_request_attachments_field ON request_attachments(
 CREATE INDEX IF NOT EXISTS idx_request_steps_request_assigned ON request_steps(request_id, assigned_to, status) 
   WHERE status IN ('PENDING', 'WAITING');
 CREATE INDEX IF NOT EXISTS idx_request_steps_assigned_to_status ON request_steps(assigned_to, status) 
+  WHERE status IN ('PENDING', 'WAITING');
+CREATE INDEX IF NOT EXISTS idx_request_steps_approver_status ON request_steps(approver_user_id, status)
   WHERE status IN ('PENDING', 'WAITING');
 CREATE INDEX IF NOT EXISTS idx_request_steps_acted_by ON request_steps(acted_by);
 CREATE INDEX IF NOT EXISTS idx_department_managers_dept_active ON department_managers(department_id, is_active) 
@@ -381,87 +401,8 @@ CREATE TRIGGER set_request_number
   BEFORE INSERT ON approval_requests
   FOR EACH ROW
   EXECUTE PROCEDURE generate_request_number();
-
-CREATE OR REPLACE FUNCTION create_approval_actions_for_request()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  chain_steps jsonb;
-  step_rec jsonb;
-  step_num int := 0;
-  i int := 0;
-  n int;
-  initiator_role_name TEXT;
-  step_status TEXT;
-BEGIN
-  IF NEW.approval_chain_id IS NULL THEN
-    RETURN NEW;
-  END IF;
-
-  -- Get the initiator's role name
-  SELECT r.name INTO initiator_role_name
-  FROM roles r
-  JOIN profiles p ON p.role_id = r.id
-  WHERE p.id = NEW.initiator_id;
-
-  SELECT steps::jsonb INTO chain_steps
-  FROM approval_chains
-  WHERE id = NEW.approval_chain_id;
-
-  IF chain_steps IS NULL OR jsonb_typeof(chain_steps) != 'array' THEN
-    RETURN NEW;
-  END IF;
-
-  n := jsonb_array_length(chain_steps);
-  IF n IS NULL OR n = 0 THEN
-    RETURN NEW;
-  END IF;
-
-  WHILE i < n LOOP
-    step_rec := chain_steps->i;
-    step_num := step_num + 1;
-    
-    -- Determine step status
-    -- If the step's role matches the initiator's role, skip it
-    IF COALESCE(step_rec->>'roleName', '') = COALESCE(initiator_role_name, '') THEN
-      step_status := 'skipped';
-    ELSE
-      -- Parallel approval: all non-skipped steps are pending
-      step_status := 'pending';
-    END IF;
-
-    INSERT INTO approval_actions (
-      request_id,
-      step_order,
-      role_name,
-      action_label,
-      status
-    )
-    VALUES (
-      NEW.id,
-      CASE
-        WHEN step_rec->>'order' ~ '^[0-9]+$' THEN (step_rec->>'order')::int
-        ELSE step_num
-      END,
-      COALESCE(step_rec->>'roleName', ''),
-      COALESCE(step_rec->>'action', 'Review'),
-      step_status
-    );
-    i := i + 1;
-  END LOOP;
-
-  RETURN NEW;
-END;
-$$;
-
 DROP TRIGGER IF EXISTS trg_create_approval_actions ON approval_requests;
-CREATE TRIGGER trg_create_approval_actions
-  AFTER INSERT ON approval_requests
-  FOR EACH ROW
-  EXECUTE PROCEDURE create_approval_actions_for_request();
+DROP FUNCTION IF EXISTS create_approval_actions_for_request();
 
 -- Update request_steps timestamp
 CREATE OR REPLACE FUNCTION update_request_steps_timestamp()
@@ -514,6 +455,8 @@ AS $$
 DECLARE
   step RECORD;
   request RECORD;
+  resolved_department_id UUID;
+  specific_user_id UUID;
 BEGIN
   SELECT * INTO step FROM approval_steps WHERE id = p_step_id;
   SELECT * INTO request FROM approval_requests WHERE id = p_request_id;
@@ -522,16 +465,78 @@ BEGIN
     RETURN;
   END IF;
   
-  CASE step.actor_type
-    WHEN 'ROLE' THEN
-      RETURN QUERY
-      SELECT p.id, p.full_name, p.email, p.department_id
-      FROM profiles p
-      JOIN roles r ON p.role_id = r.id
-      WHERE r.name = step.actor_value
+  IF step.scope_type = 'initiator_department' THEN
+    resolved_department_id := request.department_id;
+  ELSIF step.scope_type = 'fixed_department' THEN
+    IF step.scope_value ~* '^[0-9a-f-]{36}$' THEN
+      resolved_department_id := step.scope_value::UUID;
+    ELSE
+      SELECT id INTO resolved_department_id
+      FROM departments
+      WHERE lower(trim(name)) = lower(trim(step.scope_value))
+      LIMIT 1;
+    END IF;
+  ELSIF step.scope_type = 'expression' AND step.scope_value = 'initiator.department_id' THEN
+    resolved_department_id := request.department_id;
+  ELSIF step.scope_type = 'expression' AND step.scope_value = 'request.department_id' THEN
+    resolved_department_id := request.department_id;
+  ELSIF step.scope_type = 'expression' AND step.scope_value LIKE 'department:%' THEN
+    SELECT id INTO resolved_department_id
+    FROM departments
+    WHERE lower(trim(name)) = lower(trim(split_part(step.scope_value, ':', 2)))
+    LIMIT 1;
+  END IF;
+
+  IF step.scope_type = 'expression' AND step.scope_value = 'initiator_manager' THEN
+    RETURN QUERY
+    SELECT p.id, p.full_name, p.email, p.department_id
+    FROM profiles p
+    JOIN user_managers um ON p.id = um.manager_id
+    WHERE um.user_id = request.initiator_id
+      AND um.is_active = true
       AND p.is_active = true
-      AND (p.department_id = request.department_id OR p.department_id IS NULL);
-      
+      AND p.id <> request.initiator_id
+    ORDER BY um.assigned_at ASC, p.created_at ASC
+    LIMIT 1;
+    RETURN;
+  END IF;
+
+  IF step.scope_type = 'expression' AND step.scope_value LIKE 'user:%' THEN
+    specific_user_id := split_part(step.scope_value, ':', 2)::UUID;
+    RETURN QUERY
+    SELECT p.id, p.full_name, p.email, p.department_id
+    FROM profiles p
+    WHERE p.id = specific_user_id
+      AND p.is_active = true
+      AND p.id <> request.initiator_id
+    LIMIT 1;
+    RETURN;
+  END IF;
+
+  IF COALESCE(step.role, step.actor_value) IS NOT NULL THEN
+    RETURN QUERY
+    SELECT p.id, p.full_name, p.email, p.department_id
+    FROM profiles p
+    LEFT JOIN roles primary_role ON primary_role.id = p.role_id
+    LEFT JOIN user_roles ur ON ur.user_id = p.id
+    LEFT JOIN roles secondary_role ON secondary_role.id = ur.role_id
+    WHERE (
+      lower(trim(primary_role.name)) = lower(trim(COALESCE(step.role, step.actor_value)))
+      OR lower(trim(secondary_role.name)) = lower(trim(COALESCE(step.role, step.actor_value)))
+    )
+      AND p.is_active = true
+      AND p.id <> request.initiator_id
+      AND (
+        resolved_department_id IS NULL
+        OR p.department_id = resolved_department_id
+      )
+    GROUP BY p.id, p.full_name, p.email, p.department_id
+    ORDER BY MIN(p.created_at) ASC
+    LIMIT 1;
+    RETURN;
+  END IF;
+
+  CASE step.actor_type
     WHEN 'USER_MANAGER' THEN
       RETURN QUERY
       SELECT p.id, p.full_name, p.email, p.department_id
@@ -963,6 +968,12 @@ VALUES
   ('visibility-scoped-department-managers')
 ON CONFLICT (migration_name) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id BIGSERIAL PRIMARY KEY,
+  migration_name TEXT NOT NULL UNIQUE,
+  executed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ===============================
 -- VERIFICATION
 -- ===============================
@@ -993,7 +1004,7 @@ BEGIN
   AND table_type = 'BASE TABLE'
   AND table_name IN (
     'approval_steps', 'request_steps', 'department_managers', 
-    'user_managers', 'deprecation_logs', 'migration_logs'
+    'user_managers', 'deprecation_logs', 'migration_logs', 'schema_migrations'
   );
   
   -- Count indexes
@@ -1008,7 +1019,7 @@ BEGIN
   RAISE NOTICE '✅ APPROVAL CENTRAL SCHEMA SETUP COMPLETE';
   RAISE NOTICE '════════════════════════════════════════';
   RAISE NOTICE '📊 Base Tables: % / 13', base_table_count;
-  RAISE NOTICE '🔄 Migration Tables: % / 6', migration_table_count;
+  RAISE NOTICE '🔄 Migration Tables: % / 7', migration_table_count;
   RAISE NOTICE '📈 Total Tables: %', total_tables;
   RAISE NOTICE '🗂️  Indexes Created: %', index_count;
   RAISE NOTICE '';
@@ -1019,7 +1030,7 @@ BEGIN
   RAISE NOTICE '  • User Manager Relationships';
   RAISE NOTICE '  • Backward Compatibility Logging';
   RAISE NOTICE '';
-  RAISE NOTICE '🚀 Ready to use! No migrations needed.';
+  RAISE NOTICE '🚀 Base schema is ready. Pending SQL migrations can now be applied safely.';
   RAISE NOTICE '════════════════════════════════════════';
 END $$;
 

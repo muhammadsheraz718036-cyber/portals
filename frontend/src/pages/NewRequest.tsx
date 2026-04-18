@@ -34,12 +34,16 @@ import type {
 } from "@/lib/constants";
 import type { ApprovalTypeAttachment } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
+import {
+  formatExistingActionLabel,
+  getScopeLabel,
+} from "@/lib/workflowLabels";
 
 export default function NewRequest() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const { settings } = useCompany();
-  const [selectedDepartment, setSelectedDepartment] = useState<string | null>("all");
+  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
   const [selectedType, setSelectedType] = useState<string>("");
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [items, setItems] = useState<LineItem[]>([]);
@@ -52,7 +56,7 @@ export default function NewRequest() {
   // React Query hooks
   const { data: departments = [] } = useDepartmentsForUsers();
   const { data: types = [], isLoading: loading } = useApprovalTypes(
-    selectedDepartment === "all" ? undefined : selectedDepartment,
+    departmentFilter === "all" ? undefined : departmentFilter,
   );
   const { data: chains = [] } = useApprovalChains();
   const createMutation = useCreateApprovalRequest();
@@ -77,15 +81,16 @@ export default function NewRequest() {
   const chain = chainList[0];
 
   useEffect(() => {
-    // Initialize to user's department if available, otherwise keep "all"
-    if (selectedDepartment === "all" && profile?.department_id) {
-      setSelectedDepartment(profile.department_id);
+    // Default the filter to the user's department to shorten the list,
+    // but do not use the filter as the submitted request department.
+    if (departmentFilter === "all" && profile?.department_id) {
+      setDepartmentFilter(profile.department_id);
     }
-  }, [profile, selectedDepartment]);
+  }, [profile, departmentFilter]);
 
   useEffect(() => {
     setSelectedType("");
-  }, [selectedDepartment]);
+  }, [departmentFilter]);
   const safePreComments = preComments ? sanitizeHtml(preComments) : "";
   const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
@@ -147,18 +152,16 @@ export default function NewRequest() {
     const totalSteps = steps.length;
 
     try {
-      const selectedDept = selectedDepartment === "all" 
-        ? (profile?.department_id ?? null) 
-        : selectedDepartment;
-      if (!selectedDept) {
-        toast.error("Select a department");
+      const requestDepartmentId = profile?.department_id ?? null;
+      if (!requestDepartmentId) {
+        toast.error("Your profile must be assigned to a department");
         return;
       }
 
       const requestData = await createMutation.mutateAsync({
         approval_type_id: selectedType,
         approval_chain_id: chain.id,
-        department_id: selectedDept,
+        department_id: requestDepartmentId,
         form_data: {
           ...formValues,
           items: items,
@@ -230,16 +233,16 @@ export default function NewRequest() {
           <CardContent>
             <div className="pb-4">
               <p className="text-sm font-medium text-foreground mb-2">
-                Select Department
+                Filter Request Types by Department
               </p>
               <Select
-                value={selectedDepartment ?? "all"}
+                value={departmentFilter}
                 onValueChange={(v) => {
-                  setSelectedDepartment(v === "all" ? null : v);
+                  setDepartmentFilter(v);
                 }}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Choose department..." />
+                  <SelectValue placeholder="Choose a department filter..." />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Departments</SelectItem>
@@ -651,16 +654,21 @@ export default function NewRequest() {
                   <div className="space-y-2">
                     {chain.steps.map((step) => (
                       <div
-                        key={step.order}
+                        key={`${step.step_order}-${step.role}`}
                         className="flex items-center gap-3 text-sm"
                       >
                         <div className="h-6 w-6 rounded bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
-                          {step.order}
+                          {step.step_order}
                         </div>
                         <div>
-                          <span className="font-medium">{step.roleName}</span>
+                          <span className="font-medium">{step.role}</span>
                           <span className="text-muted-foreground ml-2">
-                            {step.action ? "-" : step.action}
+                            {step.action_label
+                              ? `- ${formatExistingActionLabel(step.role, step.action_label)}`
+                              : `- ${getScopeLabel(
+                                  step.scope_type,
+                                  step.scope_value,
+                                )}`}
                           </span>
                         </div>
                       </div>

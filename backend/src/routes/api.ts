@@ -40,6 +40,324 @@ function isFileInsideUploads(filePath: string): boolean {
 // Approval routing helpers
 // ---------------------------------------------------------------------------
 
+type WorkflowScopeType =
+  | "initiator_department"
+  | "fixed_department"
+  | "static"
+  | "expression";
+
+type WorkflowStepDefinition = {
+  step_order: number;
+  name: string;
+  role: string;
+  scope_type: WorkflowScopeType;
+  scope_value: string | null;
+  action_label: string;
+};
+
+type WorkflowRequestContext = {
+  requestId: string;
+  initiatorId: string;
+  departmentId: string | null;
+  formData?: Record<string, unknown>;
+};
+
+function toLegacyActorFields(step: WorkflowStepDefinition): {
+  actor_type: "ROLE" | "USER_MANAGER" | "DEPARTMENT_MANAGER" | "SPECIFIC_USER";
+  actor_value: string | null;
+} {
+  if (step.scope_type === "expression" && step.scope_value === "initiator_manager") {
+    return { actor_type: "USER_MANAGER", actor_value: null };
+  }
+
+  if (step.scope_type === "expression" && step.scope_value?.startsWith("user:")) {
+    return {
+      actor_type: "SPECIFIC_USER",
+      actor_value: step.scope_value.slice("user:".length),
+    };
+  }
+
+  if (
+    step.role.trim().toLowerCase() === "department manager" &&
+    (step.scope_type === "initiator_department" || step.scope_type === "fixed_department")
+  ) {
+    return {
+      actor_type: "DEPARTMENT_MANAGER",
+      actor_value: step.scope_type === "fixed_department" ? step.scope_value : null,
+    };
+  }
+
+  return {
+    actor_type: "ROLE",
+    actor_value: step.role,
+  };
+}
+
+function isUuid(value: string | null | undefined): value is string {
+  return !!value &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function normalizeWorkflowStep(
+  raw: Record<string, unknown>,
+  index: number,
+): WorkflowStepDefinition {
+  const actorType =
+    typeof raw.actor_type === "string" ? raw.actor_type.trim().toUpperCase() : null;
+  const actorValue =
+    typeof raw.actor_value === "string" && raw.actor_value.trim() !== ""
+      ? raw.actor_value.trim()
+      : null;
+  const legacyRole =
+    typeof raw.roleName === "string" && raw.roleName.trim() !== ""
+      ? raw.roleName.trim()
+      : typeof raw.role_name === "string" && raw.role_name.trim() !== ""
+        ? raw.role_name.trim()
+        : null;
+
+  let role =
+    typeof raw.role === "string" && raw.role.trim() !== ""
+      ? raw.role.trim()
+      : null;
+  let scopeType =
+    typeof raw.scope_type === "string" ? raw.scope_type.trim() : null;
+  let scopeValue =
+    typeof raw.scope_value === "string" && raw.scope_value.trim() !== ""
+      ? raw.scope_value.trim()
+      : null;
+
+  if (!role) {
+    if (actorType === "ROLE") {
+      role = actorValue ?? legacyRole;
+    } else if (actorType === "DEPARTMENT_MANAGER") {
+      role = "Department Manager";
+    } else if (actorType === "USER_MANAGER") {
+      role = "Line Manager";
+    } else if (actorType === "SPECIFIC_USER") {
+      role = "Specific User";
+    } else {
+      role = legacyRole;
+    }
+  }
+
+  if (!scopeType) {
+    if (actorType === "DEPARTMENT_MANAGER") {
+      scopeType = actorValue ? "fixed_department" : "initiator_department";
+      scopeValue = actorValue;
+    } else if (actorType === "USER_MANAGER") {
+      scopeType = "expression";
+      scopeValue = "initiator_manager";
+    } else if (actorType === "SPECIFIC_USER") {
+      scopeType = "expression";
+      scopeValue = actorValue ? `user:${actorValue}` : null;
+    } else {
+      scopeType = "static";
+    }
+  }
+
+  if (!role) {
+    throw new HttpError(400, `Step ${index + 1}: role is required`);
+  }
+
+  if (
+    scopeType !== "initiator_department" &&
+    scopeType !== "fixed_department" &&
+    scopeType !== "static" &&
+    scopeType !== "expression"
+  ) {
+    throw new HttpError(400, `Step ${index + 1}: invalid scope_type`);
+  }
+
+  if (scopeType === "fixed_department" && !scopeValue) {
+    throw new HttpError(400, `Step ${index + 1}: scope_value is required for fixed_department`);
+  }
+
+  if (scopeType === "expression" && !scopeValue) {
+    throw new HttpError(400, `Step ${index + 1}: scope_value is required for expression`);
+  }
+
+  const stepOrder =
+    typeof raw.step_order === "number"
+      ? raw.step_order
+      : typeof raw.order === "number"
+        ? raw.order
+        : index + 1;
+
+  return {
+    step_order: stepOrder,
+    name:
+      typeof raw.name === "string" && raw.name.trim() !== ""
+        ? raw.name.trim()
+        : `${role} Approval`,
+    role,
+    scope_type: scopeType,
+    scope_value: scopeValue,
+    action_label:
+      typeof raw.action_label === "string" && raw.action_label.trim() !== ""
+        ? raw.action_label.trim()
+        : typeof raw.action === "string" && raw.action.trim() !== ""
+          ? raw.action.trim()
+          : "Review",
+  };
+}
+
+function normalizeWorkflowSteps(rawSteps: unknown): WorkflowStepDefinition[] {
+  const steps = Array.isArray(rawSteps) ? rawSteps : [];
+  return steps
+    .map((step, index) => normalizeWorkflowStep(step as Record<string, unknown>, index))
+    .sort((a, b) => a.step_order - b.step_order)
+    .map((step, index) => ({ ...step, step_order: index + 1 }));
+}
+
+async function resolveDepartmentScopeId(
+  client: { query: typeof pool.query },
+  scopeValue: string,
+): Promise<string | null> {
+  if (isUuid(scopeValue)) {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id FROM departments WHERE id = $1 LIMIT 1`,
+      [scopeValue],
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  const { rows } = await client.query<{ id: string }>(
+    `SELECT id
+       FROM departments
+      WHERE lower(trim(name)) = lower(trim($1))
+      LIMIT 1`,
+    [scopeValue],
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function resolveScopeDepartmentId(
+  client: { query: typeof pool.query },
+  step: WorkflowStepDefinition,
+  request: WorkflowRequestContext,
+): Promise<string | null> {
+  if (step.scope_type === "initiator_department") {
+    return request.departmentId;
+  }
+
+  if (step.scope_type === "fixed_department") {
+    return step.scope_value ? resolveDepartmentScopeId(client, step.scope_value) : null;
+  }
+
+  if (step.scope_type === "expression") {
+    if (
+      step.scope_value === "initiator.department_id" ||
+      step.scope_value === "request.department_id"
+    ) {
+      return request.departmentId;
+    }
+
+    if (step.scope_value?.startsWith("department:")) {
+      return resolveDepartmentScopeId(client, step.scope_value.slice("department:".length));
+    }
+  }
+
+  return null;
+}
+
+async function resolveApprover(
+  client: { query: typeof pool.query },
+  step: WorkflowStepDefinition,
+  request: WorkflowRequestContext,
+): Promise<string> {
+  if (step.scope_type === "expression" && step.scope_value === "initiator_manager") {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT p.id
+         FROM user_managers um
+         JOIN profiles p ON p.id = um.manager_id
+        WHERE um.user_id = $1
+          AND um.is_active = true
+          AND p.is_active = true
+          AND p.id <> $1
+        ORDER BY um.assigned_at ASC, p.created_at ASC
+        LIMIT 1`,
+      [request.initiatorId],
+    );
+
+    if (rows.length === 0) {
+      throw new HttpError(400, `No initiator manager configured for step "${step.name}"`);
+    }
+
+    return rows[0].id;
+  }
+
+  if (step.scope_type === "expression" && step.scope_value?.startsWith("user:")) {
+    const userId = step.scope_value.slice("user:".length);
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id
+         FROM profiles
+        WHERE id = $1
+          AND is_active = true
+          AND id <> $2
+        LIMIT 1`,
+      [userId, request.initiatorId],
+    );
+
+    if (rows.length === 0) {
+      throw new HttpError(400, `No active specific approver configured for step "${step.name}"`);
+    }
+
+    return rows[0].id;
+  }
+
+  const scopedDepartmentId = await resolveScopeDepartmentId(client, step, request);
+
+  if (
+    (step.scope_type === "initiator_department" || step.scope_type === "fixed_department") &&
+    !scopedDepartmentId
+  ) {
+    throw new HttpError(
+      400,
+      `Unable to resolve department scope for step "${step.name}"`,
+    );
+  }
+
+  const params: unknown[] = [step.role, request.initiatorId];
+  let departmentClause = "";
+
+  if (scopedDepartmentId) {
+    params.push(scopedDepartmentId);
+    departmentClause = `AND p.department_id = $3`;
+  }
+
+  const { rows } = await client.query<{ id: string }>(
+    `SELECT p.id
+       FROM profiles p
+       LEFT JOIN roles primary_role ON primary_role.id = p.role_id
+       LEFT JOIN user_roles ur ON ur.user_id = p.id
+       LEFT JOIN roles secondary_role ON secondary_role.id = ur.role_id
+      WHERE (
+        lower(trim(primary_role.name)) = lower(trim($1))
+        OR lower(trim(secondary_role.name)) = lower(trim($1))
+      )
+        AND p.is_active = true
+        AND p.id <> $2
+        ${departmentClause}
+      GROUP BY p.id
+      ORDER BY MIN(p.created_at) ASC
+      LIMIT 1`,
+    params,
+  );
+
+  if (rows.length === 0) {
+    const scopeLabel =
+      step.scope_type === "static"
+        ? "global scope"
+        : scopedDepartmentId ?? step.scope_value ?? step.scope_type;
+    throw new HttpError(
+      400,
+      `No approver found for role "${step.role}" in ${scopeLabel}`,
+    );
+  }
+
+  return rows[0].id;
+}
+
 /**
  * Resolve which specific user must act on a given chain step for a request.
  *
@@ -60,16 +378,23 @@ async function resolveStepApprover(
   if (!roleName) return null;
 
   // 1. Same department + same role, never the initiator themselves.
+  // Support both primary role_id and the multi-role user_roles mapping.
   if (departmentId) {
     const { rows } = await client.query<{ id: string }>(
       `SELECT p.id
          FROM profiles p
-         JOIN roles r ON r.id = p.role_id
+         LEFT JOIN roles primary_role ON primary_role.id = p.role_id
+         LEFT JOIN user_roles ur ON ur.user_id = p.id
+         LEFT JOIN roles secondary_role ON secondary_role.id = ur.role_id
         WHERE p.department_id = $1
-          AND r.name = $2
+          AND (
+            lower(trim(primary_role.name)) = lower(trim($2))
+            OR lower(trim(secondary_role.name)) = lower(trim($2))
+          )
           AND p.is_active = true
           AND p.id <> $3
-        ORDER BY p.created_at ASC
+        GROUP BY p.id
+        ORDER BY MIN(p.created_at) ASC
         LIMIT 1`,
       [departmentId, roleName, initiatorId],
     );
@@ -95,11 +420,17 @@ async function resolveStepApprover(
   const { rows: anyRows } = await client.query<{ id: string }>(
     `SELECT p.id
        FROM profiles p
-       JOIN roles r ON r.id = p.role_id
-      WHERE r.name = $1
+       LEFT JOIN roles primary_role ON primary_role.id = p.role_id
+       LEFT JOIN user_roles ur ON ur.user_id = p.id
+       LEFT JOIN roles secondary_role ON secondary_role.id = ur.role_id
+      WHERE (
+        lower(trim(primary_role.name)) = lower(trim($1))
+        OR lower(trim(secondary_role.name)) = lower(trim($1))
+      )
         AND p.is_active = true
         AND p.id <> $2
-      ORDER BY p.created_at ASC
+      GROUP BY p.id
+      ORDER BY MIN(p.created_at) ASC
       LIMIT 1`,
     [roleName, initiatorId],
   );
@@ -117,6 +448,83 @@ async function resolveStepApprover(
   return null;
 }
 
+async function resolveRequestStepApprover(
+  client: { query: typeof pool.query },
+  opts: {
+    step: {
+      actor_type?: string | null;
+      actor_value?: string | null;
+      roleName?: string | null;
+      role_name?: string | null;
+    };
+    departmentId: string | null;
+    initiatorId: string;
+  },
+): Promise<string | null> {
+  const actorType = opts.step.actor_type?.trim().toUpperCase();
+  const actorValue = opts.step.actor_value?.trim() || null;
+  const legacyRoleName =
+    opts.step.roleName?.trim() || opts.step.role_name?.trim() || null;
+
+  if (actorType === "SPECIFIC_USER" && actorValue && actorValue !== opts.initiatorId) {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id
+         FROM profiles
+        WHERE id = $1
+          AND is_active = true
+          AND id <> $2
+        LIMIT 1`,
+      [actorValue, opts.initiatorId],
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (actorType === "USER_MANAGER") {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT p.id
+         FROM user_managers um
+         JOIN profiles p ON p.id = um.manager_id
+        WHERE um.user_id = $1
+          AND um.is_active = true
+          AND p.is_active = true
+          AND p.id <> $1
+        ORDER BY um.assigned_at ASC
+        LIMIT 1`,
+      [opts.initiatorId],
+    );
+    if (rows.length > 0) return rows[0].id;
+  }
+
+  if (actorType === "DEPARTMENT_MANAGER" && opts.departmentId) {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT p.id
+         FROM department_managers dm
+         JOIN profiles p ON p.id = dm.user_id
+        WHERE dm.department_id = $1
+          AND dm.is_active = true
+          AND p.is_active = true
+          AND p.id <> $2
+        ORDER BY dm.assigned_at ASC
+        LIMIT 1`,
+      [opts.departmentId, opts.initiatorId],
+    );
+    if (rows.length > 0) return rows[0].id;
+  }
+
+  const roleName =
+    actorType === "ROLE" ? actorValue ?? legacyRoleName : legacyRoleName;
+
+  if (roleName) {
+    return resolveStepApprover(client, {
+      roleName,
+      departmentId: opts.departmentId,
+      initiatorId: opts.initiatorId,
+    });
+  }
+
+  return null;
+}
+
 /**
  * Build approval_actions rows for a brand-new request from its chain steps.
  * The first step is set to 'pending' (actionable now); subsequent steps are
@@ -126,35 +534,45 @@ async function generateApprovalActionsForRequest(
   client: { query: typeof pool.query },
   opts: {
     requestId: string;
-    chainSteps: Array<{ order?: number; roleName?: string; role_name?: string; action?: string }>;
-    departmentId: string | null;
-    initiatorId: string;
+    chainSteps: WorkflowStepDefinition[];
+    request: WorkflowRequestContext;
   },
 ): Promise<number> {
-  const sorted = [...opts.chainSteps].sort(
-    (a, b) => (a.order ?? 0) - (b.order ?? 0),
-  );
   let inserted = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    const step = sorted[i];
-    const roleName = (step.roleName || step.role_name || "").trim();
-    if (!roleName) continue;
-    const stepOrder = step.order ?? i + 1;
-    const approverId = await resolveStepApprover(client, {
-      roleName,
-      departmentId: opts.departmentId,
-      initiatorId: opts.initiatorId,
-    });
+  for (let i = 0; i < opts.chainSteps.length; i++) {
+    const step = opts.chainSteps[i];
+    const approverId = await resolveApprover(client, step, opts.request);
     const status = i === 0 ? "pending" : "waiting";
+    const legacy = toLegacyActorFields(step);
+
+    await client.query(
+      `INSERT INTO request_steps
+         (request_id, step_order, name, actor_type, actor_value, action_label, status, assigned_to, approver_user_id, role, scope_type, scope_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)`,
+      [
+        opts.requestId,
+        step.step_order,
+        step.name,
+        legacy.actor_type,
+        legacy.actor_value,
+        step.action_label,
+        status.toUpperCase(),
+        approverId,
+        step.role,
+        step.scope_type,
+        step.scope_value,
+      ],
+    );
+
     await client.query(
       `INSERT INTO approval_actions
          (request_id, step_order, role_name, action_label, status, approver_user_id)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [
         opts.requestId,
-        stepOrder,
-        roleName,
-        step.action || "Review",
+        step.step_order,
+        step.role,
+        step.action_label,
         status,
         approverId,
       ],
@@ -190,28 +608,9 @@ async function findActionableStep(
   const { rows } = await client.query(
     `SELECT aa.*
        FROM approval_actions aa
-       JOIN approval_requests ar ON ar.id = aa.request_id
-       JOIN profiles p ON p.id = $2
-       LEFT JOIN roles r ON r.id = p.role_id
       WHERE aa.request_id = $1
         AND aa.status = 'pending'
-        AND (
-          aa.approver_user_id = $2
-          OR (
-            r.name IS NOT NULL
-            AND lower(trim(aa.role_name)) = lower(r.name)
-            AND (
-              ar.department_id IS NULL
-              OR p.department_id = ar.department_id
-              OR EXISTS (
-                SELECT 1 FROM department_managers dm
-                 WHERE dm.user_id = $2
-                   AND dm.department_id = ar.department_id
-                   AND dm.is_active = true
-              )
-            )
-          )
-        )
+        AND aa.approver_user_id = $2
       ORDER BY aa.step_order ASC, aa.created_at ASC
       LIMIT 1`,
     [requestId, userId],
@@ -236,6 +635,153 @@ async function logAudit(
     // Log audit errors to console but don't fail the request
     console.error("Failed to log audit event:", err);
   }
+}
+
+async function syncApprovalChainSteps(
+  client: { query: typeof pool.query },
+  chainId: string,
+  steps: WorkflowStepDefinition[],
+) {
+  await client.query(`DELETE FROM approval_steps WHERE chain_id = $1`, [chainId]);
+
+  for (const step of steps) {
+    const legacy = toLegacyActorFields(step);
+    await client.query(
+      `INSERT INTO approval_steps
+         (chain_id, step_order, name, actor_type, actor_value, action_label, role, scope_type, scope_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        chainId,
+        step.step_order,
+        step.name,
+        legacy.actor_type,
+        legacy.actor_value,
+        step.action_label,
+        step.role,
+        step.scope_type,
+        step.scope_value,
+      ],
+    );
+  }
+}
+
+async function syncRequestStepAction(
+  client: { query: typeof pool.query },
+  opts: {
+    requestId: string;
+    stepOrder: number;
+    userId: string;
+    status: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
+    comment?: string;
+  },
+) {
+  await client.query(
+    `UPDATE request_steps
+        SET status = $1,
+            acted_by = $2,
+            remarks = $3,
+            completed_at = now()
+      WHERE id = (
+        SELECT id
+          FROM request_steps
+         WHERE request_id = $4
+           AND step_order = $5
+           AND status IN ('PENDING', 'WAITING')
+         ORDER BY created_at DESC
+         LIMIT 1
+      )`,
+    [opts.status, opts.userId, opts.comment ?? null, opts.requestId, opts.stepOrder],
+  );
+}
+
+async function promoteNextRequestStep(
+  client: { query: typeof pool.query },
+  requestId: string,
+) {
+  await client.query(
+    `UPDATE request_steps
+        SET status = 'PENDING'
+      WHERE id IN (
+        SELECT id
+          FROM request_steps
+         WHERE request_id = $1
+           AND status = 'WAITING'
+           AND step_order = (
+             SELECT MIN(step_order)
+               FROM request_steps
+              WHERE request_id = $1
+                AND status = 'WAITING'
+           )
+      )`,
+    [requestId],
+  );
+}
+
+async function syncDepartmentManagerAssignment(
+  client: { query: typeof pool.query },
+  opts: {
+    userId: string;
+    assignedBy: string;
+    departmentId: string | null;
+    roleId: string | null;
+    isActive: boolean;
+    roleIds?: string[];
+  },
+) {
+  const roleIds = [
+    ...(opts.roleId ? [opts.roleId] : []),
+    ...(opts.roleIds ?? []),
+  ].filter((value, index, arr) => value && arr.indexOf(value) === index) as string[];
+
+  if (opts.roleIds === undefined) {
+    const { rows: existingRoles } = await client.query<{ role_id: string }>(
+      `SELECT role_id FROM user_roles WHERE user_id = $1`,
+      [opts.userId],
+    );
+    for (const row of existingRoles) {
+      if (!roleIds.includes(row.role_id)) {
+        roleIds.push(row.role_id);
+      }
+    }
+  }
+
+  let hasDepartmentManagerRole = false;
+  if (roleIds.length > 0) {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id
+         FROM roles
+        WHERE id = ANY($1::uuid[])
+          AND lower(trim(name)) = lower('Department Manager')`,
+      [roleIds],
+    );
+    hasDepartmentManagerRole = rows.length > 0;
+  }
+
+  if (!hasDepartmentManagerRole || !opts.departmentId || !opts.isActive) {
+    await client.query(
+      `UPDATE department_managers
+          SET is_active = false
+        WHERE user_id = $1`,
+      [opts.userId],
+    );
+    return;
+  }
+
+  await client.query(
+    `UPDATE department_managers
+        SET is_active = false
+      WHERE user_id = $1
+        AND department_id <> $2`,
+    [opts.userId, opts.departmentId],
+  );
+
+  await client.query(
+    `INSERT INTO department_managers (department_id, user_id, assigned_by, is_active)
+     VALUES ($1, $2, $3, true)
+     ON CONFLICT (department_id, user_id)
+     DO UPDATE SET is_active = true, assigned_by = EXCLUDED.assigned_by`,
+    [opts.departmentId, opts.userId, opts.assignedBy],
+  );
 }
 
 // --- Public ---
@@ -1743,6 +2289,23 @@ apiRouter.delete(
 );
 
 // Approval chains
+const workflowChainStepSchema = z.object({
+  step_order: z.number().int().positive().optional(),
+  order: z.number().int().positive().optional(),
+  name: z.string().min(1).optional(),
+  role: z.string().min(1).optional(),
+  roleName: z.string().min(1).optional(),
+  role_name: z.string().min(1).optional(),
+  scope_type: z
+    .enum(["initiator_department", "fixed_department", "static", "expression"])
+    .optional(),
+  scope_value: z.string().optional().nullable(),
+  action_label: z.string().min(1).optional(),
+  action: z.string().min(1).optional(),
+  actor_type: z.string().optional(),
+  actor_value: z.string().optional(),
+});
+
 apiRouter.get(
   "/approval-chains",
   requireAuth,
@@ -1761,7 +2324,12 @@ apiRouter.get(
     const { rows } = await pool.query(
       `SELECT * FROM approval_chains ORDER BY name`,
     );
-    res.json(rows);
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        steps: normalizeWorkflowSteps(row.steps),
+      })),
+    );
   }),
 );
 
@@ -1783,18 +2351,34 @@ apiRouter.post(
       .object({
         name: z.string().min(1),
         approval_type_id: z.string().uuid(),
-        steps: z.array(z.any()),
+        steps: z.array(workflowChainStepSchema).min(1),
       })
       .parse(req.body);
-    const { rows } = await pool.query(
-      `INSERT INTO approval_chains (name, approval_type_id, steps, created_by) VALUES ($1, $2, $3::jsonb, $4) RETURNING *`,
-      [
-        body.name.trim(),
-        body.approval_type_id,
-        JSON.stringify(body.steps),
-        req.auth!.userId,
-      ],
-    );
+    const normalizedSteps = normalizeWorkflowSteps(body.steps);
+    const client = await pool.connect();
+    let created;
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `INSERT INTO approval_chains (name, approval_type_id, steps, created_by)
+         VALUES ($1, $2, $3::jsonb, $4)
+         RETURNING *`,
+        [
+          body.name.trim(),
+          body.approval_type_id,
+          JSON.stringify(normalizedSteps),
+          req.auth!.userId,
+        ],
+      );
+      created = rows[0];
+      await syncApprovalChainSteps(client, created.id, normalizedSteps);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     // Log audit event
     await logAudit(
@@ -1805,7 +2389,10 @@ apiRouter.post(
       `Created approval chain: ${body.name}`,
     );
 
-    res.status(201).json(rows[0]);
+    res.status(201).json({
+      ...created,
+      steps: normalizedSteps,
+    });
   }),
 );
 
@@ -1827,7 +2414,7 @@ apiRouter.patch(
       .object({
         name: z.string().min(1).optional(),
         approval_type_id: z.string().uuid().optional(),
-        steps: z.array(z.any()).optional(),
+        steps: z.array(workflowChainStepSchema).min(1).optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -1843,16 +2430,31 @@ apiRouter.patch(
     }
     if (body.steps !== undefined) {
       parts.push(`steps = $${n++}::jsonb`);
-      vals.push(JSON.stringify(body.steps));
+      vals.push(JSON.stringify(normalizeWorkflowSteps(body.steps)));
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
     vals.push(req.params.id);
-    const { rows } = await pool.query(
-      `UPDATE approval_chains SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new HttpError(404, "Not found");
+    const client = await pool.connect();
+    let updated;
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `UPDATE approval_chains SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`,
+        vals,
+      );
+      if (rows.length === 0) throw new HttpError(404, "Not found");
+      updated = rows[0];
+      if (body.steps !== undefined) {
+        await syncApprovalChainSteps(client, req.params.id, normalizeWorkflowSteps(body.steps));
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     // Log audit event
     const changes: string[] = [];
@@ -1866,10 +2468,16 @@ apiRouter.patch(
       req.profile!.full_name,
       "UPDATE",
       "Approval Chain",
-      `Updated approval chain ${rows[0].name}: ${changes.join(", ")}`,
+      `Updated approval chain ${updated.name}: ${changes.join(", ")}`,
     );
 
-    res.json(rows[0]);
+    res.json({
+      ...updated,
+      steps:
+        body.steps !== undefined
+          ? normalizeWorkflowSteps(body.steps)
+          : normalizeWorkflowSteps(updated.steps),
+    });
   }),
 );
 
@@ -2032,6 +2640,15 @@ apiRouter.post(
         }
       }
 
+      await syncDepartmentManagerAssignment(client, {
+        userId: id,
+        assignedBy: req.auth!.userId,
+        departmentId: body.department_id ?? null,
+        roleId: body.role_id ?? null,
+        roleIds: body.role_ids,
+        isActive: true,
+      });
+
       await client.query("COMMIT");
       const profile = await loadProfileById(id);
 
@@ -2167,60 +2784,78 @@ apiRouter.patch(
         }
       }
     }
-    const updates: string[] = [];
-    const values: unknown[] = [];
-    let paramIdx = 1;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    if (body.full_name !== undefined) {
-      updates.push(`full_name = $${paramIdx}`);
-      values.push(body.full_name.trim());
-      paramIdx++;
-    }
-    if (body.department_id !== undefined) {
-      updates.push(`department_id = $${paramIdx}`);
-      values.push(body.department_id);
-      paramIdx++;
-    }
-    if (body.role_id !== undefined) {
-      updates.push(`role_id = $${paramIdx}`);
-      values.push(body.role_id);
-      paramIdx++;
-    }
-    if (body.is_admin !== undefined) {
-      updates.push(`is_admin = $${paramIdx}`);
-      values.push(body.is_admin);
-      paramIdx++;
-    }
-    if (body.is_active !== undefined) {
-      updates.push(`is_active = $${paramIdx}`);
-      values.push(body.is_active);
-      paramIdx++;
-    }
-    if (body.unlock_account === true) {
-      updates.push(`is_locked = false`);
-      updates.push(`failed_login_attempts = 0`);
-      updates.push(`locked_at = null`);
-      updates.push(`last_failed_login_at = null`);
-    }
+      const { rows: currentProfiles } = await client.query<{
+        department_id: string | null;
+        role_id: string | null;
+        is_active: boolean;
+      }>(
+        `SELECT department_id, role_id, is_active
+           FROM profiles
+          WHERE id = $1
+          FOR UPDATE`,
+        [req.params.userId],
+      );
 
-    if (updates.length === 0 && !body.role_ids) {
-      throw new HttpError(400, "No fields to update");
-    }
+      if (currentProfiles.length === 0) {
+        throw new HttpError(404, "User not found");
+      }
 
-    updates.push(`updated_at = now()`);
+      const currentProfile = currentProfiles[0];
+      const updates: string[] = [];
+      const values: unknown[] = [];
+      let paramIdx = 1;
 
-    const r = await pool.query(
-      `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
-      [...values, req.params.userId],
-    );
+      if (body.full_name !== undefined) {
+        updates.push(`full_name = $${paramIdx}`);
+        values.push(body.full_name.trim());
+        paramIdx++;
+      }
+      if (body.department_id !== undefined) {
+        updates.push(`department_id = $${paramIdx}`);
+        values.push(body.department_id);
+        paramIdx++;
+      }
+      if (body.role_id !== undefined) {
+        updates.push(`role_id = $${paramIdx}`);
+        values.push(body.role_id);
+        paramIdx++;
+      }
+      if (body.is_admin !== undefined) {
+        updates.push(`is_admin = $${paramIdx}`);
+        values.push(body.is_admin);
+        paramIdx++;
+      }
+      if (body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIdx}`);
+        values.push(body.is_active);
+        paramIdx++;
+      }
+      if (body.unlock_account === true) {
+        updates.push(`is_locked = false`);
+        updates.push(`failed_login_attempts = 0`);
+        updates.push(`locked_at = null`);
+        updates.push(`last_failed_login_at = null`);
+      }
 
-    if (r.rowCount === 0) throw new HttpError(404, "User not found");
+      if (updates.length === 0 && !body.role_ids) {
+        throw new HttpError(400, "No fields to update");
+      }
 
-    // Handle multiple roles if provided
-    if (body.role_ids !== undefined) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
+      updates.push(`updated_at = now()`);
+
+      const r = await client.query(
+        `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
+        [...values, req.params.userId],
+      );
+
+      if (r.rowCount === 0) throw new HttpError(404, "User not found");
+
+      // Handle multiple roles if provided
+      if (body.role_ids !== undefined) {
         // Clear existing roles
         await client.query("DELETE FROM user_roles WHERE user_id = $1", [req.params.userId]);
         // Add new roles
@@ -2230,39 +2865,51 @@ apiRouter.patch(
             [req.params.userId, roleId, req.auth!.userId],
           );
         }
-        await client.query("COMMIT");
-      } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
-      } finally {
-        client.release();
       }
+
+      await syncDepartmentManagerAssignment(client, {
+        userId: req.params.userId,
+        assignedBy: req.auth!.userId,
+        departmentId:
+          body.department_id !== undefined ? body.department_id : currentProfile.department_id,
+        roleId: body.role_id !== undefined ? body.role_id : currentProfile.role_id,
+        roleIds: body.role_ids,
+        isActive:
+          body.is_active !== undefined ? body.is_active : currentProfile.is_active,
+      });
+
+      await client.query("COMMIT");
+
+      // Log audit event
+      const targetUser = r.rows[0];
+      const changes: string[] = [];
+      if (body.full_name !== undefined)
+        changes.push(`full_name: "${body.full_name}"`);
+      if (body.department_id !== undefined)
+        changes.push(`department_id: "${body.department_id}"`);
+      if (body.role_id !== undefined) changes.push(`role_id: "${body.role_id}"`);
+      if (body.role_ids !== undefined)
+        changes.push(`roles: [${body.role_ids.join(", ")}]`);
+      if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
+      if (body.is_active !== undefined)
+        changes.push(`is_active: ${body.is_active}`);
+      if (body.unlock_account === true) changes.push(`unlocked account`);
+
+      await logAudit(
+        req.auth!.userId,
+        req.profile!.full_name,
+        "UPDATE",
+        "User",
+        `Updated user ${targetUser.full_name}: ${changes.join(", ")}`,
+      );
+
+      res.json({ profile: r.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-
-    // Log audit event
-    const targetUser = r.rows[0];
-    const changes: string[] = [];
-    if (body.full_name !== undefined)
-      changes.push(`full_name: "${body.full_name}"`);
-    if (body.department_id !== undefined)
-      changes.push(`department_id: "${body.department_id}"`);
-    if (body.role_id !== undefined) changes.push(`role_id: "${body.role_id}"`);
-    if (body.role_ids !== undefined)
-      changes.push(`roles: [${body.role_ids.join(", ")}]`);
-    if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
-    if (body.is_active !== undefined)
-      changes.push(`is_active: ${body.is_active}`);
-    if (body.unlock_account === true) changes.push(`unlocked account`);
-
-    await logAudit(
-      req.auth!.userId,
-      req.profile!.full_name,
-      "UPDATE",
-      "User",
-      `Updated user ${targetUser.full_name}: ${changes.join(", ")}`,
-    );
-
-    res.json({ profile: r.rows[0] });
   }),
 );
 
@@ -2542,30 +3189,17 @@ apiRouter.get(
       scopeClause = "FALSE";
     }
 
-    // Approver visibility (assigned actor):
-    //   any request where this user is the assigned approver for ANY step
-    //   (pending, waiting, or already acted) is visible.
+    // Approver visibility:
+    //   only requests where this user is the concrete assignee for a step
+    //   or has already acted on a step. Shared-role visibility is intentionally
+    //   not allowed because it causes request mixing across users.
     const approverVisibility = `EXISTS (
       SELECT 1 FROM approval_actions aa
        WHERE aa.request_id = ar.id
          AND (aa.approver_user_id = $1 OR aa.acted_by = $1)
     )`;
 
-    // Chain-role visibility:
-    //   if the user's role appears in ANY step of the request's chain, they can
-    //   see the request — regardless of department — so they can act on it
-    //   when their step becomes active. This is the explicit rule:
-    //   "If a role is in the approval chain, that user sees the request."
-    const chainRoleVisibility = `EXISTS (
-      SELECT 1
-        FROM approval_chains ac
-        JOIN jsonb_array_elements(ac.steps) step ON true
-        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $1)
-       WHERE ac.id = ar.approval_chain_id
-         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
-    )`;
-
-    const whereCombined = `(${scopeClause} OR ${approverVisibility} OR ${chainRoleVisibility})`;
+    const whereCombined = `(${scopeClause} OR ${approverVisibility})`;
 
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (ar.id) ar.*,
@@ -2577,17 +3211,16 @@ apiRouter.get(
             SELECT 1 FROM approval_actions aa
              WHERE aa.request_id = ar.id
                AND aa.approver_user_id = $1
-               AND aa.status IN ('pending', 'waiting')
-          )
-          OR EXISTS (
-            SELECT 1 FROM approval_actions aa
-              JOIN profiles p ON p.id = $1
-              JOIN roles r ON r.id = p.role_id
-             WHERE aa.request_id = ar.id
                AND aa.status = 'pending'
-               AND lower(trim(aa.role_name)) = lower(r.name)
           )
         ) AS needs_approval,
+        (
+          EXISTS (
+            SELECT 1 FROM approval_actions aa
+             WHERE aa.request_id = ar.id
+               AND aa.acted_by = $1
+          )
+        ) AS has_acted,
         (
           SELECT aa.role_name FROM approval_actions aa
            WHERE aa.request_id = ar.id
@@ -2663,16 +3296,6 @@ apiRouter.get(
          AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
     )`;
 
-    // Chain-role visibility: user's role appears in any step of the request's chain.
-    const chainRoleVisibility = `ar.id = $1 AND EXISTS (
-      SELECT 1
-        FROM approval_chains ac
-        JOIN jsonb_array_elements(ac.steps) step ON true
-        JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $2)
-       WHERE ac.id = ar.approval_chain_id
-         AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
-    )`;
-
     const { rows } = await pool.query(
       `SELECT ar.*,
         json_build_object(
@@ -2687,7 +3310,7 @@ apiRouter.get(
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE (${scopeClause}) OR (${approverVisibility}) OR (${chainRoleVisibility})
+      WHERE (${scopeClause}) OR (${approverVisibility})
       LIMIT 1`,
       queryParams,
     );
@@ -2734,14 +3357,6 @@ apiRouter.get(
              WHERE aa.request_id = ar.id
                AND (aa.approver_user_id = $3 OR aa.acted_by = $3)
           )
-          OR EXISTS (
-            SELECT 1
-              FROM approval_chains ac
-              JOIN jsonb_array_elements(ac.steps) step ON true
-              JOIN roles r ON r.id = (SELECT role_id FROM profiles WHERE id = $3)
-             WHERE ac.id = ar.approval_chain_id
-               AND lower(trim(COALESCE(step->>'roleName', step->>'role_name', ''))) = lower(r.name)
-          )
         )`,
       [req.params.num, admin, uid],
     );
@@ -2766,6 +3381,10 @@ apiRouter.post(
   asyncHandler(async (req: AuthedRequest, res) => {
     const userPermissions = req.profile!.permissions || [];
     const isAdmin = req.profile!.is_admin;
+    const canChooseDepartment =
+      isAdmin ||
+      userPermissions.includes("manage_departments") ||
+      userPermissions.includes("all");
 
     // Check if user has permission to initiate requests
     const canInitiate =
@@ -2790,26 +3409,33 @@ apiRouter.post(
       throw new HttpError(404, "Approval type not found");
     }
 
-    const typeDeptId = typeRows[0].department_id as string | null;
-    const selectedDeptId =
-      body.department_id ?? req.profile?.department_id ?? null;
+    const profileDepartmentId = req.profile?.department_id ?? null;
+    const selectedDeptId = canChooseDepartment
+      ? body.department_id ?? profileDepartmentId
+      : profileDepartmentId;
 
-    if (typeDeptId && selectedDeptId && typeDeptId !== selectedDeptId) {
+    if (
+      !canChooseDepartment &&
+      body.department_id !== undefined &&
+      body.department_id !== profileDepartmentId
+    ) {
       throw new HttpError(
-        400,
-        "Department mismatch: approval type is restricted to its own department",
+        403,
+        "You can only create requests for your own department",
       );
     }
 
-    const requestDeptId = selectedDeptId ?? typeDeptId ?? null;
+    const requestDeptId = selectedDeptId ?? profileDepartmentId ?? null;
+
+    if (!requestDeptId) {
+      throw new HttpError(
+        400,
+        "Requests must originate from a specific department",
+      );
+    }
 
     // Resolve chain steps up-front so we can populate approval_actions atomically.
-    let chainSteps: Array<{
-      order?: number;
-      roleName?: string;
-      role_name?: string;
-      action?: string;
-    }> = [];
+    let chainSteps: WorkflowStepDefinition[] = [];
     if (body.approval_chain_id) {
       const { rows: chainRows } = await pool.query<{ steps: unknown }>(
         `SELECT steps FROM approval_chains WHERE id = $1`,
@@ -2819,11 +3445,13 @@ apiRouter.post(
         throw new HttpError(404, "Approval chain not found");
       }
       const raw = chainRows[0].steps;
-      chainSteps = Array.isArray(raw)
-        ? (raw as typeof chainSteps)
-        : typeof raw === "string"
-          ? (JSON.parse(raw) as typeof chainSteps)
-          : [];
+      chainSteps = normalizeWorkflowSteps(
+        Array.isArray(raw)
+          ? raw
+          : typeof raw === "string"
+            ? JSON.parse(raw)
+            : [],
+      );
       if (chainSteps.length === 0) {
         throw new HttpError(400, "Approval chain has no steps configured");
       }
@@ -2856,8 +3484,12 @@ apiRouter.post(
         await generateApprovalActionsForRequest(client, {
           requestId: createdRequest.id as string,
           chainSteps,
-          departmentId: requestDeptId,
-          initiatorId: uid,
+          request: {
+            requestId: createdRequest.id as string,
+            initiatorId: uid,
+            departmentId: requestDeptId,
+            formData: body.form_data,
+          },
         });
       }
 
@@ -2908,30 +3540,34 @@ apiRouter.post(
       );
     }
 
-    const { rows: requests } = await pool.query(
-      `SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`,
-      [requestId],
-    );
-    if (requests.length === 0) throw new HttpError(404, "Request not found");
-    const request = requests[0];
-
-    if (request.initiator_id === userId) {
-      throw new HttpError(403, "You cannot approve your own request");
-    }
-
-    // Find the lowest open step the user is allowed to act on (assigned by id,
-    // or matching role + same department; admins may act on any open step).
-    const currentAction = await findActionableStep(pool, {
-      requestId,
-      userId,
-      isAdmin,
-    });
-    if (!currentAction)
-      throw new HttpError(403, "You are not an approver for any pending step on this request");
-
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+
+      const { rows: lockedRequests } = await client.query(
+        `SELECT * FROM approval_requests WHERE id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      if (lockedRequests.length === 0) {
+        throw new HttpError(404, "Request not found");
+      }
+
+      const lockedRequest = lockedRequests[0];
+      if (lockedRequest.initiator_id === userId) {
+        throw new HttpError(403, "You cannot approve your own request");
+      }
+
+      const currentAction = await findActionableStep(client, {
+        requestId,
+        userId,
+        isAdmin,
+      });
+      if (!currentAction) {
+        throw new HttpError(
+          403,
+          "You are not the assigned approver for the active step on this request",
+        );
+      }
 
       await client.query(
         `UPDATE approval_actions
@@ -2939,6 +3575,13 @@ apiRouter.post(
           WHERE id = $3`,
         [userId, body.comment || null, currentAction.id],
       );
+      await syncRequestStepAction(client, {
+        requestId,
+        stepOrder: Number(currentAction.step_order),
+        userId,
+        status: "APPROVED",
+        comment: body.comment,
+      });
 
       // Promote any next-step waiting actions to pending so the next approver(s) can act.
       await client.query(
@@ -2952,6 +3595,7 @@ apiRouter.post(
             )`,
         [requestId],
       );
+      await promoteNextRequestStep(client, requestId);
 
       const { rows: allActions } = await client.query<{ status: string; step_order: number }>(
         `SELECT status, step_order FROM approval_actions WHERE request_id = $1`,
@@ -2963,7 +3607,7 @@ apiRouter.post(
       const newStatus = remaining.length === 0 ? "approved" : "in_progress";
       const newCurrentStep =
         remaining.length === 0
-          ? request.current_step
+          ? lockedRequest.current_step
           : Math.min(...remaining.map((a) => a.step_order));
 
       await client.query(
@@ -3024,39 +3668,57 @@ apiRouter.post(
       );
     }
 
-    const { rows: requests } = await pool.query(
-      `SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`,
-      [requestId],
-    );
-    if (requests.length === 0) throw new HttpError(404, "Request not found");
-    const request = requests[0];
-
-    if (request.initiator_id === userId) {
-      throw new HttpError(403, "You cannot reject your own request");
-    }
-
-    const currentAction = await findActionableStep(pool, {
-      requestId,
-      userId,
-      isAdmin,
-    });
-    if (!currentAction)
-      throw new HttpError(403, "You are not an approver for any pending step on this request");
-
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const { rows: lockedRequests } = await client.query(
+        `SELECT * FROM approval_requests WHERE id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      if (lockedRequests.length === 0) {
+        throw new HttpError(404, "Request not found");
+      }
+      const lockedRequest = lockedRequests[0];
+      if (lockedRequest.initiator_id === userId) {
+        throw new HttpError(403, "You cannot reject your own request");
+      }
+
+      const currentAction = await findActionableStep(client, {
+        requestId,
+        userId,
+        isAdmin,
+      });
+      if (!currentAction) {
+        throw new HttpError(
+          403,
+          "You are not the assigned approver for the active step on this request",
+        );
+      }
       await client.query(
         `UPDATE approval_actions
             SET status = 'rejected', acted_by = $1, acted_at = now(), comment = $2
           WHERE id = $3`,
         [userId, body.comment || null, currentAction.id],
       );
+      await syncRequestStepAction(client, {
+        requestId,
+        stepOrder: Number(currentAction.step_order),
+        userId,
+        status: "REJECTED",
+        comment: body.comment,
+      });
       // Skip remaining open steps once rejected.
       await client.query(
         `UPDATE approval_actions
             SET status = 'skipped'
           WHERE request_id = $1 AND status IN ('pending', 'waiting')`,
+        [requestId],
+      );
+      await client.query(
+        `UPDATE request_steps
+            SET status = 'SKIPPED'
+          WHERE request_id = $1
+            AND status IN ('PENDING', 'WAITING')`,
         [requestId],
       );
       await client.query(
@@ -3116,37 +3778,48 @@ apiRouter.post(
       );
     }
 
-    const { rows: requests } = await pool.query(
-      `SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`,
-      [requestId],
-    );
-    if (requests.length === 0) throw new HttpError(404, "Request not found");
-    const request = requests[0];
-
-    if (request.initiator_id === userId) {
-      throw new HttpError(
-        403,
-        "You cannot request changes on your own request",
-      );
-    }
-
-    const currentAction = await findActionableStep(pool, {
-      requestId,
-      userId,
-      isAdmin,
-    });
-    if (!currentAction)
-      throw new HttpError(403, "You are not an approver for any pending step on this request");
-
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const { rows: lockedRequests } = await client.query(
+        `SELECT * FROM approval_requests WHERE id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      if (lockedRequests.length === 0) {
+        throw new HttpError(404, "Request not found");
+      }
+      const lockedRequest = lockedRequests[0];
+      if (lockedRequest.initiator_id === userId) {
+        throw new HttpError(
+          403,
+          "You cannot request changes on your own request",
+        );
+      }
+
+      const currentAction = await findActionableStep(client, {
+        requestId,
+        userId,
+        isAdmin,
+      });
+      if (!currentAction) {
+        throw new HttpError(
+          403,
+          "You are not the assigned approver for the active step on this request",
+        );
+      }
       await client.query(
         `UPDATE approval_actions
             SET status = 'changes_requested', acted_by = $1, acted_at = now(), comment = $2
           WHERE id = $3`,
         [userId, body.comment || null, currentAction.id],
       );
+      await syncRequestStepAction(client, {
+        requestId,
+        stepOrder: Number(currentAction.step_order),
+        userId,
+        status: "CHANGES_REQUESTED",
+        comment: body.comment,
+      });
       // Pause downstream steps until initiator resubmits.
       await client.query(
         `UPDATE approval_actions
@@ -3154,6 +3827,14 @@ apiRouter.post(
           WHERE request_id = $1
             AND step_order = $2
             AND status IN ('pending', 'waiting')`,
+        [requestId, currentAction.step_order],
+      );
+      await client.query(
+        `UPDATE request_steps
+            SET status = 'CHANGES_REQUESTED'
+          WHERE request_id = $1
+            AND step_order = $2
+            AND status IN ('PENDING', 'WAITING')`,
         [requestId, currentAction.step_order],
       );
       await client.query(
@@ -3253,19 +3934,11 @@ apiRouter.patch(
           `UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting')`,
           [requestId],
         );
-
-        // Get the initiator's role name
-        const { rows: initiatorRoleRows } = await pool.query<{
-          role_name: string;
-        }>(
-          `SELECT r.name as role_name
-           FROM roles r
-           JOIN profiles p ON p.role_id = r.id
-           WHERE p.id = $1`,
-          [request.initiator_id],
+        await pool.query(
+          `UPDATE request_steps SET status = 'SKIPPED'
+             WHERE request_id = $1 AND status IN ('PENDING', 'WAITING')`,
+          [requestId],
         );
-        const initiatorRoleName =
-          initiatorRoleRows.length > 0 ? initiatorRoleRows[0].role_name : null;
 
         // Record initiator resubmission in the timeline (before new pending rows so it stays in history)
         const initiatorName = (req.profile!.full_name || "Initiator").trim();
@@ -3296,43 +3969,43 @@ apiRouter.patch(
           throw new HttpError(400, "No approval chain steps found");
         }
 
-        const chainSteps = chainData[0].steps as Array<{
-          order?: number;
-          roleName?: string;
-          role_name?: string;
-          action?: string;
-        }>;
+        const chainSteps = normalizeWorkflowSteps(chainData[0].steps);
 
         // Recreate actions from the changed step onwards. Steps prior to the
         // changed step were already completed and remain untouched. Each new
         // action gets its specific approver re-resolved against the current
         // department, so role-collision across departments stays distinct.
-        for (let i = 0; i < chainSteps.length; i++) {
-          const step = chainSteps[i];
-          const stepRoleName = (step.roleName || step.role_name || "").trim();
-          const stepOrder = step.order ?? i + 1;
-
+        for (const step of chainSteps) {
+          const stepOrder = step.step_order;
           if (stepOrder < changedStepOrder) continue;
-          if (!stepRoleName) continue;
-
-          // Skip if this step's role matches the initiator's role
-          if (stepRoleName === initiatorRoleName) {
-            await pool.query(
-              `INSERT INTO approval_actions (request_id, step_order, role_name, action_label, status)
-               VALUES ($1, $2, $3, $4, 'skipped')`,
-              [requestId, stepOrder, stepRoleName, step.action || "Review"],
-            );
-            continue;
-          }
-
-          const approverId = await resolveStepApprover(pool, {
-            roleName: stepRoleName,
-            departmentId: request.department_id ?? null,
+          const approverId = await resolveApprover(pool, step, {
+            requestId,
             initiatorId: request.initiator_id,
+            departmentId: request.department_id ?? null,
+            formData: body.form_data,
           });
 
           // The step where changes were requested becomes pending; the rest wait.
           const status = stepOrder === changedStepOrder ? "pending" : "waiting";
+          const legacy = toLegacyActorFields(step);
+          await pool.query(
+            `INSERT INTO request_steps
+               (request_id, step_order, name, actor_type, actor_value, action_label, status, assigned_to, approver_user_id, role, scope_type, scope_value)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)`,
+            [
+              requestId,
+              stepOrder,
+              step.name,
+              legacy.actor_type,
+              legacy.actor_value,
+              step.action_label,
+              status.toUpperCase(),
+              approverId,
+              step.role,
+              step.scope_type,
+              step.scope_value,
+            ],
+          );
           await pool.query(
             `INSERT INTO approval_actions
                (request_id, step_order, role_name, action_label, status, approver_user_id)
@@ -3340,8 +4013,8 @@ apiRouter.patch(
             [
               requestId,
               stepOrder,
-              stepRoleName,
-              step.action || "Review",
+              step.role,
+              step.action_label,
               status,
               approverId,
             ],

@@ -129,7 +129,14 @@ export interface ApprovalChain {
   id: string;
   name: string;
   approval_type_id: string;
-  steps: unknown[];
+  steps: Array<{
+    step_order: number;
+    name: string;
+    role: string;
+    scope_type: "initiator_department" | "fixed_department" | "static" | "expression";
+    scope_value?: string | null;
+    action_label: string;
+  }>;
   created_at?: string;
   updated_at?: string;
 }
@@ -212,13 +219,13 @@ export interface UpdateApprovalTypeAttachmentRequest {
 export interface CreateApprovalChainRequest {
   name: string;
   approval_type_id: string;
-  steps: unknown[];
+  steps: ApprovalChain["steps"];
 }
 
 export interface UpdateApprovalChainRequest {
   name?: string;
   approval_type_id?: string;
-  steps?: unknown[];
+  steps?: ApprovalChain["steps"];
 }
 
 export interface CreateApprovalRequestRequest {

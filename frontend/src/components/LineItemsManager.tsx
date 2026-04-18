@@ -81,7 +81,6 @@ export function LineItemsManager({
   ) => {
     const value = item[field.name] ?? "";
     const stringValue = String(value || "");
-    const numberValue = Number(value || 0);
 
     switch (field.type) {
       case "number":
@@ -90,14 +89,9 @@ export function LineItemsManager({
             type="number"
             min="0"
             step="0.01"
-            value={numberValue}
-            onChange={(e) =>
-              updateItem(
-                itemId,
-                field.name,
-                e.target.value === "" ? "" : Number(e.target.value),
-              )
-            }
+            inputMode="decimal"
+            value={stringValue}
+            onChange={(e) => updateItem(itemId, field.name, e.target.value)}
             onFocus={(e) => {
               // Auto-clear common default values when user focuses
               const currentValue = e.target.value;
@@ -106,21 +100,6 @@ export function LineItemsManager({
                 currentValue === "000" ||
                 currentValue === "0000" ||
                 currentValue === "00000"
-              ) {
-                updateItem(itemId, field.name, "");
-              }
-            }}
-            onKeyDown={(e) => {
-              // Also clear on first keystroke if still showing defaults
-              const currentValue = e.currentTarget.value;
-              if (
-                (currentValue === "0" ||
-                  currentValue === "000" ||
-                  currentValue === "0000" ||
-                  currentValue === "00000") &&
-                e.key !== "Backspace" &&
-                e.key !== "Delete" &&
-                e.key !== "Tab"
               ) {
                 updateItem(itemId, field.name, "");
               }
