@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Search, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -14,7 +14,11 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/auth-hooks";
-import { useApprovalRequests, useProfileNames } from "@/hooks/services";
+import {
+  useApprovalRequests,
+  useDepartmentsForUsers,
+  useProfileNames,
+} from "@/hooks/services";
 import { useDebounce } from "@/hooks/useDebounce";
 import type { RequestStatus } from "@/lib/constants";
 
@@ -34,51 +38,86 @@ type RequestRow = {
   has_acted?: boolean;
 };
 
+type TabDefinition = {
+  key: "approval" | "my" | "other";
+  label: string;
+  count: number;
+  emptyMessage: string;
+  requests: RequestRow[];
+};
+
+const DEPARTMENT_FALLBACK = "No Department Assigned";
+
+function getDepartmentLabel(request: RequestRow) {
+  return request.departments?.name?.trim() || DEPARTMENT_FALLBACK;
+}
+
 export default function Approvals() {
   const navigate = useNavigate();
-  const { user, isAdmin, hasPermission } = useAuth();
+  const { isAdmin, hasPermission } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
-  
-  // Debounce search to prevent excessive re-renders
   const debouncedSearch = useDebounce(search, 300);
 
-  const { data: rows = [], isLoading: loading } = useApprovalRequests() as { data: RequestRow[], isLoading: boolean };
+  const { data: rows = [], isLoading: loading } = useApprovalRequests() as {
+    data: RequestRow[];
+    isLoading: boolean;
+  };
+  const { data: departments = [] } = useDepartmentsForUsers();
 
-  const initiatorIds = useMemo(() => [...new Set(rows.map((r) => r.initiator_id))], [rows]);
+  const initiatorIds = useMemo(
+    () => [...new Set(rows.map((request) => request.initiator_id))],
+    [rows],
+  );
   const { data: names = {} } = useProfileNames(initiatorIds);
 
   const segregated = useMemo(() => {
-    const myRequests = rows.filter((r) => r.is_initiator);
-    
-    // Keep both pending approvals and requests the current user already acted on
-    // in the approver-facing list so approval history remains accessible.
-    const approvalRequests = rows.filter((r) => {
-      if (!(r.needs_approval || r.has_acted)) return false;
+    const myRequests = rows.filter((request) => request.is_initiator);
+    const approvalRequests = rows.filter((request) => {
+      if (!(request.needs_approval || request.has_acted)) return false;
       return isAdmin || hasPermission("approve_reject") || hasPermission("all");
     });
-    
     const allOther = rows.filter(
-      (r) => !r.is_initiator && !r.needs_approval && !r.has_acted,
+      (request) =>
+        !request.is_initiator &&
+        !request.needs_approval &&
+        !request.has_acted,
     );
+
     return { myRequests, approvalRequests, allOther };
   }, [rows, isAdmin, hasPermission]);
 
   const filtered = useMemo(() => {
-    const applyFilters = (list: RequestRow[]) =>
-      list.filter((r) => {
-        if (statusFilter !== "all" && r.status !== statusFilter) return false;
-        const initiator = names[r.initiator_id] ?? "";
-        const typeName = r.approval_types?.name ?? "";
+    const normalizedSearch = debouncedSearch.trim().toLowerCase();
+
+    const applyFilters = (requests: RequestRow[]) =>
+      requests.filter((request) => {
+        if (statusFilter !== "all" && request.status !== statusFilter) {
+          return false;
+        }
+
         if (
-          search &&
-          !r.request_number.toLowerCase().includes(search.toLowerCase()) &&
-          !typeName.toLowerCase().includes(search.toLowerCase()) &&
-          !initiator.toLowerCase().includes(search.toLowerCase())
+          departmentFilter !== "all" &&
+          getDepartmentLabel(request) !== departmentFilter
         ) {
           return false;
         }
-        return true;
+
+        if (!normalizedSearch) {
+          return true;
+        }
+
+        const initiatorName = (names[request.initiator_id] ?? "").toLowerCase();
+        const typeName = (request.approval_types?.name ?? "").toLowerCase();
+        const departmentName = getDepartmentLabel(request).toLowerCase();
+
+        return (
+          request.request_number.toLowerCase().includes(normalizedSearch) ||
+          initiatorName.includes(normalizedSearch) ||
+          typeName.includes(normalizedSearch) ||
+          departmentName.includes(normalizedSearch)
+        );
       });
 
     return {
@@ -86,135 +125,142 @@ export default function Approvals() {
       approvalRequests: applyFilters(segregated.approvalRequests),
       allOther: applyFilters(segregated.allOther),
     };
-  }, [segregated, statusFilter, search, names]);
+  }, [debouncedSearch, departmentFilter, names, segregated, statusFilter]);
+
+  const tabs = useMemo(() => {
+    const canReview =
+      isAdmin || hasPermission("approve_reject") || hasPermission("all");
+
+    const nextTabs: TabDefinition[] = [];
+
+    if (canReview) {
+      nextTabs.push({
+        key: "approval",
+        label: "Waiting for Your Review",
+        count: filtered.approvalRequests.length,
+        emptyMessage: "No requests are waiting for your review.",
+        requests: filtered.approvalRequests,
+      });
+    }
+
+    nextTabs.push({
+      key: "my",
+      label: "Submitted By You",
+      count: filtered.myRequests.length,
+      emptyMessage: "You have not submitted any requests yet.",
+      requests: filtered.myRequests,
+    });
+
+    if (isAdmin) {
+      nextTabs.push({
+        key: "other",
+        label: "Submitted by Other Teams",
+        count: filtered.allOther.length,
+        emptyMessage: "No requests from other teams match your filters.",
+        requests: filtered.allOther,
+      });
+    }
+
+    return nextTabs;
+  }, [filtered, hasPermission, isAdmin]);
+
+  const tabsListClassName =
+    tabs.length === 1
+      ? "grid w-full grid-cols-1"
+      : tabs.length === 2
+        ? "grid w-full grid-cols-2"
+        : "grid w-full grid-cols-3";
 
   const renderTable = (requests: RequestRow[]) => (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b bg-muted/30">
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-              Request ID
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Request No.
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-              Type
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Request Type
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-              Initiator
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Submitted By
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-              Department
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Initiator Department
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Status
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Progress
             </th>
-            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-              Date
+            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Submitted On
             </th>
           </tr>
         </thead>
         <tbody className="divide-y">
-          {requests.map((req) => (
+          {requests.map((request) => (
             <tr
-              key={req.id}
-              className="hover:bg-muted/30 cursor-pointer transition-snappy"
-              onClick={() => {
-                console.log("Navigating to request ID:", req.id, "Number:", req.request_number);
-                navigate(`/approvals/${req.id}`);
-              }}
+              key={request.id}
+              className="cursor-pointer transition-snappy hover:bg-muted/30"
+              onClick={() => navigate(`/approvals/${request.id}`)}
             >
               <td className="px-4 py-3 font-medium text-primary">
-                {req.request_number}
-              </td>
-              <td className="px-4 py-3">{req.approval_types?.name ?? "—"}</td>
-              <td className="px-4 py-3">{names[req.initiator_id] ?? "—"}</td>
-              <td className="px-4 py-3 text-muted-foreground">
-                {req.departments?.name ?? "—"}
+                {request.request_number}
               </td>
               <td className="px-4 py-3">
-                <StatusBadge status={req.status} />
+                {request.approval_types?.name ?? "-"}
+              </td>
+              <td className="px-4 py-3">
+                {names[request.initiator_id] ?? "-"}
+              </td>
+              <td className="px-4 py-3 text-muted-foreground">
+                {getDepartmentLabel(request)}
+              </td>
+              <td className="px-4 py-3">
+                <StatusBadge status={request.status} />
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
                     <div
-                      className="h-full bg-primary rounded-full"
+                      className="h-full rounded-full bg-primary"
                       style={{
-                        width: `${req.total_steps ? (req.current_step / req.total_steps) * 100 : 0}%`,
+                        width: `${request.total_steps ? (request.current_step / request.total_steps) * 100 : 0}%`,
                       }}
                     />
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    {req.current_step}/{req.total_steps}
+                    {request.current_step}/{request.total_steps}
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-3 text-muted-foreground text-xs">
-                {new Date(req.created_at).toLocaleDateString()}
+              <td className="px-4 py-3 text-xs text-muted-foreground">
+                {new Date(request.created_at).toLocaleDateString()}
               </td>
             </tr>
           ))}
-          {requests.length === 0 && (
-            <tr>
-              <td
-                colSpan={7}
-                className="px-4 py-12 text-center text-muted-foreground"
-              >
-                No requests found
-              </td>
-            </tr>
-          )}
         </tbody>
       </table>
     </div>
   );
 
-  const renderGroupedTable = (requests: RequestRow[]) => {
-    const grouped = requests.reduce(
-      (acc, req) => {
-        const dept = req.departments?.name ?? "No Department";
-        if (!acc[dept]) acc[dept] = [];
-        acc[dept].push(req);
-        return acc;
-      },
-      {} as Record<string, RequestRow[]>,
-    );
-
-    return (
-      <div className="space-y-6">
-        {Object.entries(grouped).map(([dept, reqs]) => (
-          <div key={dept}>
-            <h3 className="text-lg font-semibold mb-3">{dept}</h3>
-            {renderTable(reqs)}
-          </div>
-        ))}
-        {requests.length === 0 && (
-          <div className="text-center text-muted-foreground py-12">
-            No requests found
-          </div>
-        )}
-      </div>
-    );
-  };
-
   if (loading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[40vh]">
+      <div className="flex min-h-[40vh] items-center justify-center p-6">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Approvals</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            View and manage approval requests
+          <h1 className="text-2xl font-bold text-foreground">Request Inbox</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Review requests using search and department filters
           </p>
         </div>
         <Button onClick={() => navigate("/approvals/new")} className="gap-2">
@@ -225,18 +271,18 @@ export default function Approvals() {
 
       <Card className="border">
         <CardHeader className="pb-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[220px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search by ID, type, or initiator..."
+                placeholder="Search by request no., type, person, or department..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(event) => setSearch(event.target.value)}
                 className="pl-9"
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[160px]">
+              <SelectTrigger className="w-[170px]">
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
               <SelectContent>
@@ -247,39 +293,48 @@ export default function Approvals() {
                 <SelectItem value="rejected">Rejected</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Filter by department" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Departments</SelectItem>
+                {departments.map((department) => (
+                  <SelectItem key={department.id} value={department.name}>
+                    {department.name}
+                  </SelectItem>
+                ))}
+                {!departments.some(
+                  (department) => department.name === DEPARTMENT_FALLBACK,
+                ) && (
+                  <SelectItem value={DEPARTMENT_FALLBACK}>
+                    {DEPARTMENT_FALLBACK}
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <Tabs defaultValue={isAdmin ? "approval" : "my"} className="w-full">
-            <TabsList className="grid w-full grid-cols-2 lg:grid-cols-3">
-              {isAdmin ? (
-                <>
-                  <TabsTrigger value="approval">
-                    Requests to Approve
-                  </TabsTrigger>
-                  <TabsTrigger value="my">My Requests</TabsTrigger>
-                  <TabsTrigger value="other">All Other Requests</TabsTrigger>
-                </>
-              ) : (
-                <>
-                  <TabsTrigger value="my">My Requests</TabsTrigger>
-                  <TabsTrigger value="approval">
-                    Requests to Approve
-                  </TabsTrigger>
-                </>
-              )}
+        <CardContent className="p-6">
+          <Tabs defaultValue={tabs[0]?.key ?? "my"} className="w-full">
+            <TabsList className={tabsListClassName}>
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab.key} value={tab.key}>
+                  {tab.label} ({tab.count})
+                </TabsTrigger>
+              ))}
             </TabsList>
-            <TabsContent value="my" className="mt-0">
-              {renderTable(filtered.myRequests)}
-            </TabsContent>
-            <TabsContent value="approval" className="mt-0">
-              {renderTable(filtered.approvalRequests)}
-            </TabsContent>
-            {isAdmin && (
-              <TabsContent value="other" className="mt-0">
-                {renderGroupedTable(filtered.allOther)}
+            {tabs.map((tab) => (
+              <TabsContent key={tab.key} value={tab.key} className="mt-0">
+                {tab.requests.length === 0 ? (
+                  <div className="py-12 text-center text-muted-foreground">
+                    {tab.emptyMessage}
+                  </div>
+                ) : (
+                  renderTable(tab.requests)
+                )}
               </TabsContent>
-            )}
+            ))}
           </Tabs>
         </CardContent>
       </Card>

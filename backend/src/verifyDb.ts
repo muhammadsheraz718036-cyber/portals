@@ -79,6 +79,25 @@ export async function verifyDatabaseReady(): Promise<void> {
       ON approval_actions(request_id, step_order)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_departments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      department_id UUID NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      assigned_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+      UNIQUE(user_id, department_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_departments_user_id
+      ON user_departments(user_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_departments_department_id
+      ON user_departments(department_id)
+  `);
+
   // 2. Backfill approver_user_id for legacy open actions so existing in-flight
   //    requests route to a single specific user under the new isolation rules.
   //    Priority per action (only when approver_user_id IS NULL):

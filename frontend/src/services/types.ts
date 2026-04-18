@@ -3,7 +3,11 @@ export interface Profile {
   full_name: string;
   email: string;
   department_id: string | null;
+  department_ids: string[];
+  department_names?: string[];
   role_id: string | null;
+  role_ids: string[];
+  role_names?: string[];
   is_admin: boolean;
   is_active: boolean;
   permissions: string[];
@@ -251,14 +255,18 @@ export interface CreateUserRequest {
   password: string;
   full_name: string;
   department_id?: string | null;
+  department_ids?: string[];
   role_id?: string | null;
+  role_ids?: string[];
   is_admin?: boolean;
 }
 
 export interface UpdateUserRequest {
   full_name?: string;
   department_id?: string | null;
+  department_ids?: string[];
   role_id?: string | null;
+  role_ids?: string[];
   is_admin?: boolean;
   is_active?: boolean;
   unlock_account?: boolean;

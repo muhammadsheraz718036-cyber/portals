@@ -39,6 +39,7 @@ import {
   useRejectRequest,
   useRequestChanges,
   useUpdateApprovalRequest,
+  useDeleteApprovalRequest,
   useResolveRequestNumber,
   useRequestAttachments,
   useDownloadAttachment,
@@ -206,9 +207,6 @@ type ActionRow = {
   created_at: string;
 };
 
-const uuidRe =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Ensure line items have stable `id` for LineItemsManager (API JSON may omit or use numbers). */
 function normalizeItemsForEdit(raw: unknown): LineItem[] {
   if (!Array.isArray(raw)) return [];
@@ -220,6 +218,10 @@ function normalizeItemsForEdit(raw: unknown): LineItem[] {
         : `item-${idx}`;
     return { ...row, id } as LineItem;
   });
+}
+
+function getGroupRenderOrder(fields: ApprovalFormField[]) {
+  return Array.from(new Set(fields.map((field) => field.group || "General")));
 }
 
 export default function RequestDetail() {
@@ -242,18 +244,13 @@ export default function RequestDetail() {
   const rejectMutation = useRejectRequest();
   const requestChangesMutation = useRequestChanges();
   const updateRequestMutation = useUpdateApprovalRequest();
+  const deleteRequestMutation = useDeleteApprovalRequest();
 
   const {
     data: requestData,
     isLoading: loading,
     error: notFound,
   } = useApprovalRequest(id || "");
-  
-  // Debug logging
-  useEffect(() => {
-    console.log("RequestDetail: URL id changed to", id);
-    console.log("RequestDetail: requestData?.request?.id =", requestData?.request?.id);
-  }, [id, requestData?.request?.id]);
   
   const downloadMutation = useDownloadAttachment();
   const deleteMutation = useDeleteRequestAttachment();
@@ -299,28 +296,6 @@ export default function RequestDetail() {
   const pageWidth = isLandscape ? "11in" : "8.5in";
   const pageHeight = isLandscape ? "8.5in" : "11in";
   const pageSize = isLandscape ? "11in 8.5in" : "8.5in 11in";
-
-  // One row per step for the timeline "current" line: prefer active pending/waiting, else latest by time
-  const currentActions = useMemo(() => {
-    const byStep: Record<number, ActionRow[]> = {};
-    actions.forEach((action) => {
-      if (!byStep[action.step_order]) byStep[action.step_order] = [];
-      byStep[action.step_order].push(action);
-    });
-    return Object.keys(byStep)
-      .map((k) => Number(k))
-      .sort((a, b) => a - b)
-      .map((stepOrder) => {
-        const rows = byStep[stepOrder];
-        const active = rows.find(
-          (r) => r.status === "pending" || r.status === "waiting",
-        );
-        if (active) return active;
-        return rows.reduce((best, r) =>
-          new Date(r.created_at) > new Date(best.created_at) ? r : best,
-        );
-      });
-  }, [actions]);
 
   const timelineSteps = useMemo(() => {
     const displayGroups = new Map<number, ActionRow[]>();
@@ -421,7 +396,13 @@ export default function RequestDetail() {
         page-break-after: avoid !important;
       }
       #print-letter table { width: 100% !important; table-layout: auto !important; }
-      #print-letter table td, #print-letter table th { word-break: break-word !important; }
+      #print-letter table td { word-break: break-word !important; }
+      #print-letter table th {
+        white-space: normal !important;
+        word-break: normal !important;
+        overflow-wrap: normal !important;
+        hyphens: manual !important;
+      }
       .no-print { display: none !important; }
       * {
         -webkit-print-color-adjust: exact !important;
@@ -551,6 +532,42 @@ export default function RequestDetail() {
     );
   };
 
+  const canDeleteRequest = () => {
+    if (!request || !user || !profile) return false;
+    if (request.status === "approved" || request.status === "rejected") {
+      return false;
+    }
+
+    if (profile.is_admin) return true;
+
+    return (
+      request.initiator_id === user.id &&
+      (profile.permissions?.includes("delete_initiated_requests") ||
+        profile.permissions?.includes("all"))
+    );
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!request) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete request ${request.request_number}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setActioning(true);
+    try {
+      await deleteRequestMutation.mutateAsync(request.id);
+      navigate("/approvals");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete request");
+    } finally {
+      setActioning(false);
+    }
+  };
+
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -623,8 +640,11 @@ export default function RequestDetail() {
     : [];
 
   // All fields are now repeatable (line items)
-  const regularFields: ApprovalFormField[] = [];
   const repeatableFields = fields;
+  const repeatableGroupOrder = useMemo(
+    () => getGroupRenderOrder(repeatableFields),
+    [repeatableFields],
+  );
 
   const formData = (request?.form_data as Record<string, unknown>) ?? {};
   const items = Array.isArray(formData.items) ? formData.items : [];
@@ -645,6 +665,10 @@ export default function RequestDetail() {
       key !== "post_comments",
   );
   const displayId = request?.request_number ?? "";
+  const normalizedItems = useMemo(
+    () => normalizeItemsForEdit(items),
+    [items],
+  );
   const letterContent = (
     <div
       className="relative w-full"
@@ -772,15 +796,7 @@ export default function RequestDetail() {
                   )}
                   {repeatableFields.length > 0 && (
                     <div className="space-y-6 my-4">
-                      {Array.from(
-                        new Set(repeatableFields.map((f) => f.group || "General")),
-                      )
-                        .sort((a, b) => {
-                          if (a === "General") return -1;
-                          if (b === "General") return 1;
-                          return a.localeCompare(b);
-                        })
-                        .map((group) => {
+                      {repeatableGroupOrder.map((group) => {
                           const groupFields = repeatableFields.filter(
                             (f) => (f.group || "General") === group,
                           );
@@ -867,15 +883,7 @@ export default function RequestDetail() {
                 )}
                 {repeatableFields.length > 0 && (
                   <div className="space-y-6 my-4">
-                    {Array.from(
-                      new Set(repeatableFields.map((f) => f.group || "General")),
-                    )
-                      .sort((a, b) => {
-                        if (a === "General") return -1;
-                        if (b === "General") return 1;
-                        return a.localeCompare(b);
-                      })
-                      .map((group) => {
+                    {repeatableGroupOrder.map((group) => {
                         const groupFields = repeatableFields.filter(
                           (f) => (f.group || "General") === group,
                         );
@@ -1007,14 +1015,32 @@ export default function RequestDetail() {
           <h1 className="text-xl font-bold text-foreground">{displayId}</h1>
           <StatusBadge status={request.status} />
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handlePrint}
-          className="gap-2"
-        >
-          <Printer className="h-4 w-4" /> Print Letter
-        </Button>
+        <div className="flex items-center gap-2">
+          {canDeleteRequest() && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteRequest}
+              className="gap-2"
+              disabled={actioning}
+            >
+              {actioning ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Delete Request
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handlePrint}
+            className="gap-2"
+          >
+            <Printer className="h-4 w-4" /> Print Letter
+          </Button>
+        </div>
       </div>
 
       <div
@@ -1067,6 +1093,113 @@ export default function RequestDetail() {
                 </div>
               </div>
 
+              {formEntries.length > 0 && (
+                <div className="rounded-xl border p-4">
+                  <p className="mb-3 text-sm font-semibold text-foreground">
+                    Captured Fields
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {formEntries.map(([key, value]) => (
+                      <div key={key}>
+                        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                          {key.replace(/_/g, " ")}
+                        </p>
+                        <p className="text-sm font-medium text-foreground">
+                          {String(value || "—")}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {repeatableFields.length > 0 && (
+                <div className="rounded-xl border p-4">
+                  <p className="mb-4 text-sm font-semibold text-foreground">
+                    Submitted Entries
+                  </p>
+                  <div className="space-y-5">
+                    {repeatableGroupOrder.map((group) => {
+                      const groupFields = repeatableFields.filter(
+                        (field) => (field.group || "General") === group,
+                      );
+                      const groupItems = normalizedItems.filter(
+                        (item) => String(item.__group || "General") === group,
+                      );
+
+                      if (groupFields.length === 0) {
+                        return null;
+                      }
+
+                      return (
+                        <div key={group} className="space-y-3">
+                          <div>
+                            <h3 className="text-sm font-semibold text-foreground">
+                              {group}
+                            </h3>
+                          </div>
+
+                          {groupItems.length === 0 ? (
+                            <div className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
+                              No entries submitted for this section.
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto rounded-lg border">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b bg-muted/30">
+                                    {groupFields.map((field) => (
+                                      <th
+                                        key={`${group}-${field.name}-submitted`}
+                                        className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                                      >
+                                        {field.label || field.name}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                  {groupItems.map((item, itemIndex) => (
+                                    <tr key={item.id || `${group}-${itemIndex}`}>
+                                      {groupFields.map((field) => {
+                                        const rawValue = item[field.name];
+                                        let displayValue: string;
+
+                                        if (field.type === "checkbox") {
+                                          displayValue =
+                                            rawValue === "true" ? "Yes" : "-";
+                                        } else if (
+                                          rawValue === undefined ||
+                                          rawValue === null ||
+                                          String(rawValue).trim() === ""
+                                        ) {
+                                          displayValue = "-";
+                                        } else {
+                                          displayValue = String(rawValue);
+                                        }
+
+                                        return (
+                                          <td
+                                            key={`${item.id}-${field.name}-submitted`}
+                                            className="px-4 py-3 align-top text-foreground"
+                                          >
+                                            {displayValue}
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              
               <div className="rounded-xl border bg-muted/20 p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-1">
@@ -1088,26 +1221,6 @@ export default function RequestDetail() {
                   </Button>
                 </div>
               </div>
-
-              {(regularFields.length > 0 || formEntries.length > 0) && (
-                <div className="rounded-xl border p-4">
-                  <p className="mb-3 text-sm font-semibold text-foreground">
-                    Captured Fields
-                  </p>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    {formEntries.map(([key, value]) => (
-                      <div key={key}>
-                        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                          {key.replace(/_/g, " ")}
-                        </p>
-                        <p className="text-sm font-medium text-foreground">
-                          {String(value || "—")}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </CardContent>
           </Card>
 

@@ -41,6 +41,12 @@ export class ApprovalRequestService extends BaseService {
     );
   }
 
+  async delete(id: string): Promise<{ success: boolean }> {
+    return this.handleRequest(() =>
+      api.approvalRequests.delete(id)
+    );
+  }
+
   async approve(id: string, data: ApprovalActionRequest): Promise<void> {
     return this.handleRequest(async () => {
       await api.approvalRequests.approve(id, data);

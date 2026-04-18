@@ -14,7 +14,11 @@ export class ProfileService extends BaseService {
     full_name: string;
     email: string;
     department_id: string | null;
+    department_ids: string[];
+    department_names: string[];
     role_id: string | null;
+    role_ids: string[];
+    role_names: string[];
     department_name: string | null;
     role_name: string | null;
   }> {

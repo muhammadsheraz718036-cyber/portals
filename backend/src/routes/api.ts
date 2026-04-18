@@ -322,7 +322,15 @@ async function resolveApprover(
 
   if (scopedDepartmentId) {
     params.push(scopedDepartmentId);
-    departmentClause = `AND p.department_id = $3`;
+    departmentClause = `AND (
+      p.department_id = $3
+      OR EXISTS (
+        SELECT 1
+        FROM user_departments ud
+        WHERE ud.user_id = p.id
+          AND ud.department_id = $3
+      )
+    )`;
   }
 
   const { rows } = await client.query<{ id: string }>(
@@ -386,7 +394,15 @@ async function resolveStepApprover(
          LEFT JOIN roles primary_role ON primary_role.id = p.role_id
          LEFT JOIN user_roles ur ON ur.user_id = p.id
          LEFT JOIN roles secondary_role ON secondary_role.id = ur.role_id
-        WHERE p.department_id = $1
+        WHERE (
+          p.department_id = $1
+          OR EXISTS (
+            SELECT 1
+            FROM user_departments ud
+            WHERE ud.user_id = p.id
+              AND ud.department_id = $1
+          )
+        )
           AND (
             lower(trim(primary_role.name)) = lower(trim($2))
             OR lower(trim(secondary_role.name)) = lower(trim($2))
@@ -724,6 +740,7 @@ async function syncDepartmentManagerAssignment(
     assignedBy: string;
     departmentId: string | null;
     roleId: string | null;
+    departmentIds?: string[];
     isActive: boolean;
     roleIds?: string[];
   },
@@ -757,7 +774,8 @@ async function syncDepartmentManagerAssignment(
     hasDepartmentManagerRole = rows.length > 0;
   }
 
-  if (!hasDepartmentManagerRole || !opts.departmentId || !opts.isActive) {
+  const desiredDepartmentIds = dedupeAssignedIds(opts.departmentId, opts.departmentIds);
+  if (!hasDepartmentManagerRole || desiredDepartmentIds.length === 0 || !opts.isActive) {
     await client.query(
       `UPDATE department_managers
           SET is_active = false
@@ -771,17 +789,62 @@ async function syncDepartmentManagerAssignment(
     `UPDATE department_managers
         SET is_active = false
       WHERE user_id = $1
-        AND department_id <> $2`,
-    [opts.userId, opts.departmentId],
+        AND department_id <> ALL($2::uuid[])`,
+    [opts.userId, desiredDepartmentIds],
   );
 
-  await client.query(
-    `INSERT INTO department_managers (department_id, user_id, assigned_by, is_active)
-     VALUES ($1, $2, $3, true)
-     ON CONFLICT (department_id, user_id)
-     DO UPDATE SET is_active = true, assigned_by = EXCLUDED.assigned_by`,
-    [opts.departmentId, opts.userId, opts.assignedBy],
-  );
+  for (const departmentId of desiredDepartmentIds) {
+    await client.query(
+      `INSERT INTO department_managers (department_id, user_id, assigned_by, is_active)
+       VALUES ($1, $2, $3, true)
+       ON CONFLICT (department_id, user_id)
+       DO UPDATE SET is_active = true, assigned_by = EXCLUDED.assigned_by`,
+      [departmentId, opts.userId, opts.assignedBy],
+    );
+  }
+}
+
+function dedupeAssignedIds(primaryId: string | null | undefined, ids?: string[]) {
+  return [
+    ...(primaryId ? [primaryId] : []),
+    ...(ids ?? []),
+  ].filter((value, index, arr) => !!value && arr.indexOf(value) === index) as string[];
+}
+
+async function syncUserDepartmentAssignments(
+  client: { query: typeof pool.query },
+  opts: {
+    userId: string;
+    assignedBy: string;
+    departmentId: string | null;
+    departmentIds?: string[];
+  },
+) {
+  if (opts.departmentIds === undefined) {
+    const desiredDepartmentIds = dedupeAssignedIds(opts.departmentId);
+    await client.query(`DELETE FROM user_departments WHERE user_id = $1`, [opts.userId]);
+    for (const departmentId of desiredDepartmentIds) {
+      await client.query(
+        `INSERT INTO user_departments (user_id, department_id, assigned_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, department_id) DO NOTHING`,
+        [opts.userId, departmentId, opts.assignedBy],
+      );
+    }
+    return desiredDepartmentIds;
+  }
+
+  const desiredDepartmentIds = dedupeAssignedIds(opts.departmentId, opts.departmentIds);
+  await client.query(`DELETE FROM user_departments WHERE user_id = $1`, [opts.userId]);
+  for (const departmentId of desiredDepartmentIds) {
+    await client.query(
+      `INSERT INTO user_departments (user_id, department_id, assigned_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, department_id) DO NOTHING`,
+      [opts.userId, departmentId, opts.assignedBy],
+    );
+  }
+  return desiredDepartmentIds;
 }
 
 // --- Public ---
@@ -2575,7 +2638,10 @@ apiRouter.get(
       `SELECT * FROM profiles WHERE NOT is_admin OR id = $1 ORDER BY created_at DESC`,
       [req.auth!.userId],
     );
-    res.json(rows);
+    const profiles = (
+      await Promise.all(rows.map((row) => loadProfileById(row.id)))
+    ).filter(Boolean);
+    res.json(profiles);
   }),
 );
 
@@ -2588,6 +2654,7 @@ const createUserBody = z.object({
     .refine(isPasswordPolicyValid, PASSWORD_POLICY_MESSAGE),
   full_name: z.string().min(1),
   department_id: z.string().uuid().nullable().optional(),
+  department_ids: z.array(z.string().uuid()).optional(),
   role_id: z.string().uuid().nullable().optional(),
   role_ids: z.array(z.string().uuid()).optional(), // Support multiple roles on creation
   is_admin: z.boolean().optional(),
@@ -2608,6 +2675,21 @@ apiRouter.post(
     }
 
     const body = createUserBody.parse(req.body);
+    const assignedDepartmentIds = dedupeAssignedIds(body.department_id ?? null, body.department_ids);
+    const assignedRoleIds = dedupeAssignedIds(body.role_id ?? null, body.role_ids);
+
+    if (!isAdmin && body.is_admin === true) {
+      throw new HttpError(403, "Only admins can create admin users");
+    }
+
+    if (!isAdmin && assignedDepartmentIds.length === 0) {
+      throw new HttpError(400, "Department is required when creating users");
+    }
+
+    if (!isAdmin && assignedRoleIds.length === 0) {
+      throw new HttpError(400, "Role is required when creating users");
+    }
+
     const password_hash = await hashPassword(body.password);
     const client = await pool.connect();
     try {
@@ -2624,15 +2706,21 @@ apiRouter.post(
           id,
           body.email.toLowerCase(),
           body.full_name.trim(),
-          body.department_id ?? null,
-          body.role_id ?? null,
+          assignedDepartmentIds[0] ?? null,
+          assignedRoleIds[0] ?? null,
           body.is_admin ?? false,
         ],
       );
 
-      // Add multiple roles if provided
-      if (body.role_ids && body.role_ids.length > 0) {
-        for (const roleId of body.role_ids) {
+      await syncUserDepartmentAssignments(client, {
+        userId: id,
+        assignedBy: req.auth!.userId,
+        departmentId: assignedDepartmentIds[0] ?? null,
+        departmentIds: assignedDepartmentIds,
+      });
+
+      if (assignedRoleIds.length > 0) {
+        for (const roleId of assignedRoleIds) {
           await client.query(
             "INSERT INTO user_roles (user_id, role_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
             [id, roleId, req.auth!.userId],
@@ -2643,9 +2731,10 @@ apiRouter.post(
       await syncDepartmentManagerAssignment(client, {
         userId: id,
         assignedBy: req.auth!.userId,
-        departmentId: body.department_id ?? null,
-        roleId: body.role_id ?? null,
-        roleIds: body.role_ids,
+        departmentId: assignedDepartmentIds[0] ?? null,
+        departmentIds: assignedDepartmentIds,
+        roleId: assignedRoleIds[0] ?? null,
+        roleIds: assignedRoleIds,
         isActive: true,
       });
 
@@ -2730,6 +2819,7 @@ apiRouter.patch(
 const updateUserBody = z.object({
   full_name: z.string().min(1).optional(),
   department_id: z.string().uuid().nullable().optional(),
+  department_ids: z.array(z.string().uuid()).optional(),
   role_id: z.string().uuid().nullable().optional(),
   role_ids: z.array(z.string().uuid()).optional(), // Support multiple roles
   is_admin: z.boolean().optional(),
@@ -2753,16 +2843,37 @@ apiRouter.patch(
 
     const body = updateUserBody.parse(req.body);
 
+    if (!isAdmin && body.is_admin !== undefined) {
+      throw new HttpError(403, "Only admins can change admin access");
+    }
+
     // Prevent non-admin users from changing role and permissions for users with admin console access
     if (
       !isAdmin &&
-      (body.role_id !== undefined || body.is_admin !== undefined)
+      (body.role_id !== undefined || body.role_ids !== undefined || body.is_admin !== undefined)
     ) {
       // Get the target user's current permissions
       const { rows: targetUserRows } = await pool.query<{
         permissions: string[];
       }>(
-        `SELECT r.permissions FROM profiles p LEFT JOIN roles r ON p.role_id = r.id WHERE p.id = $1`,
+        `SELECT COALESCE(
+           ARRAY(
+             SELECT DISTINCT permission
+             FROM (
+               SELECT unnest(COALESCE(primary_role.permissions, '{}')) AS permission
+               UNION ALL
+               SELECT unnest(COALESCE(extra_role.permissions, '{}')) AS permission
+               FROM user_roles ur
+               JOIN roles extra_role ON extra_role.id = ur.role_id
+               WHERE ur.user_id = p.id
+             ) collected_permissions
+             WHERE permission IS NOT NULL
+           ),
+           '{}'
+         ) AS permissions
+         FROM profiles p
+         LEFT JOIN roles primary_role ON p.role_id = primary_role.id
+         WHERE p.id = $1`,
         [req.params.userId],
       );
 
@@ -2792,9 +2903,43 @@ apiRouter.patch(
         department_id: string | null;
         role_id: string | null;
         is_active: boolean;
+        department_ids: string[] | null;
+        role_ids: string[] | null;
       }>(
-        `SELECT department_id, role_id, is_active
+        `SELECT
+           p.department_id,
+           p.role_id,
+           p.is_active,
+           COALESCE(
+             ARRAY(
+               SELECT DISTINCT department_id
+               FROM (
+                 SELECT p.department_id
+                 UNION ALL
+                 SELECT ud.department_id
+                 FROM user_departments ud
+                 WHERE ud.user_id = p.id
+               ) assigned_departments
+               WHERE department_id IS NOT NULL
+             ),
+             '{}'
+           ) AS department_ids,
+           COALESCE(
+             ARRAY(
+               SELECT DISTINCT role_id
+               FROM (
+                 SELECT p.role_id
+                 UNION ALL
+                 SELECT ur.role_id
+                 FROM user_roles ur
+                 WHERE ur.user_id = p.id
+               ) assigned_roles
+               WHERE role_id IS NOT NULL
+             ),
+             '{}'
+           ) AS role_ids
            FROM profiles
+          p
           WHERE id = $1
           FOR UPDATE`,
         [req.params.userId],
@@ -2805,6 +2950,14 @@ apiRouter.patch(
       }
 
       const currentProfile = currentProfiles[0];
+      const assignedDepartmentIds = dedupeAssignedIds(
+        body.department_id !== undefined ? body.department_id : currentProfile.department_id,
+        body.department_ids !== undefined ? body.department_ids : currentProfile.department_ids ?? [],
+      );
+      const assignedRoleIds = dedupeAssignedIds(
+        body.role_id !== undefined ? body.role_id : currentProfile.role_id,
+        body.role_ids !== undefined ? body.role_ids : currentProfile.role_ids ?? [],
+      );
       const updates: string[] = [];
       const values: unknown[] = [];
       let paramIdx = 1;
@@ -2814,14 +2967,14 @@ apiRouter.patch(
         values.push(body.full_name.trim());
         paramIdx++;
       }
-      if (body.department_id !== undefined) {
+      if (body.department_id !== undefined || body.department_ids !== undefined) {
         updates.push(`department_id = $${paramIdx}`);
-        values.push(body.department_id);
+        values.push(assignedDepartmentIds[0] ?? null);
         paramIdx++;
       }
-      if (body.role_id !== undefined) {
+      if (body.role_id !== undefined || body.role_ids !== undefined) {
         updates.push(`role_id = $${paramIdx}`);
-        values.push(body.role_id);
+        values.push(assignedRoleIds[0] ?? null);
         paramIdx++;
       }
       if (body.is_admin !== undefined) {
@@ -2841,7 +2994,7 @@ apiRouter.patch(
         updates.push(`last_failed_login_at = null`);
       }
 
-      if (updates.length === 0 && !body.role_ids) {
+      if (updates.length === 0 && body.role_ids === undefined && body.department_ids === undefined) {
         throw new HttpError(400, "No fields to update");
       }
 
@@ -2854,12 +3007,18 @@ apiRouter.patch(
 
       if (r.rowCount === 0) throw new HttpError(404, "User not found");
 
-      // Handle multiple roles if provided
-      if (body.role_ids !== undefined) {
-        // Clear existing roles
+      if (body.department_ids !== undefined || body.department_id !== undefined) {
+        await syncUserDepartmentAssignments(client, {
+          userId: req.params.userId,
+          assignedBy: req.auth!.userId,
+          departmentId: assignedDepartmentIds[0] ?? null,
+          departmentIds: assignedDepartmentIds,
+        });
+      }
+
+      if (body.role_ids !== undefined || body.role_id !== undefined) {
         await client.query("DELETE FROM user_roles WHERE user_id = $1", [req.params.userId]);
-        // Add new roles
-        for (const roleId of body.role_ids) {
+        for (const roleId of assignedRoleIds) {
           await client.query(
             "INSERT INTO user_roles (user_id, role_id, assigned_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
             [req.params.userId, roleId, req.auth!.userId],
@@ -2870,10 +3029,10 @@ apiRouter.patch(
       await syncDepartmentManagerAssignment(client, {
         userId: req.params.userId,
         assignedBy: req.auth!.userId,
-        departmentId:
-          body.department_id !== undefined ? body.department_id : currentProfile.department_id,
-        roleId: body.role_id !== undefined ? body.role_id : currentProfile.role_id,
-        roleIds: body.role_ids,
+        departmentId: assignedDepartmentIds[0] ?? null,
+        departmentIds: assignedDepartmentIds,
+        roleId: assignedRoleIds[0] ?? null,
+        roleIds: assignedRoleIds,
         isActive:
           body.is_active !== undefined ? body.is_active : currentProfile.is_active,
       });
@@ -2885,11 +3044,10 @@ apiRouter.patch(
       const changes: string[] = [];
       if (body.full_name !== undefined)
         changes.push(`full_name: "${body.full_name}"`);
-      if (body.department_id !== undefined)
-        changes.push(`department_id: "${body.department_id}"`);
-      if (body.role_id !== undefined) changes.push(`role_id: "${body.role_id}"`);
-      if (body.role_ids !== undefined)
-        changes.push(`roles: [${body.role_ids.join(", ")}]`);
+      if (body.department_id !== undefined || body.department_ids !== undefined)
+        changes.push(`departments: [${assignedDepartmentIds.join(", ")}]`);
+      if (body.role_id !== undefined || body.role_ids !== undefined)
+        changes.push(`roles: [${assignedRoleIds.join(", ")}]`);
       if (body.is_admin !== undefined) changes.push(`is_admin: ${body.is_admin}`);
       if (body.is_active !== undefined)
         changes.push(`is_active: ${body.is_active}`);
@@ -2903,7 +3061,8 @@ apiRouter.patch(
         `Updated user ${targetUser.full_name}: ${changes.join(", ")}`,
       );
 
-      res.json({ profile: r.rows[0] });
+      const profile = await loadProfileById(req.params.userId);
+      res.json({ profile });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -3174,7 +3333,11 @@ apiRouter.get(
     } else if (userPermissions.includes("view_department_requests")) {
       scopeClause = `(
         ar.initiator_id = $1
-        OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $1)
+        OR ar.department_id IN (
+          SELECT department_id FROM profiles WHERE id = $1
+          UNION
+          SELECT department_id FROM user_departments WHERE user_id = $1
+        )
         OR ar.department_id IN (
           SELECT department_id FROM department_managers
            WHERE user_id = $1 AND is_active = true
@@ -3275,7 +3438,11 @@ apiRouter.get(
     } else if (userPermissions.includes("view_department_requests")) {
       scopeClause = `ar.id = $1 AND (
         ar.initiator_id = $2
-        OR ar.department_id = (SELECT department_id FROM profiles WHERE id = $2)
+        OR ar.department_id IN (
+          SELECT department_id FROM profiles WHERE id = $2
+          UNION
+          SELECT department_id FROM user_departments WHERE user_id = $2
+        )
         OR ar.department_id IN (
           SELECT department_id FROM department_managers
            WHERE user_id = $2 AND is_active = true
@@ -3877,6 +4044,97 @@ const updateRequestBody = z.object({
   form_data: z.record(z.any()),
 });
 
+apiRouter.delete(
+  "/approval-requests/:id",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const requestId = req.params.id;
+    const userId = req.auth!.userId;
+    const isAdmin = req.profile!.is_admin;
+    const userPermissions = req.profile!.permissions || [];
+    const hasDeletePermission =
+      userPermissions.includes("delete_initiated_requests") ||
+      userPermissions.includes("all");
+
+    const { rows: requests } = await pool.query<{
+      id: string;
+      request_number: string;
+      initiator_id: string;
+      status: string;
+    }>(
+      `SELECT id, request_number, initiator_id, status
+         FROM approval_requests
+        WHERE id = $1`,
+      [requestId],
+    );
+
+    if (requests.length === 0) {
+      throw new HttpError(404, "Request not found");
+    }
+
+    const request = requests[0];
+    const isInitiator = request.initiator_id === userId;
+
+    if (!isAdmin && (!hasDeletePermission || !isInitiator)) {
+      throw new HttpError(
+        403,
+        "Only admins or the initiator with delete permission can delete this request",
+      );
+    }
+
+    if (request.status === "approved" || request.status === "rejected") {
+      throw new HttpError(
+        400,
+        "Completed requests cannot be deleted",
+      );
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: attachments } = await client.query<{ file_path: string | null }>(
+        `SELECT file_path
+           FROM request_attachments
+          WHERE request_id = $1`,
+        [requestId],
+      );
+
+      await client.query(`DELETE FROM request_attachments WHERE request_id = $1`, [requestId]);
+      await client.query(`DELETE FROM request_steps WHERE request_id = $1`, [requestId]);
+      await client.query(`DELETE FROM approval_actions WHERE request_id = $1`, [requestId]);
+      await client.query(`DELETE FROM approval_requests WHERE id = $1`, [requestId]);
+
+      await client.query("COMMIT");
+
+      for (const attachment of attachments) {
+        if (attachment.file_path && isFileInsideUploads(attachment.file_path)) {
+          try {
+            await deleteUploadedFile(attachment.file_path);
+          } catch {
+            // Best effort cleanup after DB deletion succeeds.
+          }
+        }
+      }
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await logAudit(
+      userId,
+      req.profile!.full_name,
+      "DELETE",
+      "Approval Request",
+      `Deleted request: ${request.request_number}`,
+    );
+
+    res.json({ success: true });
+  }),
+);
+
 apiRouter.patch(
   "/approval-requests/:id",
   requireAuth,
@@ -4109,9 +4367,97 @@ apiRouter.get(
 
 async function loadProfileById(id: string) {
   const { rows } = await pool.query(
-    `SELECT p.id, p.full_name, p.email, p.department_id, p.role_id, p.is_admin, p.is_active, p.created_at, p.updated_at, p.failed_login_attempts, p.is_locked, p.locked_at, p.last_failed_login_at, r.permissions, r.name as role_name, d.name as department_name
+    `SELECT
+       p.id,
+       p.full_name,
+       p.email,
+       p.department_id,
+       p.role_id,
+       p.is_admin,
+       p.is_active,
+       p.created_at,
+       p.updated_at,
+       p.failed_login_attempts,
+       p.is_locked,
+       p.locked_at,
+       p.last_failed_login_at,
+       COALESCE(
+         ARRAY(
+           SELECT DISTINCT department_id
+           FROM (
+             SELECT p.department_id
+             UNION ALL
+             SELECT ud.department_id
+             FROM user_departments ud
+             WHERE ud.user_id = p.id
+           ) assigned_departments
+           WHERE department_id IS NOT NULL
+         ),
+         '{}'
+       ) AS department_ids,
+       COALESCE(
+         ARRAY(
+           SELECT DISTINCT role_id
+           FROM (
+             SELECT p.role_id
+             UNION ALL
+             SELECT ur.role_id
+             FROM user_roles ur
+             WHERE ur.user_id = p.id
+           ) assigned_roles
+           WHERE role_id IS NOT NULL
+         ),
+         '{}'
+       ) AS role_ids,
+       COALESCE(
+         ARRAY(
+           SELECT DISTINCT department_name
+           FROM (
+             SELECT d.name AS department_name
+             UNION ALL
+             SELECT extra_department.name AS department_name
+             FROM user_departments ud
+             JOIN departments extra_department ON extra_department.id = ud.department_id
+             WHERE ud.user_id = p.id
+           ) assigned_department_names
+           WHERE department_name IS NOT NULL
+         ),
+         '{}'
+       ) AS department_names,
+       COALESCE(
+         ARRAY(
+           SELECT DISTINCT role_name
+           FROM (
+             SELECT primary_role.name AS role_name
+             UNION ALL
+             SELECT extra_role.name AS role_name
+             FROM user_roles ur
+             JOIN roles extra_role ON extra_role.id = ur.role_id
+             WHERE ur.user_id = p.id
+           ) assigned_role_names
+           WHERE role_name IS NOT NULL
+         ),
+         '{}'
+       ) AS role_names,
+       COALESCE(
+         ARRAY(
+           SELECT DISTINCT permission
+           FROM (
+             SELECT unnest(COALESCE(primary_role.permissions, '{}')) AS permission
+             UNION ALL
+             SELECT unnest(COALESCE(extra_role.permissions, '{}')) AS permission
+             FROM user_roles ur
+             JOIN roles extra_role ON extra_role.id = ur.role_id
+             WHERE ur.user_id = p.id
+           ) collected_permissions
+           WHERE permission IS NOT NULL
+         ),
+         '{}'
+       ) AS permissions,
+       primary_role.name AS role_name,
+       d.name AS department_name
      FROM profiles p
-     LEFT JOIN roles r ON p.role_id = r.id
+     LEFT JOIN roles primary_role ON p.role_id = primary_role.id
      LEFT JOIN departments d ON p.department_id = d.id
      WHERE p.id = $1`,
     [id],

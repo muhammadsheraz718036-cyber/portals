@@ -262,6 +262,19 @@ CREATE TABLE IF NOT EXISTS user_roles (
 CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id);
 
+-- User departments junction table (for multiple departments per user)
+CREATE TABLE IF NOT EXISTS user_departments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  department_id UUID NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  assigned_by UUID REFERENCES profiles(id),
+  UNIQUE(user_id, department_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_departments_user_id ON user_departments(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_departments_department_id ON user_departments(department_id);
+
 -- ===============================
 -- MIGRATION 004: BACKWARD COMPATIBILITY LOGGING
 -- ===============================

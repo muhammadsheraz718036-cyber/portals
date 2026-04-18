@@ -2,7 +2,7 @@
 
 A comprehensive approval request management system built with React (frontend) and Express (backend). The system allows users to create, approve, reject, and track approval requests with customizable workflows.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -11,17 +11,19 @@ A comprehensive approval request management system built with React (frontend) a
 - [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Database Setup](#database-setup)
 - [Running the Application](#running-the-application)
 - [Development](#development)
 - [Building for Production](#building-for-production)
-- [Database](#database)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
+- [API Documentation](#api-documentation)
+- [Support & Contributing](#support--contributing)
+- [License](#license)
 
 ---
 
-## 🎯 Overview
+## Overview
 
 Approval Central is an enterprise-grade approval workflow management system designed to streamline the process of creating and managing approval requests across departments. It features:
 
@@ -34,45 +36,45 @@ Approval Central is an enterprise-grade approval workflow management system desi
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Features
 
-- ✅ User authentication with JWT tokens
-- ✅ Role-based access control (RBAC)
-- ✅ Create and manage approval requests
-- ✅ Configurable approval chains with multiple steps
-- ✅ Custom form fields (text, number, date, select, radio, checkbox, textarea)
-- ✅ Rich text editor for request content
-- ✅ Line items (repeatable field groups)
-- ✅ Request filtering and search
-- ✅ Multi-department support
-- ✅ Approval action history
-- ✅ Audit logging for compliance
+-  User authentication with JWT tokens
+-  Role-based access control (RBAC)
+-  Create and manage approval requests
+-  Configurable approval chains with multiple steps
+-  Custom form fields (text, number, date, select, radio, checkbox, textarea)
+-  Rich text editor for request content
+-  Line items (repeatable field groups)
+-  Request filtering and search
+-  Multi-department support
+-  Approval action history
+-  Audit logging for compliance
 
 ### Admin Features
 
-- 👥 User management and role assignment
-- 📋 Approval type configuration
-- ⛓️ Approval chain creation
-- 🏢 Department management
-- 📊 Audit log viewing
-- ⚙️ System settings (company name, logo)
+-  User management and role assignment
+-  Approval type configuration
+-  Approval chain creation
+-  Department management
+-  Audit log viewing
+-  System settings (company name, logo)
 
 ### Security Features
 
-- 🔐 JWT-based authentication with 7-day expiration
-- 🔒 bcryptjs password hashing (10 rounds)
-- 🛡️ CORS configuration
-- 📝 Security headers
-- 🚫 SQL injection prevention (parameterized queries)
-- ✔️ Input validation with Zod
-- 🔍 XSS protection via safe HTML handling
-- 📋 Comprehensive audit logging
+-  JWT-based authentication with token expiration
+-  bcryptjs password hashing
+-  CORS configuration
+-  Security headers
+-  SQL injection prevention (parameterized queries)
+-  Input validation with Zod
+-  XSS protection via safe HTML handling
+-  Comprehensive audit logging
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 ### Frontend
 
@@ -86,9 +88,9 @@ Approval Central is an enterprise-grade approval workflow management system desi
 
 ### Backend
 
-- **Express.js** for REST API
+- **Express.js** for REST APIs
 - **Node.js** with TypeScript
-- **PostgreSQL** for database
+- **PostgreSQL** for the database
 - **JWT** for authentication
 - **bcryptjs** for password hashing
 - **Zod** for schema validation
@@ -102,221 +104,220 @@ Approval Central is an enterprise-grade approval workflow management system desi
 
 ---
 
-## 📦 Prerequisites
+## Prerequisites
 
 - **Node.js** 20.0 or higher
 - **npm** 10.0 or higher
-- **PostgreSQL** 14.0 or higher (must have `pgcrypto` extension)
+- **PostgreSQL** 14.0 or higher
 - **Git** for version control
 
 ### System Requirements
 
 - **OS**: Windows, macOS, or Linux
-- **RAM**: Minimum 4GB (8GB recommended)
+- **RAM**: 4GB minimum (8GB recommended)
 - **Disk Space**: 2GB for dependencies and database
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-Portals/
-├── backend/                    # Express API server
-│   ├── src/
-│   │   ├── index.ts           # Main server entry point
-│   │   ├── env.ts             # Environment configuration
-│   │   ├── db.ts              # Database connection
-│   │   ├── httpError.ts        # Custom HTTP error class
-│   │   ├── asyncHandler.ts     # Async error wrapper
-│   │   ├── asyncMiddleware.ts  # Async middleware wrapper
-│   │   ├── verifyDb.ts         # Database verification
-│   │   ├── auth/
-│   │   │   ├── jwt.ts         # JWT token management
-│   │   │   └── password.ts    # Password hashing
-│   │   ├── middleware/
-│   │   │   └── auth.ts        # Authentication middleware
-│   │   └── routes/
-│   │       └── api.ts         # API endpoints
-│   ├── sql/
-│   │   └── schema.sql         # Database schema
-│   ├── scripts/
-│   │   └── apply-schema.ts    # Schema setup script
-│   ├── .env.example           # Environment template
-│   ├── package.json           # Backend dependencies
-│   └── tsconfig.json          # TypeScript config
-│
-├── frontend/                   # React Vite application
-│   ├── src/
-│   │   ├── main.tsx           # Vite entry point
-│   │   ├── App.tsx            # Main app component
-│   │   ├── pages/             # Page components
-│   │   ├── components/        # Reusable components
-│   │   ├── contexts/          # React contexts (Auth, Company)
-│   │   ├── hooks/             # Custom React hooks
-│   │   ├── lib/               # Utilities and API client
-│   │   ├── integrations/      # External service integrations
-│   │   └── test/              # Test files
-│   ├── public/                # Static assets
-│   ├── .env.example           # Environment template
-│   ├── package.json           # Frontend dependencies
-│   └── vite.config.ts         # Vite configuration
-│
-├── .git/                      # Git repository
-├── .gitignore                 # Git ignore file
-├── README.md                  # This file
-└── SECURITY_SETUP.md          # Security configuration guide
+approval-central/
+ backend/                    # Express API server
+    src/
+       index.ts           # Main server entry point
+       env.ts             # Environment configuration
+       db.ts              # Database connection
+       httpError.ts       # Custom HTTP error class
+       asyncHandler.ts    # Async error wrapper
+       asyncMiddleware.ts # Async middleware wrapper
+       verifyDb.ts        # Database verification
+       auth/
+          jwt.ts         # JWT token utilities
+          password.ts    # Password hashing
+       middleware/
+          auth.ts        # Authentication middleware
+       routes/
+           api.ts         # API endpoints
+    sql/
+       complete-schema.sql # Full database schema
+       migrations/        # Optional incremental migrations
+    scripts/
+       apply-schema.ts    # Full schema setup script
+       run-migrations.ts  # Incremental migration runner
+    .env.example           # Backend environment template
+    package.json           # Backend dependencies and scripts
+    tsconfig.json          # Backend TypeScript config
+
+ frontend/                   # React Vite application
+    src/
+       main.tsx           # Vite entry point
+       App.tsx            # Main app component
+       pages/             # Page components
+       components/        # Reusable components
+       contexts/          # React contexts
+       hooks/             # Custom hooks
+       lib/               # Utilities and API client
+       integrations/      # External service integrations
+       test/              # Test files
+    public/                # Static assets
+    .env.example           # Frontend environment template
+    package.json           # Frontend dependencies and scripts
+    tsconfig.app.json      # Frontend TypeScript config
+    tsconfig.json
+    vite.config.ts         # Vite configuration
+
+ .gitignore                 # Git ignore file
+ README.md                  # This file
+ SECURITY_SETUP.md          # Security configuration guide
 ```
 
 ---
 
-## 🚀 Installation
+## Installation
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone <repository-url>
-cd Portals
+cd approval-central
 ```
 
 ### 2. Setup Backend
 
 ```bash
 cd backend
-
-# Copy environment template
 cp .env.example .env
-
-# Install dependencies
 npm install
-
-# Build TypeScript
 npm run build
 ```
 
-**Edit `.env` with your configuration** (see [Configuration](#configuration) section)
+> Edit `backend/.env` before starting the backend. See [Backend Configuration](#backend-configuration-env) below.
 
 ### 3. Setup Database
 
 ```bash
-# From the backend directory (still in ./backend)
-
-# Create database schema
+cd backend
 npm run db:schema
+```
+
+If you are using incremental migrations instead of the complete schema file, run:
+
+```bash
+npm run db:migrate
 ```
 
 ### 4. Setup Frontend
 
 ```bash
-# From the root directory
-cd frontend
-
-# Copy environment template
+cd ../frontend
 cp .env.example .env
-
-# Install dependencies
 npm install
 ```
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-### Backend Configuration (.env)
+### Backend Configuration (`backend/.env`)
 
-Create or edit `backend/.env`:
+Create or update `backend/.env` with your local values:
 
 ```bash
-# PostgreSQL Database (REQUIRED)
 DATABASE_URL=postgresql://username:password@localhost:5432/approval_central
-
-# JWT Secret for token signing (REQUIRED)
-# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-JWT_SECRET=your-super-secret-random-string-at-least-32-chars
-
-# Server Port (optional, default 4000)
+JWT_SECRET=your-very-long-random-secret
 PORT=4000
-
-# Node Environment (development/production)
+CORS_ORIGIN=http://localhost:8080
 NODE_ENV=development
-
-# CORS Origin - frontend URL (required)
-CORS_ORIGIN=http://localhost:5173
 ```
 
-### Frontend Configuration (.env)
+- `DATABASE_URL`: PostgreSQL connection string
+- `JWT_SECRET`: Secret used to sign JWT tokens
+- `PORT`: Backend port, default `4000`
+- `CORS_ORIGIN`: Frontend origin allowed to call the backend
+- `NODE_ENV`: Typically `development` or `production`
 
-Create or edit `frontend/.env`:
+### Frontend Configuration (`frontend/.env`)
+
+The frontend uses the Vite dev proxy to forward `/api` requests to the backend:
 
 ```bash
-# API URL (optional if using Vite dev proxy)
-# In development, Vite automatically proxies /api to http://localhost:4000
-# VITE_API_URL=http://localhost:4000
+# Leave empty to use same-origin /api via proxy to http://localhost:4000
+# VITE_API_URL=
 ```
 
-### Database Setup
+Set `VITE_API_URL` when your backend is hosted on a different URL in development or production.
 
-1. **Create PostgreSQL Database**
+---
+
+## Database Setup
+
+### Create the database
 
 ```bash
-# Using psql
 createdb approval_central
-
-# Or with a query:
-# CREATE DATABASE approval_central;
 ```
 
-2. **Apply Schema**
+or:
+
+```sql
+CREATE DATABASE approval_central;
+```
+
+### Apply the schema
 
 ```bash
 cd backend
 npm run db:schema
 ```
 
-3. **Initial Admin User** (created by schema)
+### Run migrations
 
-The schema will prompt you to create an initial admin user if needed.
+Use this command if you have incremental migrations:
+
+```bash
+cd backend
+npm run db:migrate
+```
 
 ---
 
-## 🏃 Running the Application
+## Running the Application
 
-### Development Mode (Recommended)
+### Development Mode
 
-**Terminal 1: Start the Backend**
+**Terminal 1: Start the backend**
 
 ```bash
 cd backend
 npm run dev
 ```
 
-Expected output:
-
-```
-approval-central-api listening on http://localhost:4000
-```
-
-**Terminal 2: Start the Frontend**
+**Terminal 2: Start the frontend**
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Expected output:
+Default URLs:
 
-```
-  VITE v7.3.1  ready in 500 ms
-  ➜  Local:   http://localhost:5173/
-```
+- Frontend: `http://localhost:8080`
+- Backend API: `http://localhost:4000`
 
-### Access the Application
+If port `8080` is already in use, Vite will choose the next available port, such as `http://localhost:8081`.
 
-- **Frontend**: Open http://localhost:5173 in your browser
-- **API**: http://localhost:4000/api
+### Initial Admin Setup
+
+Open the frontend and navigate to:
+
+- `http://localhost:8080/setup`
+
+Create the first administrator account through the setup page.
 
 ### Production Mode
 
-**1. Build Backend**
+#### Backend
 
 ```bash
 cd backend
@@ -324,22 +325,21 @@ npm run build
 npm start
 ```
 
-**2. Build Frontend**
+#### Frontend
 
 ```bash
 cd frontend
 npm run build
+npm run preview
 ```
 
-The production frontend files are in `frontend/dist/`. Deploy these to your web server (Nginx, Apache, etc.).
+The production build is available in `frontend/dist/`.
 
 ---
 
-## 🧑‍💻 Development
+## Development
 
-### Code Quality
-
-Run linting:
+### Linting
 
 ```bash
 cd frontend
@@ -349,46 +349,29 @@ npm run lint
 ### TypeScript Checking
 
 ```bash
-# Frontend
 cd frontend
 npx tsc --noEmit
-
-# Backend (part of build)
-cd backend
+cd ../backend
 npm run build
-```
-
-### Code Style
-
-The project uses ESLint with TypeScript support. Most issues are auto-fixable:
-
-```bash
-npm run lint -- --fix
 ```
 
 ### Testing
 
-Run frontend tests:
-
 ```bash
 cd frontend
-npm run test        # Run tests once
-npm run test:watch  # Watch mode
+npm run test
+npm run test:watch
 ```
 
 ---
 
-## 📦 Building for Production
+## Building for Production
 
 ### Backend
 
 ```bash
 cd backend
-
-# Optimize build
 npm run build
-
-# Test the production build locally
 PORT=4000 npm start
 ```
 
@@ -396,220 +379,148 @@ PORT=4000 npm start
 
 ```bash
 cd frontend
-
-# Build for production (optimized, minified)
 npm run build
-
-# Preview the production build locally
 npm run preview
 ```
 
 ---
 
-## 🗄️ Database
+## Database
 
-### Database Schema
+The database schema includes the application’s core entities:
 
-The application automatically creates all required tables when you run `npm run db:schema`:
-
-- `profiles` - User accounts and roles
-- `roles` - User roles with permissions
-- `departments` - Organizational departments
-- `approval_types` - Request type definitions
-- `approval_chains` - Multi-step approval workflows
+- `users` - Authentication records
+- `profiles` - User profile details, roles, and permissions
+- `roles` - Role definitions and permissions
+- `departments` - Department metadata
+- `approval_types` - Definitions for request types
+- `approval_chains` - Multi-step workflow definitions
 - `approval_requests` - Submitted requests
 - `approval_actions` - Approval history
-- `audit_logs` - System activity tracking
+- `audit_logs` - Audit trails and activity logs
 
-### Backup and Restore
+### Backup and restore
 
 ```bash
-# Backup database
 pg_dump -h localhost -U username approval_central > backup.sql
-
-# Restore from backup
 psql -h localhost -U username approval_central < backup.sql
 ```
 
 ---
 
-## 🔒 Security
+## Security
 
-The application implements comprehensive security measures:
+The application includes these security measures:
 
-- **Authentication**: JWT tokens with 7-day expiration
-- **Password Security**: bcryptjs with 10 rounds, never stored in plain text
-- **Database**: Parameterized SQL queries prevent injection attacks
-- **Environment**: Sensitive variables in `.env` files (not in git)
-- **CORS**: Configured to specific origins
-- **Audit Logging**: All significant actions logged for compliance
+- **JWT authentication** with expiration
+- **Password hashing** using `bcryptjs`
+- **Parameterized SQL queries** to prevent injection
+- **CORS** limited to the frontend origin
+- **Input validation** with Zod
+- **Audit logging** for important actions
+- **Secrets stored in `.env` files** and not committed to git
 
-For detailed security setup and best practices, see [SECURITY_SETUP.md](./SECURITY_SETUP.md).
-
----
-
-## 🐛 Troubleshooting
-
-### Backend Won't Start
-
-**Error: "DATABASE_URL is required"**
-
-- Ensure `backend/.env` exists and has `DATABASE_URL` set
-- Verify PostgreSQL is running
-- Test connection: `psql -c "SELECT 1"`
-
-**Error: "Cannot find module"**
-
-- Run `npm install` in the backend directory
-- Delete `node_modules` and run `npm install` again
-
-**Error: "EADDRINUSE: address already in use :::4000"**
-
-- Port 4000 is occupied. Either:
-  - Kill the process using port 4000
-  - Change PORT in `.env`
-
-### Frontend Won't Start
-
-**Error: "Module not found"**
-
-- Run `npm install` in the frontend directory
-- Verify Node.js version: `node --version` (need 20+)
-
-**Error: "API calls fail / CORS error"**
-
-- Ensure backend is running on port 4000
-- Check `CORS_ORIGIN` in backend `.env`
-- In dev, Vite should auto-proxy `/api` to backend
-
-**Blank page or 404**
-
-- Clear browser cache: Ctrl+Shift+Delete
-- Rebuild frontend: `npm run build && npm run preview`
-
-### Database Issues
-
-**Error: "database does not exist"**
-
-- Create database: `createdb approval_central`
-- Run schema: `cd backend && npm run db:schema`
-
-**Error: "pgcrypto extension not found"**
-
-- Enable extension:
-  ```sql
-  CREATE EXTENSION IF NOT EXISTS pgcrypto;
-  ```
+For detailed security guidance, see [SECURITY_SETUP.md](./SECURITY_SETUP.md).
 
 ---
 
-## 📝 Development Workflow
+## Troubleshooting
 
-1. **Create a feature branch**
+### Backend issues
 
-   ```bash
-   git checkout -b feature/my-feature
-   ```
+- **`DATABASE_URL is required`**
+  - Make sure `backend/.env` exists and includes `DATABASE_URL`
+  - Confirm PostgreSQL is running
+- **`EADDRINUSE`**
+  - Stop the process using port `4000`
+  - Change `PORT` in `backend/.env`
+- **`Cannot find module`**
+  - Run `npm install` in `backend`
 
-2. **Make changes and commit**
+### Frontend issues
 
-   ```bash
-   git add .
-   git commit -m "feat: add my feature"
-   ```
+- **Module not found**
+  - Run `npm install` in `frontend`
+- **CORS errors**
+  - Verify backend is reachable at `http://localhost:4000`
+  - Confirm `CORS_ORIGIN` is `http://localhost:8080`
+- **Blank page or build errors**
+  - Clear browser cache
+  - Rebuild frontend with `npm run build`
 
-3. **Push and create pull request**
+### Database issues
 
-   ```bash
-   git push origin feature/my-feature
-   ```
+- **Database does not exist**
+  - Create it with `createdb approval_central`
+- **`pgcrypto` extension missing**
+  - Enable it manually with:
 
-4. **Code review and merge**
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+```
 
 ---
 
-## 📚 API Documentation
+## API Documentation
+
+### Setup
+
+- `GET /api/setup/status` - Check whether setup is complete
+- `POST /api/setup` - Create the first administrator account
 
 ### Authentication
 
-All API endpoints (except `/health`) require Bearer token:
-
-```bash
-curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-     http://localhost:4000/api/auth/me
-```
-
-### Key Endpoints
-
-**Auth**
-
-- `POST /api/setup` - Initial admin setup
 - `POST /api/auth/login` - Login
 - `GET /api/auth/me` - Current user profile
 - `PATCH /api/auth/me/password` - Change password
 
-**Approval Requests**
-
-- `GET /api/approval-requests` - List requests
-- `POST /api/approval-requests` - Create request
-- `GET /api/approval-requests/:id` - Get request details
-- `POST /api/approval-requests/:id/actions` - Approve/reject
-
-**Admin**
+### Admin
 
 - `GET /api/users` - List users
-- `POST /api/users` - Create user
-- `GET /api/approval-types` - List request types
-- `POST /api/approval-types` - Create type
+- `POST /api/users` - Create a user
+- `GET /api/approval-types` - List approval types
+- `POST /api/approval-types` - Create approval type
 
 ---
 
-## 📞 Support & Contributing
+## Support & Contributing
 
-### Reporting Issues
+### Reporting issues
 
-1. Check existing issues in Git
-2. Include error message and steps to reproduce
-3. Specify your environment (OS, Node version, etc.)
+1. Search existing issues first
+2. Include reproduction steps
+3. Provide environment details (OS, Node version, database, ports)
 
 ### Contributing
 
-1. Follow the code style (ESLint)
-2. Write TypeScript with proper types
+1. Create a feature branch
+2. Keep code typed and linted
 3. Update documentation
-4. Test changes locally
-5. Submit a PR with clear description
+4. Test locally
+5. Open a PR with a clear description
 
 ---
 
-## 📄 License
+## License
 
 [Your License Here]
 
 ---
 
-## 🔗 Additional Resources
-
-- [SECURITY_SETUP.md](./SECURITY_SETUP.md) - Security configuration and environment setup
-- [backend/README.md](./backend/README.md) - Backend-specific documentation
-- [frontend/README.md](./frontend/README.md) - Frontend-specific documentation
-
----
-
-## ✅ Quick Start Checklist
+## Quick Start Checklist
 
 - [ ] Clone repository
 - [ ] Install Node.js 20+
 - [ ] Install PostgreSQL
-- [ ] Create `.env` files (copy from `.env.example`)
-- [ ] Install dependencies (`npm install` in both directories)
-- [ ] Create database and run schema
-- [ ] Start backend (`npm run dev` in backend/)
-- [ ] Start frontend (`npm run dev` in frontend/)
-- [ ] Open http://localhost:5173
-- [ ] Login or create initial admin user
+- [ ] Create `backend/.env` and `frontend/.env`
+- [ ] Install dependencies in `backend` and `frontend`
+- [ ] Apply database schema with `npm run db:schema`
+- [ ] Start backend with `npm run dev`
+- [ ] Start frontend with `npm run dev`
+- [ ] Open the app in the browser
+- [ ] Complete initial admin setup at `/setup`
 
 ---
 
-**Last Updated**: March 26, 2026
+**Last Updated**: April 18, 2026
 **Version**: 1.0.0

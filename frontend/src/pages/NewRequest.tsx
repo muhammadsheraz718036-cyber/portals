@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Send, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,22 +22,15 @@ import {
 } from "@/hooks/services";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
-import { FormFieldInput } from "@/components/FormFieldInput";
 import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { FileUpload } from "@/components/FileUpload";
-import type {
-  ApprovalFormField,
-  ApprovalTypeRow,
-  ChainRow,
-  ChainStep,
-} from "@/lib/constants";
-import type { ApprovalTypeAttachment } from "@/services/types";
+import type { ApprovalFormField } from "@/lib/constants";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
-import {
-  formatExistingActionLabel,
-  getScopeLabel,
-} from "@/lib/workflowLabels";
+
+function getGroupRenderOrder(fields: ApprovalFormField[]) {
+  return Array.from(new Set(fields.map((field) => field.group || "General")));
+}
 
 export default function NewRequest() {
   const navigate = useNavigate();
@@ -95,8 +88,11 @@ export default function NewRequest() {
   const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
   // All fields are now repeatable (line items)
-  const regularFields: ApprovalFormField[] = [];
   const repeatableFields = approvalType?.fields ?? [];
+  const repeatableGroupOrder = useMemo(
+    () => getGroupRenderOrder(repeatableFields),
+    [repeatableFields],
+  );
 
   const companyName = settings?.company_name || "COMPANY NAME";
 
@@ -372,7 +368,7 @@ export default function NewRequest() {
             )}
 
             {/* Post-Comments (Closing Remarks) */}
-            {(regularFields.length > 0 || repeatableFields.length > 0) && (
+            {repeatableFields.length > 0 && (
               <Card className="border">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">Closing Remarks</CardTitle>
@@ -492,19 +488,7 @@ export default function NewRequest() {
 
                         {repeatableFields.length > 0 && (
                           <div className="space-y-6 my-4">
-                            {Array.from(
-                              new Set(
-                                repeatableFields.map(
-                                  (f) => f.group || "General",
-                                ),
-                              ),
-                            )
-                              .sort((a, b) => {
-                                if (a === "General") return -1;
-                                if (b === "General") return 1;
-                                return a.localeCompare(b);
-                              })
-                              .map((group) => {
+                            {repeatableGroupOrder.map((group) => {
                                 const groupFields = repeatableFields.filter(
                                   (f) => (f.group || "General") === group,
                                 );

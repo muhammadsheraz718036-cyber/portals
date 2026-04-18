@@ -24,6 +24,11 @@ export const allPermissions = [
     description: "Can approve or reject requests in their queue",
   },
   {
+    id: "delete_initiated_requests",
+    label: "Delete Initiated Requests",
+    description: "Can delete requests they initiated while they are still active",
+  },
+  {
     id: "view_department_requests",
     label: "View Department Requests",
     description: "Can view all requests from their department",

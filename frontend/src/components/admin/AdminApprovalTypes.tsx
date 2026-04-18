@@ -6,6 +6,8 @@ import {
   GripVertical,
   Copy,
   Paperclip,
+  Check,
+  X,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,12 +39,8 @@ import {
   useCreateApprovalType,
   useUpdateApprovalType,
   useDeleteApprovalType,
-  useApprovalTypeAttachments,
-  useCreateApprovalTypeAttachment,
-  useDeleteApprovalTypeAttachment,
   useDepartments,
 } from "@/hooks/services";
-import { ApprovalTypeRow } from "@/lib/constants";
 import { toast } from "sonner";
 
 type Field = {
@@ -96,6 +94,8 @@ export function AdminApprovalTypes() {
   const [groups, setGroups] = useState<string[]>(["General"]); // Default group
   const [departmentId, setDepartmentId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
+  const [editingGroupName, setEditingGroupName] = useState<string | null>(null);
+  const [editingGroupValue, setEditingGroupValue] = useState("");
   const [preSalutation, setPreSalutation] = useState("");
   const [postSalutation, setPostSalutation] = useState("");
 
@@ -116,6 +116,8 @@ export function AdminApprovalTypes() {
     setAttachmentFields([]);
     setGroups(["General"]);
     setNewGroupName("");
+    setEditingGroupName(null);
+    setEditingGroupValue("");
     setPreSalutation("");
     setPostSalutation("");
     setDepartmentId(null);
@@ -138,6 +140,8 @@ export function AdminApprovalTypes() {
     );
     setGroups(uniqueGroups.length > 0 ? uniqueGroups : ["General"]);
     setNewGroupName("");
+    setEditingGroupName(null);
+    setEditingGroupValue("");
     setActiveTab("fields");
     setDialogOpen(true);
   };
@@ -185,6 +189,47 @@ export function AdminApprovalTypes() {
       return;
     }
     setGroups(groups.filter((g) => g !== groupName));
+  };
+
+  const startEditGroup = (groupName: string) => {
+    setEditingGroupName(groupName);
+    setEditingGroupValue(groupName);
+  };
+
+  const cancelEditGroup = () => {
+    setEditingGroupName(null);
+    setEditingGroupValue("");
+  };
+
+  const saveEditedGroup = () => {
+    if (!editingGroupName) return;
+
+    const nextName = editingGroupValue.trim();
+    if (!nextName) {
+      toast.error("Group name cannot be empty");
+      return;
+    }
+    if (nextName === editingGroupName) {
+      cancelEditGroup();
+      return;
+    }
+    if (groups.includes(nextName)) {
+      toast.error("Group already exists");
+      return;
+    }
+
+    setGroups(
+      groups.map((group) => (group === editingGroupName ? nextName : group)),
+    );
+    setFields(
+      fields.map((field) =>
+        (field.group || "General") === editingGroupName
+          ? { ...field, group: nextName }
+          : field,
+      ),
+    );
+    toast.success(`Group renamed to "${nextName}"`);
+    cancelEditGroup();
   };
 
   const handleDragStartField = (idx: number) => {
@@ -334,6 +379,84 @@ export function AdminApprovalTypes() {
     }
   };
 
+  const renderGroupChip = (group: string) => {
+    if (editingGroupName === group) {
+      return (
+        <div
+          key={group}
+          className="flex items-center gap-2 rounded-md border bg-background px-2 py-1"
+        >
+          <Input
+            value={editingGroupValue}
+            onChange={(e) => setEditingGroupValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveEditedGroup();
+              if (e.key === "Escape") cancelEditGroup();
+            }}
+            className="h-7 min-w-[150px] text-xs"
+            autoFocus
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={saveEditedGroup}
+            className="h-7 w-7 p-0"
+            title="Save group name"
+          >
+            <Check className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={cancelEditGroup}
+            className="h-7 w-7 p-0"
+            title="Cancel editing"
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        key={group}
+        className="flex items-center gap-2 rounded-md border bg-background px-2 py-1"
+      >
+        <Badge
+          variant={group === "General" ? "default" : "outline"}
+          className="px-2 py-1"
+        >
+          {group}
+        </Badge>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => startEditGroup(group)}
+          className="h-7 w-7 p-0"
+          title="Rename group"
+        >
+          <Edit className="h-3.5 w-3.5" />
+        </Button>
+        {group !== "General" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => removeGroup(group)}
+            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+            title="Remove group"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -478,26 +601,7 @@ export function AdminApprovalTypes() {
                         Available groups:
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {groups.map((group) => (
-                          <Badge
-                            key={group}
-                            variant={
-                              group === "General" ? "default" : "outline"
-                            }
-                            className="flex items-center gap-1 px-2 py-1"
-                          >
-                            {group}
-                            {group !== "General" && (
-                              <button
-                                onClick={() => removeGroup(group)}
-                                className="ml-1 text-xs hover:text-destructive"
-                                title="Remove group"
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </Badge>
-                        ))}
+                        {groups.map((group) => renderGroupChip(group))}
                       </div>
                     </div>
                   </div>
@@ -527,7 +631,7 @@ export function AdminApprovalTypes() {
                           <h4 className="text-xs font-semibold text-muted-foreground uppercase">
                             {group}
                           </h4>
-                          {groupFields.map((field, groupIdx) => {
+                          {groupFields.map((field) => {
                             const actualIndex = fields.indexOf(field);
                             return (
                               <div

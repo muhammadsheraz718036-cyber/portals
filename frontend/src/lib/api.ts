@@ -26,7 +26,11 @@ export interface Profile {
   full_name: string;
   email: string;
   department_id: string | null;
+  department_ids: string[];
+  department_names: string[];
   role_id: string | null;
+  role_ids: string[];
+  role_names: string[];
   role_name: string | null;
   department_name: string | null;
   is_admin: boolean;
@@ -266,7 +270,9 @@ export const api = {
       password: string;
       full_name: string;
       department_id?: string | null;
+      department_ids?: string[];
       role_id?: string | null;
+      role_ids?: string[];
       is_admin?: boolean;
     }) =>
       request<{ id: string; email: string; profile: Profile }>(
@@ -281,7 +287,9 @@ export const api = {
       body: {
         full_name?: string;
         department_id?: string | null;
+        department_ids?: string[];
         role_id?: string | null;
+        role_ids?: string[];
         is_admin?: boolean;
         is_active?: boolean;
         unlock_account?: boolean;
@@ -346,6 +354,10 @@ export const api = {
       request("/api/approval-requests/" + id, {
         method: "PATCH",
         body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      request<{ success: boolean }>("/api/approval-requests/" + id, {
+        method: "DELETE",
       }),
     resolveNumber: (requestNumber: string) =>
       request<{ id: string }>(

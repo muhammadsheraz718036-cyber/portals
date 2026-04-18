@@ -109,8 +109,9 @@
   #root table th {
     /* Allow wrapping between words, but avoid splitting words in the middle */
     white-space: normal;
-    word-break: keep-all;
+    word-break: normal;
     overflow-wrap: normal;
+    hyphens: manual;
   }
 }
 
@@ -139,9 +140,15 @@
     table-layout: auto !important;
   }
 
-  #print-letter table td,
-  #print-letter table th {
+  #print-letter table td {
     word-break: break-word !important;
+  }
+
+  #print-letter table th {
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    hyphens: manual !important;
   }
 
   #print-letter .prose {
