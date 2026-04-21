@@ -27,6 +27,7 @@ import { RichTextEditor } from "@/components/RichTextEditor";
 import { FileUpload } from "@/components/FileUpload";
 import type { ApprovalFormField } from "@/lib/constants";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
+import { formatExistingActionLabel, getScopeLabel } from "@/lib/workflowLabels";
 
 function getGroupRenderOrder(fields: ApprovalFormField[]) {
   return Array.from(new Set(fields.map((field) => field.group || "General")));
