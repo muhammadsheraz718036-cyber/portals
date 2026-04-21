@@ -697,7 +697,7 @@ export default function RequestDetail() {
         </span>
       </div>
       <div className="relative z-10 flex-1 flex flex-col">
-        <div className="text-center border-b-2 border-foreground pb-3">
+        <div className="text-center border-b-2 border-foreground pb-2">
           {settings?.logo_url && (
             <img
               src={settings.logo_url}
@@ -716,7 +716,7 @@ export default function RequestDetail() {
           </h2>
           <p>{request?.approval_types?.name ?? "—"}</p>
         </div>
-        <div className="flex justify-between mt-4" style={{ fontSize: "14px" }}>
+        <div className="flex justify-between mt-2" style={{ fontSize: "14px" }}>
           <div>
             <p>
               <strong>Request ID:</strong> {displayId}
@@ -768,7 +768,7 @@ export default function RequestDetail() {
             </div>
           </div>
         ) : (
-          <div className="mt-6 space-y-3">
+          <div className="my-4">
             {request?.status === "changes_requested" ? (
               <div className="relative">
                 <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
@@ -795,7 +795,7 @@ export default function RequestDetail() {
                     />
                   )}
                   {repeatableFields.length > 0 && (
-                    <div className="space-y-6 my-4">
+                    <div>
                       {repeatableGroupOrder.map((group) => {
                           const groupFields = repeatableFields.filter(
                             (f) => (f.group || "General") === group,
@@ -809,11 +809,11 @@ export default function RequestDetail() {
 
                           return (
                             <div key={group} className="p-3">
-                              <h3 className="text-sm font-semibold mb-2">
+                              <h3 className="text-xs font-semibold mb-2">
                                 {group}
                               </h3>
                               {groupItems.length === 0 ? (
-                                <p className="text-sm text-muted-foreground py-2">
+                                <p className="text-xs text-muted-foreground py-2">
                                   No entries for this group.
                                 </p>
                               ) : (
@@ -826,7 +826,7 @@ export default function RequestDetail() {
                                       {groupFields.map((field) => (
                                         <th
                                           key={`${group}-${field.name}-header`}
-                                          className="border border-foreground p-2 bg-muted font-semibold text-center"
+                                          className="border border-foreground bg-muted font-semibold text-center"
                                         >
                                           {field.label || field.name}
                                         </th>
@@ -859,7 +859,7 @@ export default function RequestDetail() {
                       style={{
                         fontSize: "14px",
                         fontFamily: "Arial, sans-serif",
-                        marginTop: "1rem",
+                        marginTop: "0.625rem",
                       }}
                       dangerouslySetInnerHTML={{
                         __html: safePostComments,
@@ -875,6 +875,7 @@ export default function RequestDetail() {
                     style={{
                       fontSize: "14px",
                       fontFamily: "Arial, sans-serif",
+                      marginBottom: "0.625rem",
                     }}
                     dangerouslySetInnerHTML={{
                       __html: safePreComments,
@@ -882,7 +883,7 @@ export default function RequestDetail() {
                   />
                 )}
                 {repeatableFields.length > 0 && (
-                  <div className="space-y-6 my-4">
+                  <div className="space-y-4">
                     {repeatableGroupOrder.map((group) => {
                         const groupFields = repeatableFields.filter(
                           (f) => (f.group || "General") === group,
@@ -895,12 +896,12 @@ export default function RequestDetail() {
                         if (groupFields.length === 0) return null;
 
                         return (
-                          <div key={group} className="p-3">
-                            <h3 className="text-sm font-semibold mb-2">
+                          <div key={group}>
+                            <h3 className="text-xs font-semibold">
                               {group}
                             </h3>
                             {groupItems.length === 0 ? (
-                              <p className="text-sm text-muted-foreground py-2">
+                              <p className="text-xs text-muted-foreground py-2">
                                 No entries for this group.
                               </p>
                             ) : (
@@ -913,7 +914,7 @@ export default function RequestDetail() {
                                     {groupFields.map((field) => (
                                       <th
                                         key={`${group}-${field.name}-header`}
-                                        className="border border-foreground p-2 bg-muted font-semibold text-center"
+                                        className="border text-xs border-foreground bg-muted font-semibold text-center"
                                       >
                                         {field.label || field.name}
                                       </th>

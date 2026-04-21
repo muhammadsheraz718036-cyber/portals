@@ -455,7 +455,7 @@ export default function NewRequest() {
                       </div>
 
                       <div
-                        className="flex justify-between mt-4"
+                        className="flex justify-between mt-3"
                         style={{ fontSize: "14px" }}
                       >
                         <div>
@@ -474,7 +474,7 @@ export default function NewRequest() {
                         </div>
                       </div>
 
-                      <div className="mt-6 space-y-3">
+                      <div>
                         {preComments ? (
                           <div
                             style={{
@@ -488,7 +488,7 @@ export default function NewRequest() {
                         ) : null}
 
                         {repeatableFields.length > 0 && (
-                          <div className="space-y-6 my-4">
+                          <div className="space-y-4">
                             {repeatableGroupOrder.map((group) => {
                                 const groupFields = repeatableFields.filter(
                                   (f) => (f.group || "General") === group,
@@ -501,7 +501,7 @@ export default function NewRequest() {
                                 if (groupFields.length === 0) return null;
 
                                 return (
-                                  <div key={group} className="p-3">
+                                  <div key={group} className="pb-3">
                                     <h3 className="text-sm font-semibold mb-2">
                                       {group}
                                     </h3>
@@ -519,7 +519,7 @@ export default function NewRequest() {
                                             {groupFields.map((field) => (
                                               <th
                                                 key={`${group}-${field.name}-header`}
-                                                className="border border-foreground p-2 bg-muted font-semibold text-center"
+                                                className="border border-foreground bg-muted font-semibold text-center"
                                               >
                                                 {field.label || field.name}
                                               </th>
@@ -569,7 +569,7 @@ export default function NewRequest() {
                             style={{
                               fontSize: "14px",
                               fontFamily: "Arial, sans-serif",
-                              marginTop: "1rem",
+                              marginTop: "0.625rem",
                             }}
                             dangerouslySetInnerHTML={{
                               __html: safePostComments,
