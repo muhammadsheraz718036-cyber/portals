@@ -480,6 +480,8 @@ export default function NewRequest() {
                             style={{
                               fontSize: "14px",
                               fontFamily: "Arial, sans-serif",
+                              marginBottom: "0.625rem",
+                              marginTop: "0.625rem",
                             }}
                             dangerouslySetInnerHTML={{
                               __html: safePreComments,
@@ -490,77 +492,71 @@ export default function NewRequest() {
                         {repeatableFields.length > 0 && (
                           <div className="space-y-4">
                             {repeatableGroupOrder.map((group) => {
-                                const groupFields = repeatableFields.filter(
-                                  (f) => (f.group || "General") === group,
-                                );
-                                const groupItems = items.filter(
-                                  (item) =>
-                                    String(item.__group || "General") === group,
-                                );
+                              const groupFields = repeatableFields.filter(
+                                (f) => (f.group || "General") === group,
+                              );
+                              const groupItems = items.filter(
+                                (item) =>
+                                  String(item.__group || "General") === group,
+                              );
 
-                                if (groupFields.length === 0) return null;
+                              if (groupFields.length === 0) return null;
 
-                                return (
-                                  <div key={group} className="pb-3">
-                                    <h3 className="text-sm font-semibold mb-2">
-                                      {group}
-                                    </h3>
-                                    {groupItems.length === 0 ? (
-                                      <p className="text-sm text-muted-foreground py-2">
-                                        No entries for this group.
-                                      </p>
-                                    ) : (
-                                      <table
-                                        className="w-full border-collapse"
-                                        style={{ fontSize: "12px" }}
-                                      >
-                                        <thead>
-                                          <tr>
-                                            {groupFields.map((field) => (
-                                              <th
-                                                key={`${group}-${field.name}-header`}
-                                                className="border border-foreground bg-muted font-semibold text-center"
-                                              >
-                                                {field.label || field.name}
-                                              </th>
-                                            ))}
+                              return (
+                                <div key={group} className="pb-3">
+                                  <h3 className="text-sm font-semibold mb-2">
+                                    {group}
+                                  </h3>
+                                  {groupItems.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground py-2">
+                                      No entries for this group.
+                                    </p>
+                                  ) : (
+                                    <table
+                                      className="w-full border-collapse"
+                                      style={{ fontSize: "12px" }}
+                                    >
+                                      <thead>
+                                        <tr>
+                                          {groupFields.map((field) => (
+                                            <th
+                                              key={`${group}-${field.name}-header`}
+                                              className="border border-foreground bg-muted font-semibold text-center"
+                                            >
+                                              {field.label || field.name}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {groupItems.map((item, idx: number) => (
+                                          <tr key={idx}>
+                                            {groupFields.map((field) => {
+                                              const val = item[field.name];
+                                              let displayValue = val ?? "—";
+
+                                              if (field.type === "checkbox") {
+                                                displayValue =
+                                                  val === "true" ? "Yes" : "—";
+                                              }
+
+                                              return (
+                                                <td
+                                                  key={`${idx}-${field.name}`}
+                                                  className="border border-foreground p-2 text-center"
+                                                >
+                                                  {displayValue}
+                                                </td>
+                                              );
+                                            })}
                                           </tr>
-                                        </thead>
-                                        <tbody>
-                                          {groupItems.map(
-                                            (item, idx: number) => (
-                                              <tr key={idx}>
-                                                {groupFields.map((field) => {
-                                                  const val = item[field.name];
-                                                  let displayValue = val ?? "—";
-
-                                                  if (
-                                                    field.type === "checkbox"
-                                                  ) {
-                                                    displayValue =
-                                                      val === "true"
-                                                        ? "Yes"
-                                                        : "—";
-                                                  }
-
-                                                  return (
-                                                    <td
-                                                      key={`${idx}-${field.name}`}
-                                                      className="border border-foreground p-2 text-center"
-                                                    >
-                                                      {displayValue}
-                                                    </td>
-                                                  );
-                                                })}
-                                              </tr>
-                                            ),
-                                          )}
-                                        </tbody>
-                                      </table>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
 
