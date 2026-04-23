@@ -26,8 +26,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { useCompany } from "@/contexts/company-hooks";
@@ -37,18 +43,23 @@ import {
   useProfile,
   useApproveRequest,
   useRejectRequest,
-  useRequestChanges,
+  useAssignWorkRequest,
+  useUpdateWorkStatusRequest,
   useUpdateApprovalRequest,
   useDeleteApprovalRequest,
   useResolveRequestNumber,
   useRequestAttachments,
   useDownloadAttachment,
   useDeleteRequestAttachment,
+  useWorkAssignees,
 } from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
-import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
-import type { RequestAttachment } from "@/services/types";
+import {
+  buildSingleEntryItems,
+  type LineItem,
+} from "@/components/LineItemsManager";
+import type { RequestAttachment, WorkAssigneeOption } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { formatExistingActionLabel } from "@/lib/workflowLabels";
 
@@ -58,6 +69,7 @@ const actionIcons: Record<string, React.ReactNode> = {
   Pending: <Clock className="h-5 w-5 text-warning" />,
   Waiting: <AlertCircle className="h-5 w-5 text-muted-foreground" />,
   Skipped: <SkipForward className="h-5 w-5 text-muted-foreground" />,
+  Edited: <Edit2 className="h-5 w-5 text-primary" />,
   ChangesRequested: <AlertCircle className="h-5 w-5 text-warning" />,
   Resubmitted: <RefreshCw className="h-5 w-5 text-primary" />,
 };
@@ -72,6 +84,8 @@ function iconKeyForAction(status: string): keyof typeof actionIcons {
       return "Pending";
     case "skipped":
       return "Skipped";
+    case "edited":
+      return "Edited";
     case "changes_requested":
       return "ChangesRequested";
     case "resubmitted":
@@ -87,6 +101,8 @@ const getActionLabel = (action: ActionRow) => {
       return "Approved";
     case "rejected":
       return "Rejected";
+    case "edited":
+      return "Edited";
     case "changes_requested":
       return "Changes Requested";
     case "resubmitted":
@@ -107,6 +123,8 @@ const timelineStatusStyles: Record<string, string> = {
     "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300",
   rejected:
     "border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300",
+  edited:
+    "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-900/40 dark:bg-cyan-950/30 dark:text-cyan-300",
   changes_requested:
     "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300",
   pending:
@@ -158,6 +176,8 @@ function getTimelineActionSummary(action: ActionRow): string {
       return actor ? "Approved by" : "Approved";
     case "rejected":
       return actor ? "Rejected by" : "Rejected";
+    case "edited":
+      return actor ? "Edited by" : "Edited";
     case "changes_requested":
       return actor ? "Changes requested by" : "Changes requested";
     case "resubmitted":
@@ -177,13 +197,28 @@ type RequestRow = {
   id: string;
   request_number: string;
   status: string;
+  work_status: "pending" | "assigned" | "in_progress" | "done" | "not_done";
   current_step: number;
   total_steps: number;
   created_at: string;
   form_data: Record<string, unknown>;
   initiator_id: string;
   department_id: string | null;
+  work_assignee_id: string | null;
+  work_assigned_at: string | null;
+  work_completed_by: string | null;
+  work_completed_at: string | null;
+  final_authority_user_id: string | null;
   initiator?: { full_name: string };
+  work_assignee?: {
+    id: string | null;
+    full_name: string | null;
+    email?: string | null;
+  } | null;
+  work_completed_by_profile?: {
+    id: string | null;
+    full_name: string | null;
+  } | null;
   approval_types: {
     name: string;
     description: string | null;
@@ -220,8 +255,28 @@ function normalizeItemsForEdit(raw: unknown): LineItem[] {
   });
 }
 
+function normalizeItemsForGroups(
+  raw: unknown,
+  fields: ApprovalFormField[],
+): LineItem[] {
+  return buildSingleEntryItems(fields, normalizeItemsForEdit(raw));
+}
+
 function getGroupRenderOrder(fields: ApprovalFormField[]) {
   return Array.from(new Set(fields.map((field) => field.group || "General")));
+}
+
+function formatFieldDisplayValue(field: ApprovalFormField | null, rawValue: unknown): string {
+  if (field?.type === "checkbox") {
+    return rawValue === "true" ? "Yes" : "No";
+  }
+
+  if (rawValue === undefined || rawValue === null) {
+    return "-";
+  }
+
+  const value = String(rawValue).trim();
+  return value.length > 0 ? value : "-";
 }
 
 export default function RequestDetail() {
@@ -229,20 +284,25 @@ export default function RequestDetail() {
   const navigate = useNavigate();
   const { profile, user } = useAuth();
   const [actioning, setActioning] = useState(false);
-  const [showRequestChangesDialog, setShowRequestChangesDialog] =
-    useState(false);
-  const [changesComment, setChangesComment] = useState("");
   const [showUpdateForm, setShowUpdateForm] = useState(false);
+  const [updateComment, setUpdateComment] = useState("");
+  const [workCompletionComment, setWorkCompletionComment] = useState("");
+  const [selectedWorkStatus, setSelectedWorkStatus] = useState<
+    "assigned" | "in_progress" | "done" | "not_done"
+  >("assigned");
+  const [selectedWorkAssigneeId, setSelectedWorkAssigneeId] = useState("");
   const [showLetterPreview, setShowLetterPreview] = useState(false);
   const [updatingFormData, setUpdatingFormData] = useState<
     Record<string, unknown>
   >({});
+  const [printGeneratedAt, setPrintGeneratedAt] = useState<Date | null>(null);
   const printLetterRef = useRef<HTMLDivElement>(null);
 
   const resolveMutation = useResolveRequestNumber();
   const approveMutation = useApproveRequest();
   const rejectMutation = useRejectRequest();
-  const requestChangesMutation = useRequestChanges();
+  const assignWorkMutation = useAssignWorkRequest();
+  const updateWorkStatusMutation = useUpdateWorkStatusRequest();
   const updateRequestMutation = useUpdateApprovalRequest();
   const deleteRequestMutation = useDeleteApprovalRequest();
 
@@ -256,6 +316,9 @@ export default function RequestDetail() {
   const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
+  const { data: workAssignees = [] } = useWorkAssignees(
+    request?.department_id ?? undefined,
+  );
   const actions = useMemo(
     () => (requestData?.actions ?? []) as ActionRow[],
     [requestData?.actions],
@@ -288,6 +351,27 @@ export default function RequestDetail() {
     }
   }, [request, initiatorProfile]);
 
+  useEffect(() => {
+    if (!request) {
+      setSelectedWorkAssigneeId("");
+      return;
+    }
+
+    setSelectedWorkAssigneeId(
+      request.work_assignee_id ??
+        workAssignees[0]?.id ??
+        "",
+    );
+  }, [request?.id, request?.work_assignee_id, workAssignees]);
+
+  useEffect(() => {
+    if (request?.work_status && request.work_status !== "pending") {
+      setSelectedWorkStatus(request.work_status);
+    } else {
+      setSelectedWorkStatus("assigned");
+    }
+  }, [request?.id, request?.work_status]);
+
   const { settings } = useCompany();
   const companyName = settings?.company_name || "ApprovalHub";
   const pageLayout = request?.approval_types?.page_layout || "portrait";
@@ -296,6 +380,8 @@ export default function RequestDetail() {
   const pageWidth = isLandscape ? "11in" : "8.5in";
   const pageHeight = isLandscape ? "8.5in" : "11in";
   const pageSize = isLandscape ? "11in 8.5in" : "8.5in 11in";
+  const watermarkEmail = user?.email?.trim() || "unknown@approvalhub";
+  const printSignatureTimestamp = (printGeneratedAt ?? new Date()).toLocaleString();
 
   const timelineSteps = useMemo(() => {
     const displayGroups = new Map<number, ActionRow[]>();
@@ -351,6 +437,12 @@ export default function RequestDetail() {
     documentTitle: request?.request_number
       ? `Request_${request.request_number}`
       : "Request_Letter",
+    onBeforePrint: async () => {
+      setPrintGeneratedAt(new Date());
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    },
     pageStyle: `
       @page {
         size: ${isLandscape ? "landscape" : "portrait"};
@@ -443,19 +535,47 @@ export default function RequestDetail() {
     }
   };
 
-  const handleRequestChanges = async () => {
+  const canAssignApprovedWork =
+    !!request &&
+    request.status === "approved" &&
+    !!user &&
+    (profile?.is_admin || request.final_authority_user_id === user.id);
+
+  const canCompleteApprovedWork =
+    !!request &&
+    request.status === "approved" &&
+    !!user &&
+    (profile?.is_admin || request.work_assignee_id === user.id);
+
+  const handleAssignWork = async () => {
+    if (!request || !selectedWorkAssigneeId) return;
+    setActioning(true);
+    try {
+      await assignWorkMutation.mutateAsync({
+        id: request.id,
+        assigneeId: selectedWorkAssigneeId,
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to assign approved work");
+    } finally {
+      setActioning(false);
+    }
+  };
+
+  const handleUpdateWorkStatus = async () => {
     if (!request) return;
     setActioning(true);
     try {
-      await requestChangesMutation.mutateAsync({
+      await updateWorkStatusMutation.mutateAsync({
         id: request.id,
-        data: { comment: changesComment },
+        data: {
+          status: selectedWorkStatus,
+          comment: workCompletionComment.trim() || undefined,
+        },
       });
-      setShowRequestChangesDialog(false);
-      setChangesComment("");
-      toast.success("Changes requested. The request has been sent back to the initiator for updates.");
+      setWorkCompletionComment("");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to request changes");
+      toast.error(e instanceof Error ? e.message : "Failed to update work status");
     } finally {
       setActioning(false);
     }
@@ -465,23 +585,30 @@ export default function RequestDetail() {
     if (!request) return;
     setActioning(true);
     try {
-      // Check if user is the request initiator or an admin
-      const isInitiator = user?.id === request.initiator_id;
       const isAdmin = profile?.is_admin || false;
+      const canEditAsApprover = canApprove();
 
-      if (!isInitiator && !isAdmin) {
+      if (!isAdmin && !canEditAsApprover) {
         throw new Error(
-          "Only the request initiator or an admin can update this request",
+          "Only an admin or the assigned approver can update this request",
         );
       }
 
       await updateRequestMutation.mutateAsync({
         id: request.id,
-        data: { form_data: updatingFormData },
+        data: {
+          form_data: updatingFormData,
+          comment: updateComment.trim() || undefined,
+        },
       });
       setShowUpdateForm(false);
       setUpdatingFormData({});
-      toast.success("Request updated and resubmitted successfully. It is now active for approval again.");
+      setUpdateComment("");
+      toast.success(
+        canEditAsApprover && !isAdmin
+          ? "Request updated. The edit has been recorded in the timeline."
+          : "Request updated successfully.",
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update request");
     } finally {
@@ -615,23 +742,17 @@ export default function RequestDetail() {
   const shouldShowButtons =
     request &&
     ["in_progress", "pending"].includes(request.status) &&
-    canApprove();
-  const shouldShowUpdateButton =
-    request &&
-    request.status === "changes_requested" &&
-    user &&
-    request.initiator_id === user.id;
-
-  // Initialize form data when entering update mode (line items live under form_data.items)
-  useEffect(() => {
-    if (showUpdateForm && request?.form_data) {
-      const fd = { ...(request.form_data as Record<string, unknown>) };
-      fd.items = normalizeItemsForEdit(fd.items);
-      setUpdatingFormData(fd);
-    } else if (!showUpdateForm) {
-      setUpdatingFormData({});
-    }
-  }, [showUpdateForm, request?.form_data]);
+    canApprove() &&
+    !showUpdateForm;
+  const canEditRequest =
+    !!request &&
+    !!user &&
+    request.status !== "approved" &&
+    request.status !== "rejected" &&
+    (
+      profile?.is_admin ||
+      canApprove()
+    );
 
   const fields: ApprovalFormField[] = Array.isArray(
     request?.approval_types?.fields,
@@ -645,6 +766,22 @@ export default function RequestDetail() {
     () => getGroupRenderOrder(repeatableFields),
     [repeatableFields],
   );
+  const editableItems = useMemo(
+    () => normalizeItemsForGroups(updatingFormData.items, repeatableFields),
+    [updatingFormData.items, repeatableFields],
+  );
+
+  // Initialize form data when entering update mode (line items live under form_data.items)
+  useEffect(() => {
+    if (showUpdateForm && request?.form_data) {
+      const fd = { ...(request.form_data as Record<string, unknown>) };
+      fd.items = normalizeItemsForGroups(fd.items, repeatableFields);
+      setUpdatingFormData(fd);
+    } else if (!showUpdateForm) {
+      setUpdatingFormData({});
+      setUpdateComment("");
+    }
+  }, [showUpdateForm, request?.form_data, repeatableFields]);
 
   const formData = (request?.form_data as Record<string, unknown>) ?? {};
   const items = Array.isArray(formData.items) ? formData.items : [];
@@ -666,9 +803,94 @@ export default function RequestDetail() {
   );
   const displayId = request?.request_number ?? "";
   const normalizedItems = useMemo(
-    () => normalizeItemsForEdit(items),
-    [items],
+    () => normalizeItemsForGroups(items, repeatableFields),
+    [items, repeatableFields],
   );
+
+  const setFormValue = (fieldName: string, value: unknown) => {
+    setUpdatingFormData((prev) => ({
+      ...prev,
+      [fieldName]: value,
+    }));
+  };
+
+  const renderEditableField = (
+    field: ApprovalFormField,
+    value: unknown,
+    onChange: (value: unknown) => void,
+    keyPrefix: string,
+  ) => {
+    const stringValue = value == null ? "" : String(value);
+
+    if (field.type === "textarea") {
+      return (
+        <Textarea
+          value={stringValue}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+        />
+      );
+    }
+
+    if (field.type === "select" && field.options) {
+      return (
+        <select
+          value={stringValue}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        >
+          <option value="">Select {field.label}</option>
+          {field.options.map((option) => (
+            <option key={`${keyPrefix}-${option}`} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
+    if (field.type === "checkbox") {
+      return (
+        <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+          <input
+            type="checkbox"
+            checked={stringValue === "true"}
+            onChange={(e) => onChange(e.target.checked ? "true" : "")}
+          />
+          <span>{field.label}</span>
+        </label>
+      );
+    }
+
+    if (field.type === "radio" && field.options) {
+      return (
+        <div className="flex flex-wrap gap-3 rounded-md border border-border px-3 py-2">
+          {field.options.map((option) => (
+            <label key={`${keyPrefix}-${option}`} className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name={`${keyPrefix}-${field.name}`}
+                value={option}
+                checked={stringValue === option}
+                onChange={(e) => onChange(e.target.value)}
+              />
+              <span>{option}</span>
+            </label>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <input
+        type={field.type === "email" || field.type === "number" || field.type === "date" ? field.type : "text"}
+        value={stringValue}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        placeholder={field.label}
+      />
+    );
+  };
   const letterContent = (
     <div
       className="relative w-full"
@@ -685,17 +907,6 @@ export default function RequestDetail() {
         overflow: "hidden",
       }}
     >
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] rotate-[-35deg]">
-        <span
-          className="font-bold tracking-widest whitespace-nowrap select-none"
-          style={{
-            fontFamily: "Arial, sans-serif",
-            fontSize: "6rem",
-          }}
-        >
-          {user?.email}
-        </span>
-      </div>
       <div className="relative z-10 flex-1 flex flex-col">
         <div className="text-center border-b-2 border-foreground pb-2">
           {settings?.logo_url && (
@@ -734,228 +945,104 @@ export default function RequestDetail() {
           </div>
         </div>
         {richContent ? (
-          <div className="relative">
-            {request?.status === "changes_requested" && (
-              <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
-                <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
-                  <p className="font-semibold text-foreground text-lg">
-                    Changes Requested
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-2">
-                    The request has been sent back for revisions. Please update
-                    the form data and resubmit.
-                  </p>
-                </div>
-              </div>
-            )}
-            <div
-              className={
-                request?.status === "changes_requested"
-                  ? "opacity-75 pointer-events-none"
-                  : ""
-              }
-            >
-              <div
-                className="my-3 prose max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
-                style={{
-                  fontFamily: "Arial, sans-serif",
-                  fontSize: "14px",
-                }}
-                dangerouslySetInnerHTML={{
-                  __html: safeRichContent,
-                }}
-              />
-            </div>
-          </div>
+          <div
+            className="my-3 prose max-w-none [&_table]:border-collapse [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-2 [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted [&_th]:font-semibold"
+            style={{
+              fontFamily: "Arial, sans-serif",
+              fontSize: "14px",
+            }}
+            dangerouslySetInnerHTML={{
+              __html: safeRichContent,
+            }}
+          />
         ) : (
           <div className="my-4">
-            {request?.status === "changes_requested" ? (
-              <div className="relative">
-                <div className="absolute inset-0 bg-muted/10 backdrop-blur-[0.5px] z-10 flex items-center justify-center">
-                  <div className="bg-background/95 border border-border rounded-lg p-6 shadow-lg text-center">
-                    <p className="font-semibold text-foreground text-lg">
-                      Changes Requested
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-2">
-                      The request has been sent back for revisions. Please
-                      update the form data and resubmit.
-                    </p>
-                  </div>
-                </div>
-                <div className="opacity-75 pointer-events-none">
-                  {preComments && (
-                    <div
-                      style={{
-                        fontSize: "14px",
-                        fontFamily: "Arial, sans-serif",
-                      }}
-                      dangerouslySetInnerHTML={{
-                        __html: safePreComments,
-                      }}
-                    />
-                  )}
-                  {repeatableFields.length > 0 && (
-                    <div>
-                      {repeatableGroupOrder.map((group) => {
-                          const groupFields = repeatableFields.filter(
-                            (f) => (f.group || "General") === group,
-                          );
-                          const groupItems = items.filter(
-                            (item: LineItem) =>
-                              String(item.__group || "General") === group,
-                          );
+            <>
+              {preComments && (
+                <div
+                  style={{
+                    fontSize: "14px",
+                    fontFamily: "Arial, sans-serif",
+                    marginBottom: "0.625rem",
+                  }}
+                  dangerouslySetInnerHTML={{
+                    __html: safePreComments,
+                  }}
+                />
+              )}
+              {repeatableFields.length > 0 && (
+                <div className="space-y-4">
+                  {repeatableGroupOrder.map((group) => {
+                      const groupFields = repeatableFields.filter(
+                        (f) => (f.group || "General") === group,
+                      );
+                      const groupItems = normalizedItems.filter(
+                        (item: LineItem) =>
+                          String(item.__group || "General") === group,
+                      );
 
-                          if (groupFields.length === 0) return null;
+                      if (groupFields.length === 0) return null;
 
-                          return (
-                            <div key={group} className="p-3">
-                              <h3 className="text-xs font-semibold mb-2">
-                                {group}
-                              </h3>
-                              {groupItems.length === 0 ? (
-                                <p className="text-xs text-muted-foreground py-2">
-                                  No entries for this group.
-                                </p>
-                              ) : (
-                                <table
-                                  className="w-full border-collapse"
-                                  style={{ fontSize: "12px" }}
-                                >
-                                  <thead>
-                                    <tr>
-                                      {groupFields.map((field) => (
-                                        <th
-                                          key={`${group}-${field.name}-header`}
-                                          className="border border-foreground bg-muted font-semibold text-center"
-                                        >
-                                          {field.label || field.name}
-                                        </th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {groupItems.map((item: LineItem, idx: number) => (
-                                      <tr key={idx}>
-                                        {groupFields.map((field) => (
-                                          <td
-                                            key={`${idx}-${field.name}`}
-                                            className="border border-foreground p-2 text-center"
-                                          >
-                                            {item[field.name] ?? "—"}
-                                          </td>
-                                        ))}
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </div>
-                          );
-                        })}
-                    </div>
-                  )}
-                  {postComments && (
-                    <div
-                      style={{
-                        fontSize: "14px",
-                        fontFamily: "Arial, sans-serif",
-                        marginTop: "0.625rem",
-                      }}
-                      dangerouslySetInnerHTML={{
-                        __html: safePostComments,
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-            ) : (
-              <>
-                {preComments && (
-                  <div
-                    style={{
-                      fontSize: "14px",
-                      fontFamily: "Arial, sans-serif",
-                      marginBottom: "0.625rem",
-                    }}
-                    dangerouslySetInnerHTML={{
-                      __html: safePreComments,
-                    }}
-                  />
-                )}
-                {repeatableFields.length > 0 && (
-                  <div className="space-y-4">
-                    {repeatableGroupOrder.map((group) => {
-                        const groupFields = repeatableFields.filter(
-                          (f) => (f.group || "General") === group,
-                        );
-                        const groupItems = items.filter(
-                          (item: LineItem) =>
-                            String(item.__group || "General") === group,
-                        );
-
-                        if (groupFields.length === 0) return null;
-
-                        return (
-                          <div key={group}>
-                            <h3 className="text-xs font-semibold">
-                              {group}
-                            </h3>
-                            {groupItems.length === 0 ? (
-                              <p className="text-xs text-muted-foreground py-2">
-                                No entries for this group.
-                              </p>
-                            ) : (
-                              <table
-                                className="w-full border-collapse"
-                                style={{ fontSize: "12px" }}
-                              >
-                                <thead>
-                                  <tr>
+                      return (
+                        <div key={group}>
+                          <h3 className="text-xs font-semibold">
+                            {group}
+                          </h3>
+                          {groupItems.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-2">
+                              No entries for this group.
+                            </p>
+                          ) : (
+                            <table
+                              className="w-full border-collapse"
+                              style={{ fontSize: "12px" }}
+                            >
+                              <thead>
+                                <tr>
+                                  {groupFields.map((field) => (
+                                    <th
+                                      key={`${group}-${field.name}-header`}
+                                      className="border text-xs border-foreground bg-muted font-semibold text-center"
+                                    >
+                                      {field.label || field.name}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {groupItems.map((item: LineItem, idx: number) => (
+                                  <tr key={idx}>
                                     {groupFields.map((field) => (
-                                      <th
-                                        key={`${group}-${field.name}-header`}
-                                        className="border text-xs border-foreground bg-muted font-semibold text-center"
+                                      <td
+                                        key={`${idx}-${field.name}`}
+                                        className="border border-foreground p-2 text-center"
                                       >
-                                        {field.label || field.name}
-                                      </th>
+                                        {item[field.name] ?? "—"}
+                                      </td>
                                     ))}
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {groupItems.map((item: LineItem, idx: number) => (
-                                    <tr key={idx}>
-                                      {groupFields.map((field) => (
-                                        <td
-                                          key={`${idx}-${field.name}`}
-                                          className="border border-foreground p-2 text-center"
-                                        >
-                                          {item[field.name] ?? "—"}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
-                        );
-                      })}
-                  </div>
-                )}
-                {postComments && (
-                  <div
-                    style={{
-                      fontSize: "14px",
-                      fontFamily: "Arial, sans-serif",
-                      marginTop: "1rem",
-                    }}
-                    dangerouslySetInnerHTML={{
-                      __html: safePostComments,
-                    }}
-                  />
-                )}
-              </>
-            )}
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+              {postComments && (
+                <div
+                  style={{
+                    fontSize: "14px",
+                    fontFamily: "Arial, sans-serif",
+                    marginTop: "1rem",
+                  }}
+                  dangerouslySetInnerHTML={{
+                    __html: safePostComments,
+                  }}
+                />
+              )}
+            </>
           </div>
         )}
         <div className="mt-12 flex justify-start">
@@ -973,6 +1060,18 @@ export default function RequestDetail() {
               {companyName ?? ""}
             </p>
           </div>
+        </div>
+      </div>
+        <div
+          className="mt-auto pt-4"
+          style={{
+            borderTop: "1px solid #cbd5e1",
+            fontSize: "11px",
+            color: "#64748b",
+            fontFamily: "Arial, sans-serif",
+          }}
+        >
+          Printed from {companyName} by {watermarkEmail} on {printSignatureTimestamp}
         </div>
       </div>
     </div>
@@ -1002,8 +1101,9 @@ export default function RequestDetail() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between no-print">
+    <div className="p-4 sm:p-6">
+      <div className="mx-auto w-full max-w-7xl space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3 no-print">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
@@ -1013,8 +1113,15 @@ export default function RequestDetail() {
             <ArrowLeft className="mr-1 h-4 w-4" /> Back
           </Button>
           <Separator orientation="vertical" className="h-6" />
-          <h1 className="text-xl font-bold text-foreground">{displayId}</h1>
-          <StatusBadge status={request.status} />
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-semibold tracking-tight text-foreground">{displayId}</h1>
+              <StatusBadge status={request.status} />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Review request details, timeline, and work completion.
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {canDeleteRequest() && (
@@ -1060,143 +1167,248 @@ export default function RequestDetail() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <div className="space-y-6">
-          <Card className="border no-print">
+          <Card className="no-print">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Request Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
                 <div>
-                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    Type
-                  </p>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Type</p>
                   <p className="font-medium">{request.approval_types?.name ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    Initiator
-                  </p>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Initiator</p>
                   <p className="font-medium">{initiatorName || "—"}</p>
                 </div>
                 <div>
-                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    Department
-                  </p>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Department</p>
                   <p className="font-medium">{initiatorDepartment ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    Date
-                  </p>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Date</p>
                   <p className="font-medium">
                     {new Date(request.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Work Assignee</p>
+                  <p className="font-medium">
+                    {request.work_assignee?.full_name || "Not assigned"}
+                  </p>
+                </div>
+                <div>
+                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Work Status</p>
+                  <p className="font-medium">
+                    {request.work_completed_at
+                      ? `Completed ${new Date(request.work_completed_at).toLocaleDateString()}`
+                      : request.status === "approved"
+                        ? String(request.work_status || "assigned")
+                            .replace(/_/g, " ")
+                            .replace(/\b\w/g, (char) => char.toUpperCase())
+                        : "Pending approval"}
                   </p>
                 </div>
               </div>
 
               {formEntries.length > 0 && (
-                <div className="rounded-xl border p-4">
-                  <p className="mb-3 text-sm font-semibold text-foreground">
-                    Captured Fields
-                  </p>
+                <div className="rounded-xl border bg-card p-4 shadow-sm">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                      General
+                    </span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    {formEntries.map(([key, value]) => (
-                      <div key={key}>
-                        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                          {key.replace(/_/g, " ")}
-                        </p>
-                        <p className="text-sm font-medium text-foreground">
-                          {String(value || "—")}
-                        </p>
-                      </div>
-                    ))}
+                    {formEntries.map(([key, value]) => {
+                      const pseudoField: ApprovalFormField = {
+                        name: key,
+                        label: key.replace(/_/g, " "),
+                        type: "text",
+                        required: false,
+                      };
+
+                      return (
+                        <div
+                          key={key}
+                          className="space-y-2 rounded-lg border bg-muted/10 p-3"
+                        >
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                            {pseudoField.label}
+                          </p>
+                          {showUpdateForm ? (
+                            renderEditableField(
+                              pseudoField,
+                              updatingFormData[key],
+                              (nextValue) => setFormValue(key, nextValue),
+                              `top-${key}`,
+                            )
+                          ) : (
+                            <p className="text-sm font-medium text-foreground">
+                              {formatFieldDisplayValue(null, value)}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
               {repeatableFields.length > 0 && (
-                <div className="rounded-xl border p-4">
-                  <p className="mb-4 text-sm font-semibold text-foreground">
-                    Submitted Entries
-                  </p>
+                <div className="space-y-5">
                   <div className="space-y-5">
                     {repeatableGroupOrder.map((group) => {
                       const groupFields = repeatableFields.filter(
                         (field) => (field.group || "General") === group,
                       );
-                      const groupItems = normalizedItems.filter(
+                      const groupItems = (showUpdateForm ? editableItems : normalizedItems).filter(
                         (item) => String(item.__group || "General") === group,
                       );
+                      const groupItem = groupItems[0];
 
                       if (groupFields.length === 0) {
                         return null;
                       }
 
                       return (
-                        <div key={group} className="space-y-3">
-                          <div>
-                            <h3 className="text-sm font-semibold text-foreground">
+                        <div
+                          key={group}
+                          className="rounded-xl border bg-card p-4 shadow-sm"
+                        >
+                          <div className="mb-4 flex items-center gap-3">
+                            <span className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
                               {group}
-                            </h3>
+                            </span>
+                            <div className="h-px flex-1 bg-border" />
                           </div>
 
-                          {groupItems.length === 0 ? (
+                          {!groupItem ? (
                             <div className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
-                              No entries submitted for this section.
+                              No values available for this section.
                             </div>
                           ) : (
-                            <div className="overflow-x-auto rounded-lg border">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="border-b bg-muted/30">
-                                    {groupFields.map((field) => (
-                                      <th
-                                        key={`${group}-${field.name}-submitted`}
-                                        className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                                      >
-                                        {field.label || field.name}
-                                      </th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y">
-                                  {groupItems.map((item, itemIndex) => (
-                                    <tr key={item.id || `${group}-${itemIndex}`}>
-                                      {groupFields.map((field) => {
-                                        const rawValue = item[field.name];
-                                        let displayValue: string;
-
-                                        if (field.type === "checkbox") {
-                                          displayValue =
-                                            rawValue === "true" ? "Yes" : "-";
-                                        } else if (
-                                          rawValue === undefined ||
-                                          rawValue === null ||
-                                          String(rawValue).trim() === ""
-                                        ) {
-                                          displayValue = "-";
-                                        } else {
-                                          displayValue = String(rawValue);
-                                        }
-
-                                        return (
-                                          <td
-                                            key={`${item.id}-${field.name}-submitted`}
-                                            className="px-4 py-3 align-top text-foreground"
-                                          >
-                                            {displayValue}
-                                          </td>
-                                        );
-                                      })}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              {groupFields.map((field) => (
+                                <div
+                                  key={`${group}-${field.name}-mapped`}
+                                  className="space-y-2 rounded-lg border bg-muted/10 p-3"
+                                >
+                                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                    {field.label || field.name}
+                                  </p>
+                                  {showUpdateForm ? (
+                                    renderEditableField(
+                                      field,
+                                      groupItem[field.name],
+                                      (nextValue) => {
+                                        setUpdatingFormData((prev) => ({
+                                          ...prev,
+                                          items: editableItems.map((item) =>
+                                            item.id === groupItem.id
+                                              ? { ...item, [field.name]: nextValue }
+                                              : item,
+                                          ),
+                                        }));
+                                      },
+                                      `${group}-${field.name}`,
+                                    )
+                                  ) : (
+                                    <p className="text-sm font-medium text-foreground">
+                                      {formatFieldDisplayValue(field, groupItem[field.name])}
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {showUpdateForm && (
+                <div className="space-y-6 rounded-xl border bg-card p-4 shadow-sm">
+                  <div className="mb-2 flex items-center gap-3">
+                    <span className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                      Edit Request
+                    </span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">
+                      Pre-Salutation (Optional)
+                    </label>
+                    <RichTextEditor
+                      key={`inline-pre-comments-${showUpdateForm ? "open" : "closed"}`}
+                      content={
+                        typeof updatingFormData.pre_comments === "string"
+                          ? updatingFormData.pre_comments
+                          : ""
+                      }
+                      onChange={(html) => setFormValue("pre_comments", html)}
+                      placeholder="Add a greeting before the request details..."
+                    />
+                  </div>
+
+                  {typeof updatingFormData.content === "string" && (
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">
+                        Letter Body
+                      </label>
+                      <RichTextEditor
+                        key={`inline-letter-body-${showUpdateForm ? "open" : "closed"}`}
+                        content={updatingFormData.content}
+                        onChange={(html) => setFormValue("content", html)}
+                        placeholder="Letter content…"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">
+                      Post-Comments (Optional)
+                    </label>
+                    <RichTextEditor
+                      key={`inline-post-comments-${showUpdateForm ? "open" : "closed"}`}
+                      content={
+                        typeof updatingFormData.post_comments === "string"
+                          ? updatingFormData.post_comments
+                          : ""
+                      }
+                      onChange={(html) => setFormValue("post_comments", html)}
+                      placeholder="Add any closing comments..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">
+                      Edit note (optional)
+                    </label>
+                    <Textarea
+                      placeholder="Explain what you changed. This will appear in the timeline."
+                      value={updateComment}
+                      onChange={(e) => setUpdateComment(e.target.value)}
+                      rows={4}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowUpdateForm(false)}
+                      disabled={actioning}
+                    >
+                      Cancel
+                    </Button>
+                    <Button onClick={handleUpdateRequest} disabled={actioning}>
+                      {actioning ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Save Changes
+                    </Button>
                   </div>
                 </div>
               )}
@@ -1226,7 +1438,7 @@ export default function RequestDetail() {
           </Card>
 
           {attachments.length > 0 && (
-            <Card className="border no-print">
+            <Card className="no-print">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Paperclip className="h-4 w-4" />
@@ -1290,7 +1502,7 @@ export default function RequestDetail() {
         </div>
 
         <div className="space-y-6">
-          <Card className="border no-print xl:sticky xl:top-6">
+          <Card className="no-print xl:sticky xl:top-6">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Approval Flow</CardTitle>
             </CardHeader>
@@ -1448,16 +1660,111 @@ export default function RequestDetail() {
                 )}
               </div>
 
-              {shouldShowButtons && (
-                <div className="mt-4 pt-4 border-t space-y-2">
-                  {request.status === "changes_requested" && (
-                    <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                      <p className="text-sm text-amber-800">
-                        <strong>Changes Requested:</strong> This request has been sent back to the initiator for updates. 
-                        No approval actions can be taken until the request is updated and resubmitted.
+              {request.status === "approved" && (
+                <div className="rounded-xl border bg-card/80 p-4 shadow-sm space-y-4">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">
+                      Approved Work Assignment
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      The final approver can reassign this work, and the assigned person can mark it complete when done.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Assigned To
+                      </p>
+                      <Select
+                        value={selectedWorkAssigneeId}
+                        onValueChange={setSelectedWorkAssigneeId}
+                        disabled={!canAssignApprovedWork || workAssignees.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select assignee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {workAssignees.map((assignee: WorkAssigneeOption) => (
+                            <SelectItem key={assignee.id} value={assignee.id}>
+                              {assignee.full_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Current assignee: {request.work_assignee?.full_name || "Not assigned"}
                       </p>
                     </div>
-                  )}
+
+                    <div className="space-y-2">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Work Status
+                      </p>
+                      <Select
+                        value={selectedWorkStatus}
+                        onValueChange={(value) =>
+                          setSelectedWorkStatus(
+                            value as "assigned" | "in_progress" | "done" | "not_done",
+                          )
+                        }
+                        disabled={!canCompleteApprovedWork}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="assigned">Assigned</SelectItem>
+                          <SelectItem value="in_progress">In Progress</SelectItem>
+                          <SelectItem value="done">Done</SelectItem>
+                          <SelectItem value="not_done">Not Done</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Textarea
+                        value={workCompletionComment}
+                        onChange={(e) => setWorkCompletionComment(e.target.value)}
+                        placeholder="Optional note for the initiator"
+                        rows={4}
+                        disabled={!canCompleteApprovedWork}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {request.work_completed_at
+                          ? `Completed by ${request.work_completed_by_profile?.full_name || "assigned worker"} on ${new Date(request.work_completed_at).toLocaleString()}`
+                          : "The initiator will receive an email when this is marked complete."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {canAssignApprovedWork && (
+                      <Button
+                        onClick={handleAssignWork}
+                        disabled={actioning || !selectedWorkAssigneeId}
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                      >
+                        {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Assign Work
+                      </Button>
+                    )}
+                    {canCompleteApprovedWork && (
+                      <Button
+                        onClick={handleUpdateWorkStatus}
+                        disabled={actioning}
+                        size="sm"
+                        className="gap-2"
+                      >
+                        {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Update Work Status
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {shouldShowButtons && (
+                <div className="mt-4 pt-4 border-t space-y-2">
                   <Button
                     onClick={handleApprove}
                     disabled={actioning}
@@ -1486,7 +1793,7 @@ export default function RequestDetail() {
                     Reject
                   </Button>
                   <Button
-                    onClick={() => setShowRequestChangesDialog(true)}
+                    onClick={() => setShowUpdateForm(true)}
                     disabled={actioning}
                     variant="outline"
                     className="w-full gap-2"
@@ -1495,14 +1802,14 @@ export default function RequestDetail() {
                     {actioning ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      <AlertCircle className="h-4 w-4" />
+                      <Edit2 className="h-4 w-4" />
                     )}{" "}
-                    Request Changes
+                    Edit Request
                   </Button>
                 </div>
               )}
 
-              {shouldShowUpdateButton && (
+              {canEditRequest && !shouldShowButtons && !showUpdateForm && (
                 <div className="mt-4 pt-4 border-t space-y-2">
                   <Button
                     onClick={() => setShowUpdateForm(true)}
@@ -1516,7 +1823,7 @@ export default function RequestDetail() {
                     ) : (
                       <Edit2 className="h-4 w-4" />
                     )}{" "}
-                    Update Request
+                    Edit Request
                   </Button>
                 </div>
               )}
@@ -1546,209 +1853,7 @@ export default function RequestDetail() {
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Request Changes Dialog */}
-      <Dialog
-        open={showRequestChangesDialog}
-        onOpenChange={setShowRequestChangesDialog}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Request Changes</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Message to Initiator
-              </label>
-              <Textarea
-                placeholder="Explain what changes are needed..."
-                value={changesComment}
-                onChange={(e) => setChangesComment(e.target.value)}
-                rows={4}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowRequestChangesDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleRequestChanges} disabled={actioning}>
-              {actioning ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : null}
-              Request Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Update Request Dialog */}
-      <Dialog open={showUpdateForm} onOpenChange={setShowUpdateForm}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Update Request</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Pre-Salutation (Optional)
-              </label>
-              <RichTextEditor
-                key={`pre-comments-${showUpdateForm ? "open" : "closed"}`}
-                content={
-                  typeof updatingFormData.pre_comments === "string"
-                    ? updatingFormData.pre_comments
-                    : ""
-                }
-                onChange={(html) =>
-                  setUpdatingFormData((prev) => ({
-                    ...prev,
-                    pre_comments: html,
-                  }))
-                }
-                placeholder="e.g., Dear Mr. Manager, I hope you are doing well. Please find below..."
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Optional: Add a greeting or salutation before the form data
-              </p>
-            </div>
-
-            {typeof updatingFormData.content === "string" && (
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Letter body
-                </label>
-                <RichTextEditor
-                  key={`letter-body-${showUpdateForm ? "open" : "closed"}`}
-                  content={updatingFormData.content}
-                  onChange={(html) =>
-                    setUpdatingFormData((prev) => ({
-                      ...prev,
-                      content: html,
-                    }))
-                  }
-                  placeholder="Letter content…"
-                />
-              </div>
-            )}
-
-            {repeatableFields.length > 0 ? (
-              <LineItemsManager
-                items={
-                  Array.isArray(updatingFormData.items)
-                    ? (updatingFormData.items as LineItem[])
-                    : []
-                }
-                onItemsChange={(newItems) =>
-                  setUpdatingFormData((prev) => ({
-                    ...prev,
-                    items: newItems,
-                  }))
-                }
-                repeatableFields={repeatableFields}
-                title="Line items"
-              />
-            ) : (
-              fields.map((field) => {
-                const currentValue = updatingFormData[field.name] ?? "";
-                return (
-                  <div key={field.name}>
-                    <label className="block text-sm font-medium mb-2">
-                      {field.label}
-                    </label>
-                    {field.type === "text" ||
-                    field.type === "email" ||
-                    field.type === "number" ? (
-                      <input
-                        type={field.type}
-                        value={String(currentValue)}
-                        onChange={(e) =>
-                          setUpdatingFormData((prev) => ({
-                            ...prev,
-                            [field.name]: e.target.value,
-                          }))
-                        }
-                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                        placeholder={field.label}
-                      />
-                    ) : field.type === "textarea" ? (
-                      <textarea
-                        value={String(currentValue)}
-                        onChange={(e) =>
-                          setUpdatingFormData((prev) => ({
-                            ...prev,
-                            [field.name]: e.target.value,
-                          }))
-                        }
-                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                        rows={3}
-                        placeholder={field.label}
-                      />
-                    ) : field.type === "select" && field.options ? (
-                      <select
-                        value={String(currentValue)}
-                        onChange={(e) =>
-                          setUpdatingFormData((prev) => ({
-                            ...prev,
-                            [field.name]: e.target.value,
-                          }))
-                        }
-                        className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        <option value="">Select {field.label}</option>
-                        {field.options?.map((opt: string) => (
-                          <option key={opt} value={opt}>
-                            {opt}
-                          </option>
-                        ))}
-                      </select>
-                    ) : null}
-                  </div>
-                );
-              })
-            )}
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Post-Comments (Optional)
-              </label>
-              <RichTextEditor
-                key={`post-comments-${showUpdateForm ? "open" : "closed"}`}
-                content={
-                  typeof updatingFormData.post_comments === "string"
-                    ? updatingFormData.post_comments
-                    : ""
-                }
-                onChange={(html) =>
-                  setUpdatingFormData((prev) => ({
-                    ...prev,
-                    post_comments: html,
-                  }))
-                }
-                placeholder="e.g., Thank you for your time and consideration. Please contact me if you need any additional information."
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Optional: Add any closing comments before your signature
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowUpdateForm(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleUpdateRequest} disabled={actioning}>
-              {actioning ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : null}
-              Submit Updated Request
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </div>
     </div>
   );
 }

@@ -59,21 +59,27 @@ CREATE TABLE IF NOT EXISTS approval_types (
   pre_salutation TEXT,
   post_salutation TEXT,
   department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
+  default_work_assignee_id UUID REFERENCES users(id),
   allow_attachments BOOLEAN NOT NULL DEFAULT false,
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE approval_types ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID REFERENCES users(id);
+
 CREATE TABLE IF NOT EXISTS approval_chains (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   approval_type_id UUID NOT NULL REFERENCES approval_types(id) ON DELETE CASCADE,
   steps JSONB NOT NULL DEFAULT '[]',
+  default_work_assignee_id UUID REFERENCES users(id),
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE approval_chains ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID REFERENCES users(id);
 
 CREATE TABLE IF NOT EXISTS approval_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -87,11 +93,28 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   total_steps INTEGER NOT NULL DEFAULT 1,
   form_data JSONB NOT NULL DEFAULT '{}',
   has_attachments BOOLEAN NOT NULL DEFAULT false,
+  work_status TEXT NOT NULL DEFAULT 'pending' CHECK (work_status IN ('pending', 'assigned', 'in_progress', 'done', 'not_done')),
+  work_assignee_id UUID REFERENCES users(id),
+  work_assigned_by UUID REFERENCES users(id),
+  work_assigned_at TIMESTAMPTZ,
+  work_completed_by UUID REFERENCES users(id),
+  work_completed_at TIMESTAMPTZ,
   changes_requested_by UUID REFERENCES users(id),
   changes_requested_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_assignee_id UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_assigned_by UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_assigned_at TIMESTAMPTZ;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_completed_by UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_completed_at TIMESTAMPTZ;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS work_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS approval_requests_work_status_check;
+ALTER TABLE approval_requests ADD CONSTRAINT approval_requests_work_status_check
+  CHECK (work_status IN ('pending', 'assigned', 'in_progress', 'done', 'not_done'));
+CREATE INDEX IF NOT EXISTS idx_approval_requests_work_assignee ON approval_requests(work_assignee_id);
 
 CREATE TABLE IF NOT EXISTS approval_actions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -99,7 +122,7 @@ CREATE TABLE IF NOT EXISTS approval_actions (
   step_order INTEGER NOT NULL,
   role_name TEXT NOT NULL,
   action_label TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested', 'resubmitted')),
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested', 'resubmitted', 'edited')),
   approver_user_id UUID REFERENCES users(id),
   acted_by UUID REFERENCES users(id),
   comment TEXT,

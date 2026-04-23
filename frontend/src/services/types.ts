@@ -75,6 +75,7 @@ export interface ApprovalType {
   pre_salutation?: string;
   post_salutation?: string;
   department_id?: string | null;
+  default_work_assignee_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -88,6 +89,7 @@ export interface CreateApprovalTypeRequest {
   post_salutation?: string | null;
   allow_attachments?: boolean;
   department_id?: string | null;
+  default_work_assignee_id?: string | null;
 }
 
 export interface UpdateApprovalTypeRequest {
@@ -99,6 +101,7 @@ export interface UpdateApprovalTypeRequest {
   post_salutation?: string | null;
   allow_attachments?: boolean;
   department_id?: string | null;
+  default_work_assignee_id?: string | null;
 }
 
 export interface ApprovalTypeAttachment {
@@ -133,6 +136,7 @@ export interface ApprovalChain {
   id: string;
   name: string;
   approval_type_id: string;
+  default_work_assignee_id?: string | null;
   steps: Array<{
     step_order: number;
     name: string;
@@ -154,11 +158,27 @@ export interface ApprovalRequest {
   current_step: number;
   total_steps: number;
   status: string;
+  work_status?: "pending" | "assigned" | "in_progress" | "done" | "not_done";
   request_number?: string;
   initiator?: { full_name: string };
   approval_types?: unknown;
   departments?: unknown;
   has_attachments?: boolean;
+  work_assignee_id?: string | null;
+  work_assigned_by?: string | null;
+  work_assigned_at?: string | null;
+  work_completed_by?: string | null;
+  work_completed_at?: string | null;
+  work_assignee?: {
+    id: string | null;
+    full_name: string | null;
+    email?: string | null;
+  } | null;
+  work_completed_by_profile?: {
+    id: string | null;
+    full_name: string | null;
+  } | null;
+  final_authority_user_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -223,12 +243,14 @@ export interface UpdateApprovalTypeAttachmentRequest {
 export interface CreateApprovalChainRequest {
   name: string;
   approval_type_id: string;
+  default_work_assignee_id?: string | null;
   steps: ApprovalChain["steps"];
 }
 
 export interface UpdateApprovalChainRequest {
   name?: string;
   approval_type_id?: string;
+  default_work_assignee_id?: string | null;
   steps?: ApprovalChain["steps"];
 }
 
@@ -244,10 +266,20 @@ export interface CreateApprovalRequestRequest {
 
 export interface UpdateApprovalRequestRequest {
   form_data: Record<string, unknown>;
+  comment?: string;
 }
 
 export interface ApprovalActionRequest {
   comment?: string;
+}
+
+export interface WorkAssigneeOption {
+  id: string;
+  full_name: string;
+  email: string;
+  department_name?: string | null;
+  department_names?: string[];
+  role_names?: string[];
 }
 
 export interface CreateUserRequest {
@@ -262,6 +294,7 @@ export interface CreateUserRequest {
 }
 
 export interface UpdateUserRequest {
+  email?: string;
   full_name?: string;
   department_id?: string | null;
   department_ids?: string[];

@@ -6,6 +6,8 @@ import {
   ArrowDown,
   GripVertical,
   Copy,
+  Check,
+  ChevronsUpDown,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 import { ChainRow, ApprovalTypeRow } from "@/lib/constants";
 import {
   useApprovalChains,
@@ -34,8 +46,10 @@ import {
   useDeleteApprovalChain,
   useRoles,
   useUpdateApprovalChain,
+  useWorkAssignees,
 } from "@/hooks/services";
 import { useApprovalChainSteps } from "@/hooks/useApprovalChainSteps";
+import { toast } from "sonner";
 import {
   getScopeLabel,
   getSuggestedWorkflowActionLabel,
@@ -54,6 +68,8 @@ type Step = {
 interface ApprovalType {
   id: string;
   name: string;
+  department_id?: string | null;
+  default_work_assignee_id?: string | null;
 }
 interface RoleOption {
   id: string;
@@ -63,6 +79,7 @@ interface Chain {
   id: string;
   name: string;
   approval_type_id: string;
+  default_work_assignee_id?: string | null;
   steps: Step[];
 }
 
@@ -102,6 +119,8 @@ export function AdminChains() {
   const [editChain, setEditChain] = useState<Chain | null>(null);
   const [name, setName] = useState("");
   const [approvalTypeId, setApprovalTypeId] = useState("");
+  const [defaultWorkAssigneeId, setDefaultWorkAssigneeId] = useState<string | null>(null);
+  const [defaultAssigneeOpen, setDefaultAssigneeOpen] = useState(false);
   const {
     steps,
     draggedStepIdx,
@@ -129,11 +148,20 @@ export function AdminChains() {
   const approvalTypes: ApprovalType[] = (approvalTypesRaw as ApprovalTypeRow[]).map((t) => ({
     id: t.id,
     name: t.name,
+    department_id: t.department_id ?? null,
+    default_work_assignee_id: t.default_work_assignee_id ?? null,
   }));
+  const selectedApprovalType =
+    approvalTypes.find((type) => type.id === approvalTypeId) ?? null;
+  const { data: workAssignees = [] } = useWorkAssignees(
+    selectedApprovalType ? (selectedApprovalType.department_id ?? null) : undefined,
+  );
   const roles: RoleOption[] = (rolesRaw as RoleOption[]).map((r) => ({
     id: r.id,
     name: r.name,
   }));
+  const selectedAssignee =
+    workAssignees.find((assignee) => assignee.id === defaultWorkAssigneeId) ?? null;
   const departments = (departmentsRaw as Array<{ id: string; name: string }>).map((d) => ({
     id: d.id,
     name: d.name,
@@ -143,6 +171,7 @@ export function AdminChains() {
     setEditChain(null);
     setName("");
     setApprovalTypeId("");
+    setDefaultWorkAssigneeId(null);
     resetSteps([]);
     setDialogOpen(true);
   };
@@ -150,6 +179,7 @@ export function AdminChains() {
     setEditChain(c);
     setName(c.name);
     setApprovalTypeId(c.approval_type_id);
+    setDefaultWorkAssigneeId(c.default_work_assignee_id ?? null);
     resetSteps(
       c.steps.map((step) => ({
         step_order: step.step_order,
@@ -165,6 +195,10 @@ export function AdminChains() {
 
   const handleSave = async () => {
     if (!name.trim() || !approvalTypeId) return;
+    if (!defaultWorkAssigneeId) {
+      toast.error("Please select a default work assignee for this chain");
+      return;
+    }
     const normalizedSteps = steps.map((step) => ({
       ...step,
       name: step.name.trim() || getSuggestedStepName(step, departments),
@@ -183,6 +217,7 @@ export function AdminChains() {
           data: {
             name,
             approval_type_id: approvalTypeId,
+            default_work_assignee_id: defaultWorkAssigneeId,
             steps: normalizedSteps,
           },
         });
@@ -190,6 +225,7 @@ export function AdminChains() {
         await createChainMutation.mutateAsync({
           name,
           approval_type_id: approvalTypeId,
+          default_work_assignee_id: defaultWorkAssigneeId,
           steps: normalizedSteps,
         });
       }
@@ -208,6 +244,7 @@ export function AdminChains() {
       await createChainMutation.mutateAsync({
         name: `${chain.name} (Copy)`,
         approval_type_id: chain.approval_type_id,
+        default_work_assignee_id: chain.default_work_assignee_id ?? null,
         steps: chain.steps.map((s) => ({ ...s })),
       });
     } catch {}
@@ -240,7 +277,10 @@ export function AdminChains() {
                 <Label>Approval Type</Label>
                 <Select
                   value={approvalTypeId}
-                  onValueChange={setApprovalTypeId}
+                  onValueChange={(value) => {
+                    setApprovalTypeId(value);
+                    setDefaultWorkAssigneeId(null);
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select type..." />
@@ -253,6 +293,74 @@ export function AdminChains() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Default Work Assignee</Label>
+                <Popover open={defaultAssigneeOpen} onOpenChange={setDefaultAssigneeOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={defaultAssigneeOpen}
+                      className="w-full justify-between font-normal"
+                    >
+                      {selectedAssignee
+                        ? selectedAssignee.full_name
+                        : "Select default work assignee"}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[420px] p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search by name, role, or department..." />
+                      <CommandList>
+                        <CommandEmpty>No matching assignee found.</CommandEmpty>
+                        <CommandGroup>
+                          {workAssignees.map((assignee) => {
+                            const departmentSummary =
+                              assignee.department_names?.length
+                                ? assignee.department_names.join(", ")
+                                : assignee.department_name || "No department";
+                            const roleSummary =
+                              assignee.role_names?.length
+                                ? assignee.role_names.join(", ")
+                                : "No role";
+
+                            return (
+                              <CommandItem
+                                key={assignee.id}
+                                value={`${assignee.full_name} ${assignee.email} ${departmentSummary} ${roleSummary}`}
+                                onSelect={() => {
+                                  setDefaultWorkAssigneeId(assignee.id);
+                                  setDefaultAssigneeOpen(false);
+                                }}
+                                className="items-start"
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 mt-0.5 h-4 w-4 shrink-0",
+                                    defaultWorkAssigneeId === assignee.id
+                                      ? "opacity-100"
+                                      : "opacity-0",
+                                  )}
+                                />
+                                <div className="flex flex-col">
+                                  <span>{assignee.full_name}</span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {roleSummary} | {departmentSummary}
+                                  </span>
+                                </div>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                <p className="text-xs text-muted-foreground">
+                  This is required and will be auto-assigned when requests are approved.
+                </p>
               </div>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">

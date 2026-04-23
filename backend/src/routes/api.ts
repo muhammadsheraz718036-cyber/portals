@@ -21,9 +21,11 @@ import {
   getMimeType,
 } from "../fileUpload.js";
 import path from "path";
+import { EmailNotificationService } from "../services/EmailNotificationService.js";
 
 export const apiRouter = Router();
 const uploadsRoot = path.resolve(process.cwd(), "uploads");
+const emailNotificationService = new EmailNotificationService();
 
 function sanitizeDownloadFilename(filename: string): string {
   return filename.replace(/[\r\n"]/g, "_");
@@ -634,6 +636,149 @@ async function findActionableStep(
   return rows[0] ?? null;
 }
 
+async function listEligibleWorkAssignees(
+  client: { query: typeof pool.query },
+  opts: { departmentId: string | null; excludeUserId?: string | null },
+): Promise<
+  Array<{
+    id: string;
+    full_name: string;
+    email: string;
+    department_name: string | null;
+    department_names: string[];
+    role_names: string[];
+  }>
+> {
+  const params: unknown[] = [];
+  let departmentClause = "";
+  let exclusionClause = "";
+
+  if (opts.excludeUserId) {
+    params.push(opts.excludeUserId);
+    exclusionClause = `AND p.id <> $${params.length}`;
+  }
+
+  if (opts.departmentId) {
+    params.push(opts.departmentId);
+    departmentClause = `AND (
+      p.department_id = $${params.length}
+      OR EXISTS (
+        SELECT 1
+          FROM user_departments ud
+         WHERE ud.user_id = p.id
+           AND ud.department_id = $${params.length}
+      )
+    )`;
+  }
+
+  const { rows } = await client.query<{
+    id: string;
+    full_name: string;
+    email: string;
+    department_name: string | null;
+    department_names: string[] | null;
+    role_names: string[] | null;
+  }>(
+    `SELECT DISTINCT
+       p.id,
+       p.full_name,
+       p.email,
+       d.name AS department_name,
+       (
+         SELECT COALESCE(array_agg(DISTINCT dept_name), ARRAY[]::text[])
+           FROM (
+             SELECT pd.name AS dept_name
+             FROM departments pd
+             WHERE pd.id = p.department_id
+             UNION
+             SELECT extra_department.name AS dept_name
+               FROM user_departments ud
+               JOIN departments extra_department ON extra_department.id = ud.department_id
+              WHERE ud.user_id = p.id
+           ) department_names
+          WHERE dept_name IS NOT NULL
+       ) AS department_names,
+       (
+         SELECT COALESCE(array_agg(DISTINCT role_name), ARRAY[]::text[])
+           FROM (
+             SELECT primary_role.name AS role_name
+               FROM roles primary_role
+              WHERE primary_role.id = p.role_id
+             UNION
+             SELECT extra_role.name AS role_name
+               FROM user_roles ur
+               JOIN roles extra_role ON extra_role.id = ur.role_id
+              WHERE ur.user_id = p.id
+           ) role_names
+          WHERE role_name IS NOT NULL
+       ) AS role_names
+      FROM profiles p
+      LEFT JOIN departments d ON d.id = p.department_id
+     WHERE p.is_active = true
+       AND p.email IS NOT NULL
+       ${exclusionClause}
+       ${departmentClause}
+     ORDER BY p.full_name ASC, p.email ASC`,
+    params,
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    department_names: row.department_names ?? [],
+    role_names: row.role_names ?? [],
+  }));
+}
+
+async function ensureEligibleWorkAssignee(
+  client: { query: typeof pool.query },
+  opts: { departmentId: string | null; initiatorId: string; assigneeId: string },
+): Promise<{ id: string; full_name: string; email: string }> {
+  const eligible = await listEligibleWorkAssignees(client, {
+    departmentId: opts.departmentId,
+    excludeUserId: opts.initiatorId,
+  });
+  const assignee = eligible.find((candidate) => candidate.id === opts.assigneeId);
+  if (!assignee) {
+    throw new HttpError(400, "Selected assignee is not eligible for this request");
+  }
+  return assignee;
+}
+
+async function resolveDefaultWorkAssigneeId(
+  client: { query: typeof pool.query },
+  opts: { approvalChainId: string },
+): Promise<string | null> {
+  const { rows: chainRows } = await client.query<{ default_work_assignee_id: string | null }>(
+    `SELECT default_work_assignee_id
+       FROM approval_chains
+      WHERE id = $1
+      LIMIT 1`,
+    [opts.approvalChainId],
+  );
+
+  if (chainRows.length === 0) {
+    throw new HttpError(404, "Approval chain not found");
+  }
+
+  return chainRows[0].default_work_assignee_id ?? null;
+}
+
+async function getFinalAuthorityUserId(
+  client: { query: typeof pool.query },
+  requestId: string,
+): Promise<string | null> {
+  const { rows } = await client.query<{ acted_by: string | null }>(
+    `SELECT acted_by
+       FROM approval_actions
+      WHERE request_id = $1
+        AND status = 'approved'
+      ORDER BY step_order DESC, acted_at DESC NULLS LAST, created_at DESC
+      LIMIT 1`,
+    [requestId],
+  );
+  return rows[0]?.acted_by ?? null;
+}
+
 // Helper function to log audit events
 async function logAudit(
   userId: string,
@@ -651,6 +796,156 @@ async function logAudit(
     // Log audit errors to console but don't fail the request
     console.error("Failed to log audit event:", err);
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatChangeValue(value: unknown): string {
+  if (value === undefined) return "not set";
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : '""';
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  const serialized = JSON.stringify(value);
+  if (!serialized) return "empty";
+  return serialized.length > 180 ? `${serialized.slice(0, 177)}...` : serialized;
+}
+
+function formatChangeLabel(path: string): string {
+  return path
+    .replace(/\.(\d+)\./g, "[$1].")
+    .replace(/^items\./, "")
+    .replace(/__group/g, "group")
+    .trim();
+}
+
+function isGroupItemArray(value: unknown): value is Array<Record<string, unknown>> {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => isPlainObject(item))
+  );
+}
+
+function collectGroupedItemChanges(
+  beforeItems: Array<Record<string, unknown>>,
+  afterItems: Array<Record<string, unknown>>,
+  lines: string[],
+) {
+  const groups = Array.from(
+    new Set([
+      ...beforeItems.map((item) => String(item.__group || "General")),
+      ...afterItems.map((item) => String(item.__group || "General")),
+    ]),
+  ).sort();
+
+  for (const group of groups) {
+    const beforeItem =
+      beforeItems.find((item) => String(item.__group || "General") === group) ?? {};
+    const afterItem =
+      afterItems.find((item) => String(item.__group || "General") === group) ?? {};
+
+    const keys = Array.from(
+      new Set([
+        ...Object.keys(beforeItem),
+        ...Object.keys(afterItem),
+      ]),
+    )
+      .filter((key) => key !== "id" && key !== "__group")
+      .sort();
+
+    for (const key of keys) {
+      const beforeValue = beforeItem[key];
+      const afterValue = afterItem[key];
+      if (JSON.stringify(beforeValue) === JSON.stringify(afterValue)) {
+        continue;
+      }
+      lines.push(
+        `${group}.${key}: ${formatChangeValue(beforeValue)} -> ${formatChangeValue(afterValue)}`,
+      );
+    }
+  }
+}
+
+function collectChangedFields(
+  beforeValue: unknown,
+  afterValue: unknown,
+  fieldPath: string,
+  lines: string[],
+) {
+  if (beforeValue === afterValue) {
+    return;
+  }
+
+  if (fieldPath === "items" && isGroupItemArray(beforeValue) && isGroupItemArray(afterValue)) {
+    collectGroupedItemChanges(beforeValue, afterValue, lines);
+    return;
+  }
+
+  if (isPlainObject(beforeValue) && isPlainObject(afterValue)) {
+    const keys = Array.from(
+      new Set([...Object.keys(beforeValue), ...Object.keys(afterValue)]),
+    ).sort();
+
+    for (const key of keys) {
+      const nextPath = fieldPath ? `${fieldPath}.${key}` : key;
+      collectChangedFields(beforeValue[key], afterValue[key], nextPath, lines);
+    }
+    return;
+  }
+
+  const beforeSerialized = JSON.stringify(beforeValue);
+  const afterSerialized = JSON.stringify(afterValue);
+  if (beforeSerialized === afterSerialized) {
+    return;
+  }
+
+  const label = fieldPath || "form_data";
+  lines.push(
+    `${formatChangeLabel(label)}: ${formatChangeValue(beforeValue)} -> ${formatChangeValue(afterValue)}`,
+  );
+}
+
+function buildEditHistoryComment(args: {
+  previousData: Record<string, unknown>;
+  nextData: Record<string, unknown>;
+  editorNote?: string;
+}): string {
+  const lines: string[] = [];
+  collectChangedFields(args.previousData, args.nextData, "", lines);
+
+  const summary: string[] = [];
+  const totalChanges = lines.length;
+  summary.push(
+    totalChanges > 0
+      ? `Request content updated. ${totalChanges} field${totalChanges === 1 ? "" : "s"} changed.`
+      : "Request content updated. No field value differences were detected.",
+  );
+
+  if (totalChanges > 0) {
+    summary.push("");
+    summary.push("Changed fields:");
+    for (const line of lines.slice(0, 20)) {
+      summary.push(`- ${line}`);
+    }
+    if (totalChanges > 20) {
+      summary.push(`- ...and ${totalChanges - 20} more changes`);
+    }
+  }
+
+  const note = args.editorNote?.trim();
+  if (note) {
+    summary.push("");
+    summary.push("Editor note:");
+    summary.push(note);
+  }
+
+  return summary.join("\n");
 }
 
 async function syncApprovalChainSteps(
@@ -1684,10 +1979,11 @@ apiRouter.post(
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().default(false),
         department_id: z.string().uuid().nullable().optional(),
+        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, default_work_assignee_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [
         body.name.trim(),
         body.description ?? "",
@@ -1697,6 +1993,7 @@ apiRouter.post(
         body.post_salutation ?? null,
         body.allow_attachments,
         body.department_id ?? null,
+        body.default_work_assignee_id ?? null,
         req.auth!.userId,
       ],
     );
@@ -1738,6 +2035,7 @@ apiRouter.patch(
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().optional(),
         department_id: z.string().uuid().nullable().optional(),
+        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -1775,6 +2073,10 @@ apiRouter.patch(
       parts.push(`department_id = $${n++}`);
       vals.push(body.department_id);
     }
+    if (body.default_work_assignee_id !== undefined) {
+      parts.push(`default_work_assignee_id = $${n++}`);
+      vals.push(body.default_work_assignee_id);
+    }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
     vals.push(req.params.id);
@@ -1796,6 +2098,8 @@ apiRouter.patch(
       changes.push(`pre_salutation updated`);
     if (body.post_salutation !== undefined)
       changes.push(`post_salutation updated`);
+    if (body.default_work_assignee_id !== undefined)
+      changes.push(`default work assignee updated`);
 
     await logAudit(
       req.auth!.userId,
@@ -2415,6 +2719,7 @@ apiRouter.post(
         name: z.string().min(1),
         approval_type_id: z.string().uuid(),
         steps: z.array(workflowChainStepSchema).min(1),
+        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const normalizedSteps = normalizeWorkflowSteps(body.steps);
@@ -2423,13 +2728,14 @@ apiRouter.post(
     try {
       await client.query("BEGIN");
       const { rows } = await client.query(
-        `INSERT INTO approval_chains (name, approval_type_id, steps, created_by)
-         VALUES ($1, $2, $3::jsonb, $4)
+        `INSERT INTO approval_chains (name, approval_type_id, steps, default_work_assignee_id, created_by)
+         VALUES ($1, $2, $3::jsonb, $4, $5)
          RETURNING *`,
         [
           body.name.trim(),
           body.approval_type_id,
           JSON.stringify(normalizedSteps),
+          body.default_work_assignee_id ?? null,
           req.auth!.userId,
         ],
       );
@@ -2478,6 +2784,7 @@ apiRouter.patch(
         name: z.string().min(1).optional(),
         approval_type_id: z.string().uuid().optional(),
         steps: z.array(workflowChainStepSchema).min(1).optional(),
+        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -2494,6 +2801,10 @@ apiRouter.patch(
     if (body.steps !== undefined) {
       parts.push(`steps = $${n++}::jsonb`);
       vals.push(JSON.stringify(normalizeWorkflowSteps(body.steps)));
+    }
+    if (body.default_work_assignee_id !== undefined) {
+      parts.push(`default_work_assignee_id = $${n++}`);
+      vals.push(body.default_work_assignee_id);
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -2525,6 +2836,8 @@ apiRouter.patch(
     if (body.approval_type_id !== undefined)
       changes.push(`approval_type_id updated`);
     if (body.steps !== undefined) changes.push(`steps updated`);
+    if (body.default_work_assignee_id !== undefined)
+      changes.push(`default work assignee updated`);
 
     await logAudit(
       req.auth!.userId,
@@ -2817,6 +3130,7 @@ apiRouter.patch(
 );
 
 const updateUserBody = z.object({
+  email: z.string().email().optional(),
   full_name: z.string().min(1).optional(),
   department_id: z.string().uuid().nullable().optional(),
   department_ids: z.array(z.string().uuid()).optional(),
@@ -2962,6 +3276,15 @@ apiRouter.patch(
       const values: unknown[] = [];
       let paramIdx = 1;
 
+      if (body.email !== undefined) {
+        await client.query(
+          `UPDATE users SET email = $1, updated_at = now() WHERE id = $2`,
+          [body.email.toLowerCase(), req.params.userId],
+        );
+        updates.push(`email = $${paramIdx}`);
+        values.push(body.email.toLowerCase());
+        paramIdx++;
+      }
       if (body.full_name !== undefined) {
         updates.push(`full_name = $${paramIdx}`);
         values.push(body.full_name.trim());
@@ -3042,6 +3365,8 @@ apiRouter.patch(
       // Log audit event
       const targetUser = r.rows[0];
       const changes: string[] = [];
+      if (body.email !== undefined)
+        changes.push(`email: "${body.email.toLowerCase()}"`);
       if (body.full_name !== undefined)
         changes.push(`full_name: "${body.full_name}"`);
       if (body.department_id !== undefined || body.department_ids !== undefined)
@@ -3065,6 +3390,14 @@ apiRouter.patch(
       res.json({ profile });
     } catch (error) {
       await client.query("ROLLBACK");
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as { code: string }).code === "23505"
+      ) {
+        throw new HttpError(400, "Email already in use");
+      }
       throw error;
     } finally {
       client.release();
@@ -3300,14 +3633,8 @@ apiRouter.get(
       userPermissions.includes("approve_reject") ||
       userPermissions.includes("all");
 
-    const hasListAccess =
-      admin ||
-      userPermissions.includes("view_own_requests") ||
-      userPermissions.includes("view_department_requests") ||
-      userPermissions.includes("view_all_requests") ||
-      userPermissions.includes("all") ||
-      userPermissions.includes("initiate_request") ||
-      canApprove;
+    // Final visibility is enforced in the query below, including work assignees.
+    const hasListAccess = true;
 
     if (!hasListAccess) {
       throw new HttpError(
@@ -3360,7 +3687,7 @@ apiRouter.get(
       SELECT 1 FROM approval_actions aa
        WHERE aa.request_id = ar.id
          AND (aa.approver_user_id = $1 OR aa.acted_by = $1)
-    )`;
+    ) OR ar.work_assignee_id = $1`;
 
     const whereCombined = `(${scopeClause} OR ${approverVisibility})`;
 
@@ -3403,6 +3730,27 @@ apiRouter.get(
 );
 
 apiRouter.get(
+  "/approval-requests/assignees",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const rawDepartmentId =
+      typeof req.query.department_id === "string" ? req.query.department_id.trim() : "";
+    const departmentId =
+      rawDepartmentId === "all"
+        ? null
+        : rawDepartmentId !== ""
+          ? rawDepartmentId
+          : req.profile?.department_id ?? null;
+
+    const assignees = await listEligibleWorkAssignees(pool, {
+      departmentId,
+    });
+
+    res.json(assignees);
+  }),
+);
+
+apiRouter.get(
   "/approval-requests/:id",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
@@ -3414,14 +3762,8 @@ apiRouter.get(
       userPermissions.includes("approve_reject") ||
       userPermissions.includes("all");
 
-    const hasDetailAccess =
-      admin ||
-      userPermissions.includes("view_own_requests") ||
-      userPermissions.includes("view_department_requests") ||
-      userPermissions.includes("view_all_requests") ||
-      userPermissions.includes("all") ||
-      userPermissions.includes("initiate_request") ||
-      canApprove;
+    // Final visibility is enforced in the query below, including work assignees.
+    const hasDetailAccess = true;
 
     if (!hasDetailAccess) {
       throw new HttpError(
@@ -3462,6 +3804,7 @@ apiRouter.get(
        WHERE aa.request_id = ar.id
          AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
     )`;
+    const workAssigneeVisibility = "ar.id = $1 AND ar.work_assignee_id = $2";
 
     const { rows } = await pool.query(
       `SELECT ar.*,
@@ -3469,15 +3812,35 @@ apiRouter.get(
           'name', at.name,
           'description', at.description,
           'fields', at.fields,
-          'page_layout', at.page_layout
+          'page_layout', at.page_layout,
+          'allow_attachments', at.allow_attachments
         ) AS approval_types,
         json_build_object('name', d.name) AS departments,
-        json_build_object('full_name', ip.full_name) AS initiator
+        json_build_object('full_name', ip.full_name) AS initiator,
+        json_build_object(
+          'id', wa.id,
+          'full_name', wa.full_name,
+          'email', wa.email
+        ) AS work_assignee,
+        json_build_object(
+          'id', wb.id,
+          'full_name', wb.full_name
+        ) AS work_completed_by_profile,
+        (
+          SELECT acted_by
+            FROM approval_actions aa
+           WHERE aa.request_id = ar.id
+             AND aa.status = 'approved'
+           ORDER BY aa.step_order DESC, aa.acted_at DESC NULLS LAST, aa.created_at DESC
+           LIMIT 1
+        ) AS final_authority_user_id
       FROM approval_requests ar
       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
       LEFT JOIN departments d ON d.id = ar.department_id
       LEFT JOIN profiles ip ON ip.id = ar.initiator_id
-      WHERE (${scopeClause}) OR (${approverVisibility})
+      LEFT JOIN profiles wa ON wa.id = ar.work_assignee_id
+      LEFT JOIN profiles wb ON wb.id = ar.work_completed_by
+      WHERE (${scopeClause}) OR (${approverVisibility}) OR (${workAssigneeVisibility})
       LIMIT 1`,
       queryParams,
     );
@@ -3507,7 +3870,6 @@ apiRouter.get(
   }),
 );
 
-// Alternate lookup by request_number
 apiRouter.get(
   "/approval-requests/by-number/:num",
   requireAuth,
@@ -3568,7 +3930,14 @@ apiRouter.post(
     const body = createRequestBody.parse(req.body);
     const uid = req.auth!.userId;
 
-    const { rows: typeRows } = await pool.query(
+    if (!body.approval_chain_id) {
+      throw new HttpError(
+        400,
+        "Approval chain is required because default work assignee is configured at chain level",
+      );
+    }
+
+    const { rows: typeRows } = await pool.query<{ department_id: string | null }>(
       `SELECT department_id FROM approval_types WHERE id = $1`,
       [body.approval_type_id],
     );
@@ -3628,11 +3997,31 @@ apiRouter.post(
     let createdRequest: Record<string, unknown>;
     try {
       await client.query("BEGIN");
+      const defaultWorkAssigneeId = await resolveDefaultWorkAssigneeId(client, {
+        approvalChainId: body.approval_chain_id,
+      });
+
+      if (!defaultWorkAssigneeId) {
+        throw new HttpError(
+          400,
+          "No default work assignee is configured on the selected approval chain",
+        );
+      }
+
+      await ensureEligibleWorkAssignee(client, {
+        // Global approval types (no fixed department) can target any eligible assignee.
+        // Department-scoped types must keep assignees within the request department scope.
+        departmentId: typeRows[0].department_id ? requestDeptId : null,
+        initiatorId: uid,
+        assigneeId: defaultWorkAssigneeId,
+      });
+
       const ins = await client.query(
         `INSERT INTO approval_requests (
           approval_type_id, approval_chain_id, initiator_id, department_id,
-          form_data, current_step, total_steps, status
-        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+          form_data, current_step, total_steps, status, work_status,
+          work_assignee_id, work_assigned_by, work_assigned_at
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, now())
         RETURNING *`,
         [
           body.approval_type_id,
@@ -3643,6 +4032,9 @@ apiRouter.post(
           1,
           chainSteps.length || body.total_steps,
           chainSteps.length > 0 ? "in_progress" : body.status,
+          "pending",
+          defaultWorkAssigneeId,
+          uid,
         ],
       );
       createdRequest = ins.rows[0];
@@ -3677,12 +4069,25 @@ apiRouter.post(
       `Created approval request: ${createdRequest.request_number}`,
     );
 
+    await emailNotificationService.notifyRequestSubmitted(
+      createdRequest.id as string,
+    );
+
     res.status(201).json(createdRequest);
   }),
 );
 
 // Approve an approval request
 const actionBody = z.object({
+  comment: z.string().optional(),
+});
+
+const assignWorkBody = z.object({
+  assignee_id: z.string().uuid(),
+});
+
+const workStatusBody = z.object({
+  status: z.enum(["assigned", "in_progress", "done", "not_done"]),
   comment: z.string().optional(),
 });
 
@@ -3784,6 +4189,17 @@ apiRouter.post(
         [newStatus, newCurrentStep, requestId],
       );
 
+      if (newStatus === "approved") {
+        await client.query(
+          `UPDATE approval_requests
+              SET work_status = 'assigned',
+                  work_assigned_at = COALESCE(work_assigned_at, now()),
+                  updated_at = now()
+            WHERE id = $1`,
+          [requestId],
+        );
+      }
+
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -3808,6 +4224,19 @@ apiRouter.post(
       "Approval Request",
       `Approved request: ${updatedRequests[0].request_number}`,
     );
+
+    await emailNotificationService.notifyRequestApproved(
+      requestId,
+      req.profile!.full_name,
+      body.comment,
+    );
+
+    if (updatedRequests[0]?.status === "approved" && updatedRequests[0]?.work_assignee_id) {
+      await emailNotificationService.notifyWorkAssigned(
+        requestId,
+        req.profile!.full_name,
+      );
+    }
 
     res.json({ request: updatedRequests[0], actions: updatedActions });
   }),
@@ -3919,7 +4348,179 @@ apiRouter.post(
       `Rejected request: ${updatedRequests[0].request_number}`,
     );
 
+    await emailNotificationService.notifyRequestRejected(
+      requestId,
+      req.profile!.full_name,
+      body.comment,
+    );
+
     res.json({ request: updatedRequests[0], actions: updatedActions });
+  }),
+);
+
+apiRouter.post(
+  "/approval-requests/:id/assign-work",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = assignWorkBody.parse(req.body);
+    const requestId = req.params.id;
+    const userId = req.auth!.userId;
+    const isAdmin = req.profile!.is_admin;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: requests } = await client.query<{
+        id: string;
+        request_number: string;
+        status: string;
+        initiator_id: string;
+        department_id: string | null;
+      }>(
+        `SELECT id, request_number, status, initiator_id, department_id
+           FROM approval_requests
+          WHERE id = $1
+          FOR UPDATE`,
+        [requestId],
+      );
+      const request = requests[0];
+      if (!request) {
+        throw new HttpError(404, "Request not found");
+      }
+      if (request.status !== "approved") {
+        throw new HttpError(400, "Work can only be assigned after final approval");
+      }
+
+      const finalAuthorityUserId = await getFinalAuthorityUserId(client, requestId);
+      if (!isAdmin && finalAuthorityUserId !== userId) {
+        throw new HttpError(
+          403,
+          "Only the final approving authority or an admin can assign the approved work",
+        );
+      }
+
+      const assignee = await ensureEligibleWorkAssignee(client, {
+        departmentId: request.department_id,
+        initiatorId: request.initiator_id,
+        assigneeId: body.assignee_id,
+      });
+
+      const { rows: updatedRequests } = await client.query(
+        `UPDATE approval_requests
+            SET work_assignee_id = $1,
+                work_assigned_by = $2,
+                work_assigned_at = now(),
+                work_status = 'assigned',
+                work_completed_by = NULL,
+                work_completed_at = NULL,
+                updated_at = now()
+          WHERE id = $3
+          RETURNING *`,
+        [assignee.id, userId, requestId],
+      );
+
+      await client.query("COMMIT");
+
+      await logAudit(
+        userId,
+        req.profile!.full_name,
+        "ASSIGN_WORK",
+        "Approval Request",
+        `Assigned approved request ${request.request_number} to ${assignee.full_name}`,
+      );
+
+      await emailNotificationService.notifyWorkAssigned(
+        requestId,
+        req.profile!.full_name,
+      );
+
+      res.json(updatedRequests[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+apiRouter.post(
+  "/approval-requests/:id/work-status",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = workStatusBody.parse(req.body);
+    const requestId = req.params.id;
+    const userId = req.auth!.userId;
+    const isAdmin = req.profile!.is_admin;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: requests } = await client.query<{
+        id: string;
+        request_number: string;
+        status: string;
+        work_assignee_id: string | null;
+        work_status: string;
+        work_completed_at: string | null;
+      }>(
+        `SELECT id, request_number, status, work_assignee_id, work_status, work_completed_at
+           FROM approval_requests
+          WHERE id = $1
+          FOR UPDATE`,
+        [requestId],
+      );
+      const request = requests[0];
+      if (!request) {
+        throw new HttpError(404, "Request not found");
+      }
+      if (request.status !== "approved") {
+        throw new HttpError(400, "Only approved requests can have work status updates");
+      }
+      if (!request.work_assignee_id) {
+        throw new HttpError(400, "Assign the approved work before updating its status");
+      }
+      if (!isAdmin && request.work_assignee_id !== userId) {
+        throw new HttpError(403, "Only the assigned worker can update this work status");
+      }
+
+      const { rows: updatedRequests } = await client.query(
+        `UPDATE approval_requests
+            SET work_status = $1,
+                work_completed_by = CASE WHEN $1 = 'done' THEN $2 ELSE NULL END,
+                work_completed_at = CASE WHEN $1 = 'done' THEN now() ELSE NULL END,
+                updated_at = now()
+          WHERE id = $3
+          RETURNING *`,
+        [body.status, userId, requestId],
+      );
+
+      await client.query("COMMIT");
+
+      await logAudit(
+        userId,
+        req.profile!.full_name,
+        "UPDATE_WORK_STATUS",
+        "Approval Request",
+        `Updated work status for ${request.request_number} to ${body.status}`,
+      );
+
+      await emailNotificationService.notifyWorkStatusUpdated(
+        requestId,
+        req.profile!.full_name,
+        body.status,
+        body.comment,
+      );
+
+      res.json(updatedRequests[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }),
 );
 
@@ -3928,120 +4529,17 @@ apiRouter.post(
   "/approval-requests/:id/request-changes",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
-    const body = actionBody.parse(req.body);
-    const requestId = req.params.id;
-    const userId = req.auth!.userId;
-    const userPermissions = req.profile!.permissions || [];
-    const isAdmin = req.profile!.is_admin;
-
-    const canApproveReject =
-      userPermissions.includes("approve_reject") ||
-      userPermissions.includes("all");
-
-    if (!canApproveReject && !isAdmin) {
-      throw new HttpError(
-        403,
-        "Forbidden: You don't have permission to request changes on requests",
-      );
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const { rows: lockedRequests } = await client.query(
-        `SELECT * FROM approval_requests WHERE id = $1 FOR UPDATE`,
-        [requestId],
-      );
-      if (lockedRequests.length === 0) {
-        throw new HttpError(404, "Request not found");
-      }
-      const lockedRequest = lockedRequests[0];
-      if (lockedRequest.initiator_id === userId) {
-        throw new HttpError(
-          403,
-          "You cannot request changes on your own request",
-        );
-      }
-
-      const currentAction = await findActionableStep(client, {
-        requestId,
-        userId,
-        isAdmin,
-      });
-      if (!currentAction) {
-        throw new HttpError(
-          403,
-          "You are not the assigned approver for the active step on this request",
-        );
-      }
-      await client.query(
-        `UPDATE approval_actions
-            SET status = 'changes_requested', acted_by = $1, acted_at = now(), comment = $2
-          WHERE id = $3`,
-        [userId, body.comment || null, currentAction.id],
-      );
-      await syncRequestStepAction(client, {
-        requestId,
-        stepOrder: Number(currentAction.step_order),
-        userId,
-        status: "CHANGES_REQUESTED",
-        comment: body.comment,
-      });
-      // Pause downstream steps until initiator resubmits.
-      await client.query(
-        `UPDATE approval_actions
-            SET status = 'changes_requested'
-          WHERE request_id = $1
-            AND step_order = $2
-            AND status IN ('pending', 'waiting')`,
-        [requestId, currentAction.step_order],
-      );
-      await client.query(
-        `UPDATE request_steps
-            SET status = 'CHANGES_REQUESTED'
-          WHERE request_id = $1
-            AND step_order = $2
-            AND status IN ('PENDING', 'WAITING')`,
-        [requestId, currentAction.step_order],
-      );
-      await client.query(
-        `UPDATE approval_requests
-            SET status = 'changes_requested', updated_at = now()
-          WHERE id = $1`,
-        [requestId],
-      );
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-
-    const { rows: updatedRequests } = await pool.query(
-      `SELECT * FROM approval_requests WHERE id = $1`,
-      [requestId],
+    throw new HttpError(
+      410,
+      "Request changes has been removed. Assigned approvers can edit the request directly instead.",
     );
-    const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
-      [requestId],
-    );
-
-    await logAudit(
-      userId,
-      req.profile!.full_name,
-      "REQUEST_CHANGES",
-      "Approval Request",
-      `Requested changes on request: ${updatedRequests[0].request_number}`,
-    );
-
-    res.json({ request: updatedRequests[0], actions: updatedActions });
   }),
 );
 
-// Update request form data (initiator only)
+// Update request form data (assigned approver/admin only)
 const updateRequestBody = z.object({
   form_data: z.record(z.any()),
+  comment: z.string().optional(),
 });
 
 apiRouter.delete(
@@ -4142,206 +4640,124 @@ apiRouter.patch(
     const body = updateRequestBody.parse(req.body);
     const requestId = req.params.id;
     const userId = req.auth!.userId;
+    const isAdmin = req.profile!.is_admin;
+    const client = await pool.connect();
 
-    // Get the request
-    const { rows: requests } = await pool.query(
-      `SELECT ar.* FROM approval_requests ar WHERE ar.id = $1`,
-      [requestId],
-    );
-    if (requests.length === 0) throw new HttpError(404, "Request not found");
-    const request = requests[0];
+    try {
+      await client.query("BEGIN");
 
-    // Only initiator can update
-    if (request.initiator_id !== userId) {
-      throw new HttpError(
-        403,
-        "Only the request initiator can update the request",
-      );
-    }
-
-    // If request is not changes_requested, allow only when no approvals have happened yet.
-    const { rows: approvedActions } = await pool.query(
-      `SELECT id FROM approval_actions WHERE request_id = $1 AND status = 'approved' LIMIT 1`,
-      [requestId],
-    );
-    const hasApprovedAction = approvedActions.length > 0;
-
-    if (request.status === "changes_requested") {
-      // Update form_data and set status back to in_progress
-      const { rows: updatedRequests } = await pool.query(
-        `UPDATE approval_requests SET form_data = $1::jsonb, status = 'in_progress', updated_at = now() WHERE id = $2 RETURNING *`,
-        [JSON.stringify(body.form_data), requestId],
-      );
-
-      // Most recent "changes requested" (there may be several from multiple rounds)
-      const { rows: changedActionRows } = await pool.query<{
-        step_order: number;
-      }>(
-        `SELECT step_order FROM approval_actions
-         WHERE request_id = $1 AND status = 'changes_requested'
-         ORDER BY COALESCE(acted_at, created_at) DESC NULLS LAST
-         LIMIT 1`,
+      const { rows: requests } = await client.query(
+        `SELECT ar.* FROM approval_requests ar WHERE ar.id = $1 FOR UPDATE`,
         [requestId],
       );
+      if (requests.length === 0) throw new HttpError(404, "Request not found");
+      const request = requests[0];
 
-      if (changedActionRows.length > 0) {
-        const changedStepOrder = changedActionRows[0].step_order;
+      const currentAction = await findActionableStep(client, {
+        requestId,
+        userId,
+        isAdmin,
+      });
+      const canEditAsApprover =
+        Boolean(currentAction) &&
+        ["pending", "in_progress"].includes(request.status);
 
-        // Deactivate existing waiting / pending actions from old cycle to avoid conflicts
-        await pool.query(
-          `UPDATE approval_actions SET status = 'skipped' WHERE request_id = $1 AND status IN ('pending', 'waiting')`,
-          [requestId],
-        );
-        await pool.query(
-          `UPDATE request_steps SET status = 'SKIPPED'
-             WHERE request_id = $1 AND status IN ('PENDING', 'WAITING')`,
-          [requestId],
-        );
-
-        // Record initiator resubmission in the timeline (before new pending rows so it stays in history)
-        const initiatorName = (req.profile!.full_name || "Initiator").trim();
-        await pool.query(
-          `INSERT INTO approval_actions (
-            request_id, step_order, role_name, action_label, status, acted_by, acted_at
-          ) VALUES ($1, $2, $3, $4, 'resubmitted', $5, now())`,
-          [
-            requestId,
-            1, // Always start from step 1
-            "Initiator",
-            `Resubmitted for review (${initiatorName})`,
-            userId,
-          ],
-        );
-
-        const { rows: chainData } = await pool.query<{
-          steps: any;
-        }>(
-          `SELECT ac.steps
-           FROM approval_chains ac
-           JOIN approval_requests ar ON ar.approval_chain_id = ac.id
-           WHERE ar.id = $1`,
-          [requestId],
-        );
-
-        if (chainData.length === 0 || !chainData[0].steps) {
-          throw new HttpError(400, "No approval chain steps found");
-        }
-
-        const chainSteps = normalizeWorkflowSteps(chainData[0].steps);
-
-        // Recreate actions from the changed step onwards. Steps prior to the
-        // changed step were already completed and remain untouched. Each new
-        // action gets its specific approver re-resolved against the current
-        // department, so role-collision across departments stays distinct.
-        for (const step of chainSteps) {
-          const stepOrder = step.step_order;
-          if (stepOrder < changedStepOrder) continue;
-          const approverId = await resolveApprover(pool, step, {
-            requestId,
-            initiatorId: request.initiator_id,
-            departmentId: request.department_id ?? null,
-            formData: body.form_data,
-          });
-
-          // The step where changes were requested becomes pending; the rest wait.
-          const status = stepOrder === changedStepOrder ? "pending" : "waiting";
-          const legacy = toLegacyActorFields(step);
-          await pool.query(
-            `INSERT INTO request_steps
-               (request_id, step_order, name, actor_type, actor_value, action_label, status, assigned_to, approver_user_id, role, scope_type, scope_value)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)`,
-            [
-              requestId,
-              stepOrder,
-              step.name,
-              legacy.actor_type,
-              legacy.actor_value,
-              step.action_label,
-              status.toUpperCase(),
-              approverId,
-              step.role,
-              step.scope_type,
-              step.scope_value,
-            ],
-          );
-          await pool.query(
-            `INSERT INTO approval_actions
-               (request_id, step_order, role_name, action_label, status, approver_user_id)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              requestId,
-              stepOrder,
-              step.role,
-              step.action_label,
-              status,
-              approverId,
-            ],
-          );
-        }
-
-        // Update the request's current_step to point back to the step where changes were requested
-        await pool.query(
-          `UPDATE approval_requests SET current_step = $1, updated_at = now() WHERE id = $2`,
-          [changedStepOrder, requestId],
+      if (!isAdmin && !canEditAsApprover) {
+        throw new HttpError(
+          403,
+          "Only an admin or the assigned approver for the current step can update this request",
         );
       }
+
+      if (request.status === "approved" || request.status === "rejected") {
+        throw new HttpError(
+          400,
+          "Completed requests cannot be updated",
+        );
+      }
+
+      if (!["pending", "in_progress"].includes(request.status)) {
+        throw new HttpError(
+          400,
+          "Only requests in pending or in_progress can be updated",
+        );
+      }
+
+      const previousFormData =
+        typeof request.form_data === "string"
+          ? JSON.parse(request.form_data)
+          : request.form_data;
+
+      const targetStatus =
+        request.status === "pending" ? "in_progress" : request.status;
+      const { rows: updatedRequests } = await client.query(
+        `UPDATE approval_requests
+            SET form_data = $1::jsonb, status = $2, updated_at = now()
+          WHERE id = $3
+          RETURNING *`,
+        [JSON.stringify(body.form_data), targetStatus, requestId],
+      );
+
+      const editedByApprover = !isAdmin;
+      if (editedByApprover && currentAction) {
+        const historyComment = buildEditHistoryComment({
+          previousData:
+            (previousFormData as Record<string, unknown> | null) ?? {},
+          nextData: body.form_data,
+          editorNote: body.comment,
+        });
+
+        await client.query(
+          `INSERT INTO approval_actions (
+            request_id,
+            step_order,
+            role_name,
+            action_label,
+            status,
+            approver_user_id,
+            acted_by,
+            acted_at,
+            comment
+          ) VALUES ($1, $2, $3, $4, 'edited', $5, $6, now(), $7)`,
+          [
+            requestId,
+            Number(currentAction.step_order),
+            String(currentAction.role_name ?? "Approval Step"),
+            "Edited Request",
+            currentAction.approver_user_id ?? userId,
+            userId,
+            historyComment,
+          ],
+        );
+      }
+
+      await client.query("COMMIT");
 
       const { rows: updatedActions } = await pool.query(
         `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
         [requestId],
       );
 
-      // Log audit event
+      const auditLabel = editedByApprover
+        ? `Edited request contents during approval: ${updatedRequests[0].request_number}`
+        : `Updated request: ${updatedRequests[0].request_number}`;
+
       await logAudit(
         userId,
         req.profile!.full_name,
-        "UPDATE",
+        editedByApprover ? "EDIT" : "UPDATE",
         "Approval Request",
-        `Updated request after changes requested: ${updatedRequests[0].request_number}`,
+        auditLabel,
       );
 
       res.json({ request: updatedRequests[0], actions: updatedActions });
       return;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-
-    if (hasApprovedAction) {
-      throw new HttpError(
-        400,
-        "Cannot update request after approval has been provided",
-      );
-    }
-
-    if (request.status !== "pending" && request.status !== "in_progress") {
-      throw new HttpError(
-        400,
-        "Only requests in pending/in_progress/changes_requested can be updated",
-      );
-    }
-
-    // Update form_data; keep or set in_progress status for chain continuation
-    const targetStatus =
-      request.status === "pending" ? "in_progress" : request.status;
-    const { rows: updatedRequests } = await pool.query(
-      `UPDATE approval_requests SET form_data = $1::jsonb, status = $2, updated_at = now() WHERE id = $3 RETURNING *`,
-      [JSON.stringify(body.form_data), targetStatus, requestId],
-    );
-
-    const { rows: updatedActions } = await pool.query(
-      `SELECT * FROM approval_actions WHERE request_id = $1 ORDER BY step_order ASC, created_at ASC`,
-      [requestId],
-    );
-
-    // Log audit event
-    await logAudit(
-      userId,
-      req.profile!.full_name,
-      "UPDATE",
-      "Approval Request",
-      `Updated request: ${updatedRequests[0].request_number}`,
-    );
-
-    res.json({ request: updatedRequests[0], actions: updatedActions });
-    return;
   }),
 );
 
