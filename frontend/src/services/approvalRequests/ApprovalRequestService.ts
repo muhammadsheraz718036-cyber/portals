@@ -4,7 +4,8 @@ import {
   ApprovalRequestAction,
   CreateApprovalRequestRequest, 
   UpdateApprovalRequestRequest,
-  ApprovalActionRequest
+  ApprovalActionRequest,
+  WorkAssigneeOption,
 } from '../types';
 import { api } from '../../lib/api';
 
@@ -35,6 +36,12 @@ export class ApprovalRequestService extends BaseService {
     );
   }
 
+  async listAssignees(departmentId?: string): Promise<WorkAssigneeOption[]> {
+    return this.handleRequest(() =>
+      api.approvalRequests.listAssignees(departmentId) as Promise<WorkAssigneeOption[]>
+    );
+  }
+
   async update(id: string, data: UpdateApprovalRequestRequest): Promise<ApprovalRequest> {
     return this.handleRequest(() => 
       api.approvalRequests.update(id, data) as Promise<ApprovalRequest>
@@ -59,10 +66,19 @@ export class ApprovalRequestService extends BaseService {
     });
   }
 
-  async requestChanges(id: string, data: ApprovalActionRequest): Promise<void> {
-    return this.handleRequest(async () => {
-      await api.approvalRequests.requestChanges(id, data);
-    });
+  async assignWork(id: string, assigneeId: string): Promise<ApprovalRequest> {
+    return this.handleRequest(() =>
+      api.approvalRequests.assignWork(id, { assignee_id: assigneeId }) as Promise<ApprovalRequest>
+    );
+  }
+
+  async updateWorkStatus(
+    id: string,
+    data: ApprovalActionRequest & { status: "assigned" | "in_progress" | "done" | "not_done" },
+  ): Promise<ApprovalRequest> {
+    return this.handleRequest(() =>
+      api.approvalRequests.updateWorkStatus(id, data) as Promise<ApprovalRequest>
+    );
   }
 
   async resolveNumber(requestNumber: string): Promise<{ id: string }> {

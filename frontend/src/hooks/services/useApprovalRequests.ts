@@ -42,6 +42,14 @@ export const useCreateApprovalRequest = () => {
   });
 };
 
+export const useWorkAssignees = (departmentId?: string | null) => {
+  return useQuery({
+    queryKey: ["work-assignees", departmentId === null ? "all" : (departmentId ?? "default")],
+    queryFn: () => services.approvalRequests.listAssignees(departmentId),
+    staleTime: 10 * 60 * 1000,
+  });
+};
+
 export const useUpdateApprovalRequest = () => {
   const queryClient = useQueryClient();
 
@@ -109,19 +117,43 @@ export const useRejectRequest = () => {
   });
 };
 
-export const useRequestChanges = () => {
+export const useAssignWorkRequest = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data?: ApprovalActionRequest }) =>
-      services.approvalRequests.requestChanges(id, data || {}),
+    mutationFn: ({ id, assigneeId }: { id: string; assigneeId: string }) =>
+      services.approvalRequests.assignWork(id, assigneeId),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
-      toast.success("Changes requested successfully");
+      toast.success("Work assignee updated");
     },
     onError: (error: Error) => {
-      toast.error(error.message || "Failed to request changes");
+      toast.error(error.message || "Failed to assign approved work");
+    },
+  });
+};
+
+export const useUpdateWorkStatusRequest = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: ApprovalActionRequest & {
+        status: "assigned" | "in_progress" | "done" | "not_done";
+      };
+    }) => services.approvalRequests.updateWorkStatus(id, data),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      toast.success("Work status updated");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to update work status");
     },
   });
 };

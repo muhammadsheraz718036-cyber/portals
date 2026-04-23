@@ -144,6 +144,11 @@ export function AdminUsers() {
       return;
     }
 
+    if (!email.trim()) {
+      toast.error("Email is required");
+      return;
+    }
+
     if (!editUser && (!email.trim() || !password.trim())) {
       toast.error("Email and password are required for new users");
       return;
@@ -178,6 +183,7 @@ export function AdminUsers() {
         await updateUserMutation.mutateAsync({
           userId: editUser.id,
           data: {
+            email,
             full_name: fullName,
             department_id: departmentIds[0] ?? null,
             department_ids: departmentIds,
@@ -296,13 +302,12 @@ export function AdminUsers() {
                     />
                   </div>
                   <div className="space-y-1.5 sm:col-span-2">
-                    <Label>Email {editUser && "(read-only)"}</Label>
+                    <Label>Email</Label>
                     <Input
                       type="email"
                       value={email}
-                      onChange={(e) => !editUser && setEmail(e.target.value)}
+                      onChange={(e) => setEmail(e.target.value)}
                       placeholder="john@company.com"
-                      disabled={!!editUser}
                     />
                   </div>
                   {!editUser && (

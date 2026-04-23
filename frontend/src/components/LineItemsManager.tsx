@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Trash2 } from "lucide-react";
 import type { ApprovalFormField } from "@/lib/constants";
 
 export interface LineItem {
@@ -27,6 +26,38 @@ interface LineItemsManagerProps {
   title?: string;
 }
 
+function getGroups(repeatableFields: ApprovalFormField[]) {
+  return Array.from(
+    new Set(repeatableFields.map((field) => field.group || "General")),
+  );
+}
+
+export function buildSingleEntryItems(
+  repeatableFields: ApprovalFormField[],
+  items: LineItem[] = [],
+): LineItem[] {
+  const groups = getGroups(repeatableFields);
+
+  return groups.map((group, index) => {
+    const existing = items.find(
+      (item) => String(item.__group || "General") === group,
+    );
+
+    const nextItem: LineItem = {
+      id: existing?.id || `${group}-${index}`,
+      __group: group,
+    };
+
+    repeatableFields
+      .filter((field) => (field.group || "General") === group)
+      .forEach((field) => {
+        nextItem[field.name] = existing?.[field.name] ?? "";
+      });
+
+    return nextItem;
+  });
+}
+
 export function LineItemsManager({
   items,
   onItemsChange,
@@ -37,33 +68,27 @@ export function LineItemsManager({
     return null;
   }
 
-  const groups = Array.from(
-    new Set(repeatableFields.map((field) => field.group || "General")),
+  const groups = useMemo(
+    () => getGroups(repeatableFields),
+    [repeatableFields],
   );
 
-  const addItemToGroup = (group: string) => {
-    const newItem: LineItem = {
-      id: Date.now().toString(),
-      __group: group,
-    };
+  const normalizedItems = useMemo(
+    () => buildSingleEntryItems(repeatableFields, items),
+    [repeatableFields, items],
+  );
 
-    // Initialize only group fields
-    repeatableFields
-      .filter((field) => (field.group || "General") === group)
-      .forEach((field) => {
-        newItem[field.name] = "";
-      });
-
-    onItemsChange([...items, newItem]);
-  };
-
-  const removeItem = (id: string) => {
-    onItemsChange(items.filter((item) => item.id !== id));
-  };
+  useEffect(() => {
+    const current = JSON.stringify(items);
+    const normalized = JSON.stringify(normalizedItems);
+    if (current !== normalized) {
+      onItemsChange(normalizedItems);
+    }
+  }, [items, normalizedItems, onItemsChange]);
 
   const updateItem = (id: string, fieldName: string, value: unknown) => {
     onItemsChange(
-      items.map((item) =>
+      normalizedItems.map((item) =>
         item.id === id
           ? {
               ...item,
@@ -104,7 +129,7 @@ export function LineItemsManager({
                 updateItem(itemId, field.name, "");
               }
             }}
-            className="w-full bg-background border-0 px-2 focus-visible:ring-0"
+            className="h-10 w-full border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         );
 
@@ -114,7 +139,7 @@ export function LineItemsManager({
             type="date"
             value={stringValue}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
-            className="w-full bg-background border-0 px-2 focus-visible:ring-0"
+            className="h-10 w-full border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         );
 
@@ -124,7 +149,7 @@ export function LineItemsManager({
             value={String(value)}
             onValueChange={(v) => updateItem(itemId, field.name, v)}
           >
-            <SelectTrigger className="h-8 bg-background border-0 px-2 focus:ring-0">
+            <SelectTrigger className="h-10 border border-input bg-background px-3 focus:ring-2 focus:ring-primary/30">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -142,7 +167,7 @@ export function LineItemsManager({
           <Textarea
             value={String(value)}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
-            className="bg-background border-0 px-2 focus-visible:ring-0"
+            className="min-h-[88px] border border-input bg-background px-3 py-2 focus-visible:ring-2 focus-visible:ring-primary/30"
             rows={2}
           />
         );
@@ -192,7 +217,7 @@ export function LineItemsManager({
             type="text"
             value={String(value)}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
-            className="w-full bg-background border-0 px-2 focus-visible:ring-0"
+            className="h-10 w-full border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         );
     }
@@ -216,82 +241,44 @@ export function LineItemsManager({
               const groupFields = repeatableFields.filter(
                 (field) => (field.group || "General") === group,
               );
-              const groupItems = items.filter(
+              const groupItems = normalizedItems.filter(
                 (item) => String(item.__group || "General") === group,
               );
+              const groupItem = groupItems[0];
 
               return (
                 <div key={group} className="rounded-lg border bg-muted/10">
                   <div className="flex items-center justify-between border-b px-4 py-3">
                     <h4 className="text-sm font-semibold">{group}</h4>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addItemToGroup(group)}
-                    >
-                      <Plus className="h-4 w-4" /> Add Entry
-                    </Button>
                   </div>
 
-                  {groupItems.length === 0 ? (
+                  {!groupItem ? (
                     <div className="p-4 text-sm text-muted-foreground">
-                      No entries yet for this group.
+                      This section is loading.
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b bg-muted/30">
-                            {groupFields.map((field) => (
-                              <th
-                                key={`${group}-${field.name}`}
-                                className={`text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap ${
-                                  field.type === "number" ? "text-right" : ""
-                                }`}
-                              >
-                                {field.label}
-                                {field.required && (
-                                  <span className="text-destructive ml-1">
-                                    *
-                                  </span>
-                                )}
-                              </th>
-                            ))}
-                            <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide w-12 whitespace-nowrap">
-                              Action
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y">
-                          {groupItems.map((item) => (
-                            <tr
-                              key={item.id}
-                              className="hover:bg-muted/30 transition-colors"
-                            >
-                              {groupFields.map((field) => (
-                                <td
-                                  key={`${item.id}-${field.name}`}
-                                  className={`px-4 py-3 ${field.type === "number" ? "text-right" : ""}`}
-                                >
-                                  {renderFieldInput(field, item, item.id)}
-                                </td>
-                              ))}
-                              <td className="text-center px-4 py-3">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => removeItem(item.id)}
-                                  className="text-destructive hover:text-destructive"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="grid gap-4 p-4 sm:grid-cols-2">
+                      {groupFields.map((field) => (
+                        <div
+                          key={`${groupItem.id}-${field.name}`}
+                          className={`space-y-2 rounded-lg bg-background/70 p-3 ${
+                            field.type === "textarea" ? "sm:col-span-2" : ""
+                          }`}
+                        >
+                          <Label
+                            htmlFor={`${groupItem.id}-${field.name}`}
+                            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                          >
+                            {field.label}
+                            {field.required && (
+                              <span className="ml-1 text-destructive">*</span>
+                            )}
+                          </Label>
+                          <div id={`${groupItem.id}-${field.name}`}>
+                            {renderFieldInput(field, groupItem, groupItem.id)}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

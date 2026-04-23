@@ -29,6 +29,14 @@ export async function verifyDatabaseReady(): Promise<void> {
       );
       process.exit(1);
     }
+    if (err.code === "ETIMEDOUT" || err.code === "ENETUNREACH") {
+      console.error(
+        `\n[PostgreSQL] Connection timed out — ${err.message}\n` +
+          "The database host is reachable in DNS but not accepting connections from this machine/network.\n" +
+          "Check your internet/firewall/VPN settings, confirm the DATABASE_URL host/port are correct, and verify your Postgres provider allows direct access from your current network.\n",
+      );
+      process.exit(1);
+    }
     if (err.code === "28P01" || err.code === "password authentication failed") {
       console.error(`\n[PostgreSQL] Authentication failed — check username/password in DATABASE_URL.\n`);
       process.exit(1);
@@ -77,6 +85,83 @@ export async function verifyDatabaseReady(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_approval_actions_request_step
       ON approval_actions(request_id, step_order)
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_assignee_id UUID
+  `);
+  await pool.query(`
+    ALTER TABLE approval_types
+      ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID
+  `);
+  await pool.query(`
+    ALTER TABLE approval_chains
+      ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_assigned_by UUID
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_assigned_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_completed_by UUID
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_completed_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE approval_requests
+      ADD COLUMN IF NOT EXISTS work_status TEXT NOT NULL DEFAULT 'pending'
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_approval_requests_work_assignee
+      ON approval_requests(work_assignee_id)
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+          FROM information_schema.table_constraints
+         WHERE table_schema = 'public'
+           AND table_name = 'approval_requests'
+           AND constraint_name = 'approval_requests_work_status_check'
+      ) THEN
+        ALTER TABLE approval_requests
+          DROP CONSTRAINT approval_requests_work_status_check;
+      END IF;
+
+      ALTER TABLE approval_requests
+        ADD CONSTRAINT approval_requests_work_status_check
+        CHECK (work_status IN ('pending', 'assigned', 'in_progress', 'done', 'not_done'));
+    END
+    $$;
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+          FROM information_schema.table_constraints
+         WHERE table_schema = 'public'
+           AND table_name = 'approval_actions'
+           AND constraint_name = 'approval_actions_status_check'
+      ) THEN
+        ALTER TABLE approval_actions
+          DROP CONSTRAINT approval_actions_status_check;
+      END IF;
+
+      ALTER TABLE approval_actions
+        ADD CONSTRAINT approval_actions_status_check
+        CHECK (status IN ('waiting', 'pending', 'approved', 'rejected', 'skipped', 'changes_requested', 'resubmitted', 'edited'));
+    END
+    $$;
   `);
 
   await pool.query(`

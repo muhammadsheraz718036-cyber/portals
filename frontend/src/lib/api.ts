@@ -179,6 +179,7 @@ export const api = {
       post_salutation?: string | null;
       allow_attachments?: boolean;
       department_id?: string | null;
+      default_work_assignee_id?: string | null;
     }) =>
       request("/api/approval-types", {
         method: "POST",
@@ -195,6 +196,7 @@ export const api = {
         post_salutation?: string | null;
         allow_attachments?: boolean;
         department_id?: string | null;
+        default_work_assignee_id?: string | null;
       },
     ) =>
       request(`/api/approval-types/${id}`, {
@@ -210,6 +212,7 @@ export const api = {
     create: (body: {
       name: string;
       approval_type_id: string;
+      default_work_assignee_id?: string | null;
       steps: Array<{
         step_order: number;
         name: string;
@@ -228,6 +231,7 @@ export const api = {
       body: {
         name?: string;
         approval_type_id?: string;
+        default_work_assignee_id?: string | null;
         steps?: Array<{
           step_order: number;
           name: string;
@@ -287,6 +291,7 @@ export const api = {
     updateUser: (
       userId: string,
       body: {
+        email?: string;
         full_name?: string;
         department_id?: string | null;
         department_ids?: string[];
@@ -314,6 +319,15 @@ export const api = {
 
   approvalRequests: {
     list: () => request<unknown[]>("/api/approval-requests"),
+    listAssignees: (departmentId?: string | null) => {
+      const departmentQuery =
+        departmentId === null
+          ? "?department_id=all"
+          : departmentId
+            ? `?department_id=${encodeURIComponent(departmentId)}`
+            : "";
+      return request<unknown[]>(`/api/approval-requests/assignees${departmentQuery}`);
+    },
     get: (id: string) =>
       request<{
         request: Record<string, unknown> & {
@@ -347,14 +361,22 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    requestChanges: (id: string, body: { comment?: string }) =>
-      request("/api/approval-requests/" + id + "/request-changes", {
+    update: (id: string, body: { form_data: Record<string, unknown>; comment?: string }) =>
+      request("/api/approval-requests/" + id, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    assignWork: (id: string, body: { assignee_id: string }) =>
+      request("/api/approval-requests/" + id + "/assign-work", {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    update: (id: string, body: { form_data: Record<string, unknown> }) =>
-      request("/api/approval-requests/" + id, {
-        method: "PATCH",
+    updateWorkStatus: (
+      id: string,
+      body: { status: "assigned" | "in_progress" | "done" | "not_done"; comment?: string },
+    ) =>
+      request("/api/approval-requests/" + id + "/work-status", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
     delete: (id: string) =>

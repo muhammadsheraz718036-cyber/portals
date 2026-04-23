@@ -22,7 +22,11 @@ import {
 } from "@/hooks/services";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
-import { LineItemsManager, type LineItem } from "@/components/LineItemsManager";
+import {
+  LineItemsManager,
+  buildSingleEntryItems,
+  type LineItem,
+} from "@/components/LineItemsManager";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { FileUpload } from "@/components/FileUpload";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -85,6 +89,7 @@ export default function NewRequest() {
   useEffect(() => {
     setSelectedType("");
   }, [departmentFilter]);
+
   const safePreComments = preComments ? sanitizeHtml(preComments) : "";
   const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
@@ -94,6 +99,22 @@ export default function NewRequest() {
     () => getGroupRenderOrder(repeatableFields),
     [repeatableFields],
   );
+  const defaultItems = useMemo(
+    () => buildSingleEntryItems(repeatableFields, []),
+    [repeatableFields],
+  );
+
+  useEffect(() => {
+    if (!selectedType) {
+      setItems((current) => (current.length === 0 ? current : []));
+      return;
+    }
+
+    setItems((current) => {
+      const next = buildSingleEntryItems(repeatableFields, current);
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+    });
+  }, [selectedType, defaultItems, repeatableFields]);
 
   const companyName = settings?.company_name || "COMPANY NAME";
 
@@ -119,7 +140,7 @@ export default function NewRequest() {
       }
     }
 
-    // Validate required fields in items (all fields are now repeatable)
+    // Validate required fields in the single entry for each group
     if (repeatableFields.some((f) => f.required)) {
       for (const item of items) {
         // Get fields applicable to this item's group
@@ -133,7 +154,7 @@ export default function NewRequest() {
         );
         if (missingItemFields.length > 0) {
           toast.error(
-            `Please fill in required fields in all line items: ${missingItemFields.map((f) => f.label).join(", ")}`,
+            `Please fill in required fields: ${missingItemFields.map((f) => f.label).join(", ")}`,
           );
           return;
         }
@@ -207,85 +228,106 @@ export default function NewRequest() {
   }
 
   return (
-    <div className="p-6 space-y-6 w-full">
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/approvals")}
-        >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Back
-        </Button>
-        <Separator orientation="vertical" className="h-6" />
-        <h1 className="text-xl font-bold text-foreground">
-          New Approval Request
-        </h1>
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <Card className="border">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Select Request Type</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="pb-4">
-              <p className="text-sm font-medium text-foreground mb-2">
-                Filter Request Types by Department
-              </p>
-              <Select
-                value={departmentFilter}
-                onValueChange={(v) => {
-                  setDepartmentFilter(v);
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a department filter..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Departments</SelectItem>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept.id} value={dept.id}>
-                      {dept.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Select
-              value={selectedType}
-              onValueChange={(v) => {
-                setSelectedType(v);
-                setFormValues({});
-                setItems([]);
-                setPreComments("");
-                setPostComments("");
-                setAttachmentFiles({});
-                // setEditorContent("");
-              }}
+    <div className="p-4 sm:p-6">
+      <div className="mx-auto w-full max-w-6xl space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/approvals")}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Choose an approval type..." />
-              </SelectTrigger>
-              <SelectContent>
-                {types.map((type) => (
-                  <SelectItem key={type.id} value={type.id}>
-                    {type.name}{" "}
-                    {type.description ? ` - ${type.description}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {types.length === 0 && (
-              <p className="text-sm text-muted-foreground mt-2">
-                No approval types configured yet.
+              <ArrowLeft className="mr-1 h-4 w-4" /> Back
+            </Button>
+            <Separator orientation="vertical" className="h-6" />
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-foreground">
+                New Approval Request
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Select a type, fill details, and submit for approval.
               </p>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          </div>
+        </div>
 
-        {approvalType && (
-          <>
-            <Card className="border">
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Select Request Type</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Department Scope
+                  </p>
+                  <Select
+                    value={departmentFilter}
+                    onValueChange={(v) => {
+                      setDepartmentFilter(v);
+                    }}
+                  >
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="Choose a department filter..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Departments</SelectItem>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept.id} value={dept.id}>
+                          {dept.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Approval Type
+                  </p>
+                  <Select
+                    value={selectedType}
+                    onValueChange={(v) => {
+                      setSelectedType(v);
+                      setFormValues({});
+                      setItems([]);
+                      setPreComments("");
+                      setPostComments("");
+                      setAttachmentFiles({});
+                    }}
+                  >
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="Choose an approval type..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {types.map((type) => (
+                        <SelectItem key={type.id} value={type.id}>
+                          {type.name}{" "}
+                          {type.description ? ` - ${type.description}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {types.length === 0 && (
+                <p className="px-1 text-sm text-muted-foreground">
+                  No approval types configured yet.
+                </p>
+              )}
+              {selectedType && (
+                <p className="px-1 text-sm text-muted-foreground">
+                  Fill in your request data in the sections below, then submit.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          {approvalType && (
+            <>
+              <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Request Details</CardTitle>
               </CardHeader>
@@ -330,69 +372,75 @@ export default function NewRequest() {
                 </div>
                 */}
               </CardContent>
-            </Card>
-
-            {/* Line Items Manager */}
-            <LineItemsManager
-              items={items}
-              onItemsChange={setItems}
-              repeatableFields={repeatableFields}
-            />
-
-            {/* File Attachments */}
-            {attachmentConfigs.length > 0 && (
-              <Card className="border">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">File Attachments</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {attachmentConfigs.map((config) => (
-                    <FileUpload
-                      key={config.field_name}
-                      fieldName={config.field_name}
-                      label={config.label}
-                      required={config.required}
-                      maxFiles={config.max_files}
-                      maxSizeMB={config.max_file_size_mb}
-                      allowedExtensions={config.allowed_extensions}
-                      value={attachmentFiles[config.field_name] || []}
-                      onChange={(files) =>
-                        setAttachmentFiles((prev) => ({
-                          ...prev,
-                          [config.field_name]: files,
-                        }))
-                      }
-                    />
-                  ))}
-                </CardContent>
               </Card>
-            )}
+
+              {/* Line Items Manager */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Request Input Fields</p>
+                <p className="text-xs text-muted-foreground">
+                  Enter your values in the fields below.
+                </p>
+                <LineItemsManager
+                  items={items}
+                  onItemsChange={setItems}
+                  repeatableFields={repeatableFields}
+                />
+              </div>
+
+              {/* File Attachments */}
+              {attachmentConfigs.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">File Attachments</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {attachmentConfigs.map((config) => (
+                      <FileUpload
+                        key={config.field_name}
+                        fieldName={config.field_name}
+                        label={config.label}
+                        required={config.required}
+                        maxFiles={config.max_files}
+                        maxSizeMB={config.max_file_size_mb}
+                        allowedExtensions={config.allowed_extensions}
+                        value={attachmentFiles[config.field_name] || []}
+                        onChange={(files) =>
+                          setAttachmentFiles((prev) => ({
+                            ...prev,
+                            [config.field_name]: files,
+                          }))
+                        }
+                      />
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
 
             {/* Post-Comments (Closing Remarks) */}
-            {repeatableFields.length > 0 && (
-              <Card className="border">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Closing Remarks</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {approvalType?.post_salutation && (
-                    <div className="space-y-2">
-                      <label className="block text-sm font-medium text-foreground">
-                        Post-Comments
-                      </label>
-                      <RichTextEditor
-                        content={postComments}
-                        onChange={setPostComments}
-                        placeholder="e.g., Thank you for your time and consideration. Please contact me if you need any additional information."
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Add a closing statement or signature
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
+              {repeatableFields.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Closing Remarks</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {approvalType?.post_salutation && (
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium text-foreground">
+                          Post-Comments
+                        </label>
+                        <RichTextEditor
+                          content={postComments}
+                          onChange={setPostComments}
+                          placeholder="e.g., Thank you for your time and consideration. Please contact me if you need any additional information."
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Add a closing statement or signature
+                        </p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
 
             {/* Letter Preview (live, before submission) */}
             {approvalType &&
@@ -420,19 +468,6 @@ export default function NewRequest() {
                       overflow: "hidden",
                     }}
                   >
-                    {/* Watermark */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.06] rotate-[-35deg]">
-                      <span
-                        className="font-bold tracking-widest whitespace-nowrap select-none"
-                        style={{
-                          fontFamily: "Arial, sans-serif",
-                          fontSize: "6rem",
-                        }}
-                      >
-                        {user?.email}
-                      </span>
-                    </div>
-
                     <div className="relative z-10 flex-1 flex flex-col">
                       <div className="text-center border-b-2 border-foreground pb-3">
                         {settings?.logo_url && (
@@ -502,38 +537,39 @@ export default function NewRequest() {
 
                               if (groupFields.length === 0) return null;
 
-                              return (
-                                <div key={group} className="pb-3">
-                                  <h3 className="text-sm font-semibold mb-2">
-                                    {group}
-                                  </h3>
-                                  {groupItems.length === 0 ? (
-                                    <p className="text-sm text-muted-foreground py-2">
-                                      No entries for this group.
-                                    </p>
-                                  ) : (
-                                    <table
-                                      className="w-full border-collapse"
-                                      style={{ fontSize: "12px" }}
-                                    >
-                                      <thead>
-                                        <tr>
-                                          {groupFields.map((field) => (
-                                            <th
-                                              key={`${group}-${field.name}-header`}
-                                              className="border border-foreground bg-muted font-semibold text-center"
-                                            >
-                                              {field.label || field.name}
-                                            </th>
-                                          ))}
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {groupItems.map((item, idx: number) => (
-                                          <tr key={idx}>
-                                            {groupFields.map((field) => {
-                                              const val = item[field.name];
-                                              let displayValue = val ?? "—";
+                                return (
+                                  <div key={group} className="pb-3">
+                                    <h3 className="text-sm font-semibold mb-2">
+                                      {group}
+                                    </h3>
+                                    {groupItems.length === 0 ? (
+                                      <p className="text-sm text-muted-foreground py-2">
+                                        No values entered for this group.
+                                      </p>
+                                    ) : (
+                                      <table
+                                        className="w-full border-collapse"
+                                        style={{ fontSize: "12px" }}
+                                      >
+                                        <thead>
+                                          <tr>
+                                            {groupFields.map((field) => (
+                                              <th
+                                                key={`${group}-${field.name}-header`}
+                                                className="border border-foreground bg-muted font-semibold text-center"
+                                              >
+                                                {field.label || field.name}
+                                              </th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {groupItems.map(
+                                            (item, idx: number) => (
+                                              <tr key={idx}>
+                                                {groupFields.map((field) => {
+                                                  const val = item[field.name];
+                                                  let displayValue = val ?? "—";
 
                                               if (field.type === "checkbox") {
                                                 displayValue =
@@ -598,7 +634,7 @@ export default function NewRequest() {
                 );
 
                 return (
-                  <Card className="border">
+                  <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">
                         Letter Preview
@@ -624,68 +660,71 @@ export default function NewRequest() {
                 );
               })()}
 
-            {chain ? (
-              <Card className="border">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">
-                    Approval Chain: {chain.name}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    {chain.steps.map((step) => (
-                      <div
-                        key={`${step.step_order}-${step.role}`}
-                        className="flex items-center gap-3 text-sm"
-                      >
-                        <div className="h-6 w-6 rounded bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
-                          {step.step_order}
+              {chain ? (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">
+                      Approval Chain: {chain.name}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {chain.steps.map((step) => (
+                        <div
+                          key={`${step.step_order}-${step.role}`}
+                          className="flex items-start gap-3 border-l-2 border-primary/30 pl-3 text-sm"
+                        >
+                          <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                            {step.step_order}
+                          </div>
+                          <div className="space-y-0.5">
+                            <p className="font-medium">{step.role}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {step.action_label
+                                ? formatExistingActionLabel(step.role, step.action_label)
+                                : getScopeLabel(
+                                    step.scope_type,
+                                    step.scope_value,
+                                  )}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <span className="font-medium">{step.role}</span>
-                          <span className="text-muted-foreground ml-2">
-                            {step.action_label
-                              ? `- ${formatExistingActionLabel(step.role, step.action_label)}`
-                              : `- ${getScopeLabel(
-                                  step.scope_type,
-                                  step.scope_value,
-                                )}`}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                    {chain.steps.length === 0 && (
-                      <p className="text-sm text-muted-foreground">
-                        This chain has no steps yet.
-                      </p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ) : (
-              selectedType && (
-                <p className="text-sm text-destructive">
-                  No approval chain is configured for this type. Ask an
-                  administrator to create one in Admin → Chains.
-                </p>
-              )
-            )}
-
-            <Button
-              type="submit"
-              className="gap-2"
-              disabled={createMutation.isPending || !chain}
-            >
-              {createMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                      ))}
+                      {chain.steps.length === 0 && (
+                        <p className="text-sm text-muted-foreground">
+                          This chain has no steps yet.
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
               ) : (
-                <Send className="h-4 w-4" />
+                selectedType && (
+                  <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    No approval chain is configured for this type. Ask an
+                    administrator to create one in Admin → Chains.
+                  </p>
+                )
               )}
-              Submit Request
-            </Button>
-          </>
-        )}
-      </form>
+
+              <div className="sticky bottom-3 z-10 bg-background/95 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                <Button
+                  type="submit"
+                  className="w-full gap-2 sm:w-auto"
+                  disabled={createMutation.isPending || !chain}
+                >
+                  {createMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  Submit Request
+                </Button>
+              </div>
+            </>
+          )}
+        </form>
+      </div>
     </div>
   );
 }
