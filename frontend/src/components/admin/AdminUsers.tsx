@@ -11,6 +11,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -313,8 +314,7 @@ export function AdminUsers() {
                   {!editUser && (
                     <div className="space-y-1.5 sm:col-span-2">
                       <Label>Password</Label>
-                      <Input
-                        type="password"
+                      <PasswordInput
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder={PASSWORD_POLICY_HINT}
@@ -465,8 +465,7 @@ export function AdminUsers() {
                       {changePassword && (
                         <div className="space-y-1.5">
                           <Label>New Password</Label>
-                          <Input
-                            type="password"
+                          <PasswordInput
                             value={newPassword}
                             onChange={(e) => setNewPassword(e.target.value)}
                             placeholder={PASSWORD_POLICY_HINT}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-hooks";
 import { toast } from "sonner";
@@ -124,8 +125,7 @@ export default function Profile() {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>Current Password</Label>
-            <Input
-              type="password"
+            <PasswordInput
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               placeholder="Enter your current password"
@@ -133,8 +133,7 @@ export default function Profile() {
           </div>
           <div className="space-y-1.5">
             <Label>New Password</Label>
-            <Input
-              type="password"
+            <PasswordInput
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder={PASSWORD_POLICY_HINT}
@@ -142,8 +141,7 @@ export default function Profile() {
           </div>
           <div className="space-y-1.5">
             <Label>Confirm New Password</Label>
-            <Input
-              type="password"
+            <PasswordInput
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Confirm new password"

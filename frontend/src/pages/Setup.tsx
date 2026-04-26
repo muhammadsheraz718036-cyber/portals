@@ -4,6 +4,7 @@ import { Navigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Label } from "@/components/ui/label";
 import { setStoredToken } from "@/lib/api";
 import { toast } from "sonner";
@@ -98,8 +99,7 @@ export default function Setup() {
             </div>
             <div className="space-y-1.5">
               <Label>Password</Label>
-              <Input
-                type="password"
+              <PasswordInput
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder={PASSWORD_POLICY_HINT}

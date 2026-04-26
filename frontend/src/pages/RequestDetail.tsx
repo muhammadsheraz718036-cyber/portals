@@ -754,14 +754,15 @@ export default function RequestDetail() {
       canApprove()
     );
 
-  const fields: ApprovalFormField[] = Array.isArray(
-    request?.approval_types?.fields,
-  )
-    ? (request!.approval_types!.fields as unknown as ApprovalFormField[])
-    : [];
-
-  // All fields are now repeatable (line items)
-  const repeatableFields = fields;
+  // All fields are now repeatable (line items).
+  // Keep this memoized to avoid retriggering effects from new array references.
+  const repeatableFields: ApprovalFormField[] = useMemo(
+    () =>
+      Array.isArray(request?.approval_types?.fields)
+        ? (request.approval_types!.fields as unknown as ApprovalFormField[])
+        : [],
+    [request?.approval_types?.fields],
+  );
   const repeatableGroupOrder = useMemo(
     () => getGroupRenderOrder(repeatableFields),
     [repeatableFields],
@@ -773,15 +774,23 @@ export default function RequestDetail() {
 
   // Initialize form data when entering update mode (line items live under form_data.items)
   useEffect(() => {
-    if (showUpdateForm && request?.form_data) {
-      const fd = { ...(request.form_data as Record<string, unknown>) };
-      fd.items = normalizeItemsForGroups(fd.items, repeatableFields);
-      setUpdatingFormData(fd);
-    } else if (!showUpdateForm) {
-      setUpdatingFormData({});
-      setUpdateComment("");
+    if (!showUpdateForm || !request?.form_data) {
+      return;
     }
+    const fd = { ...(request.form_data as Record<string, unknown>) };
+    fd.items = normalizeItemsForGroups(fd.items, repeatableFields);
+    setUpdatingFormData((prev) =>
+      JSON.stringify(prev) === JSON.stringify(fd) ? prev : fd,
+    );
   }, [showUpdateForm, request?.form_data, repeatableFields]);
+
+  useEffect(() => {
+    if (showUpdateForm) {
+      return;
+    }
+    setUpdatingFormData((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+    setUpdateComment((prev) => (prev ? "" : prev));
+  }, [showUpdateForm]);
 
   const formData = (request?.form_data as Record<string, unknown>) ?? {};
   const items = Array.isArray(formData.items) ? formData.items : [];
