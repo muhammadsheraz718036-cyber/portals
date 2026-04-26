@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Edit, Trash2, Unlock, Key } from "lucide-react";
+import { Plus, Edit, Trash2, Unlock, Key, Upload } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import {
   useUpdateUser,
   useDeleteUser,
   useResetUserPassword,
+  useUploadUserSignature,
 } from "@/hooks/services";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/auth-hooks";
@@ -32,6 +33,7 @@ interface Profile {
   id: string;
   full_name: string;
   email: string;
+  signature_url?: string | null;
   department_id: string | null;
   department_ids: string[];
   role_id: string | null;
@@ -67,6 +69,8 @@ export function AdminUsers() {
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [signaturePreview, setSignaturePreview] = useState("");
+  const [signatureFile, setSignatureFile] = useState<File | null>(null);
   const [password, setPassword] = useState("");
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [roleIds, setRoleIds] = useState<string[]>([]);
@@ -83,6 +87,7 @@ export function AdminUsers() {
   const updateUserMutation = useUpdateUser();
   const deleteUserMutation = useDeleteUser();
   const resetPasswordMutation = useResetUserPassword();
+  const uploadSignatureMutation = useUploadUserSignature();
 
   const hasAdminConsoleAccess =
     currentUser?.is_admin ||
@@ -103,6 +108,8 @@ export function AdminUsers() {
     setEditUser(null);
     setFullName("");
     setEmail("");
+    setSignaturePreview("");
+    setSignatureFile(null);
     setPassword("");
     setDepartmentIds([]);
     setRoleIds([]);
@@ -117,6 +124,8 @@ export function AdminUsers() {
     setEditUser(user);
     setFullName(user.full_name);
     setEmail(user.email);
+    setSignaturePreview(user.signature_url ?? "");
+    setSignatureFile(null);
     setPassword("");
     setDepartmentIds(
       user.department_ids?.length
@@ -137,6 +146,20 @@ export function AdminUsers() {
     setChangePassword(false);
     setNewPassword("");
     setDialogOpen(true);
+  };
+
+  const handleSignatureFileChange = (file: File | undefined) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.error("Signature must be a PNG or JPG image");
+      return;
+    }
+    setSignatureFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSignaturePreview(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSave = async () => {
@@ -202,9 +225,17 @@ export function AdminUsers() {
           });
         }
 
+        if (signatureFile) {
+          await uploadSignatureMutation.mutateAsync({
+            userId: editUser.id,
+            file: signatureFile,
+          });
+          setSignatureFile(null);
+        }
+
         toast.success("User updated successfully");
       } else {
-        await createUserMutation.mutateAsync({
+        const created = await createUserMutation.mutateAsync({
           email,
           password,
           full_name: fullName,
@@ -214,6 +245,13 @@ export function AdminUsers() {
           role_ids: roleIds,
           is_admin: isAdmin,
         });
+        if (signatureFile) {
+          await uploadSignatureMutation.mutateAsync({
+            userId: created.id,
+            file: signatureFile,
+          });
+          setSignatureFile(null);
+        }
         toast.success("User created successfully");
       }
       setDialogOpen(false);
@@ -310,6 +348,23 @@ export function AdminUsers() {
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="john@company.com"
                     />
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label>Signature Image</Label>
+                    <Input
+                      type="file"
+                      accept="image/png,image/jpeg"
+                      onChange={(e) => handleSignatureFileChange(e.target.files?.[0])}
+                    />
+                    {signaturePreview && (
+                      <div className="rounded-md border bg-white p-2">
+                        <img
+                          src={signaturePreview}
+                          alt="Signature preview"
+                          className="h-12 max-w-[200px] object-contain"
+                        />
+                      </div>
+                    )}
                   </div>
                   {!editUser && (
                     <div className="space-y-1.5 sm:col-span-2">
@@ -488,8 +543,20 @@ export function AdminUsers() {
                     ? "Updating..."
                     : "Creating..."
                   : editUser
-                    ? "Update User"
-                    : "Create User"}
+                    ? signatureFile
+                      ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Upload className="h-4 w-4" /> Update User
+                        </span>
+                      )
+                      : "Update User"
+                    : signatureFile
+                      ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Upload className="h-4 w-4" /> Create User
+                        </span>
+                      )
+                      : "Create User"}
               </Button>
             </div>
           </DialogContent>
@@ -534,6 +601,11 @@ export function AdminUsers() {
                         {user.is_locked && (
                           <Badge variant="destructive" className="text-[10px]">
                             Locked
+                          </Badge>
+                        )}
+                        {user.signature_url && (
+                          <Badge variant="outline" className="text-[10px]">
+                            Signature
                           </Badge>
                         )}
                       </div>

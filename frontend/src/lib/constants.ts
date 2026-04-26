@@ -89,7 +89,6 @@ export type ApprovalTypeRow = {
   pre_salutation?: string;
   post_salutation?: string;
   department_id?: string | null;
-  default_work_assignee_id?: string | null;
   created_at?: string;
   updated_at?: string;
 } | null;
@@ -107,7 +106,7 @@ export type ChainRow = {
   id: string;
   name: string;
   approval_type_id: string | null;
-  default_work_assignee_id?: string | null;
+  work_assignee_id?: string | null;
   steps: ChainStep[];
 };
 

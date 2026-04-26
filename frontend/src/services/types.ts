@@ -2,6 +2,7 @@ export interface Profile {
   id: string;
   full_name: string;
   email: string;
+  signature_url?: string | null;
   department_id: string | null;
   department_ids: string[];
   department_names?: string[];
@@ -75,7 +76,6 @@ export interface ApprovalType {
   pre_salutation?: string;
   post_salutation?: string;
   department_id?: string | null;
-  default_work_assignee_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -89,7 +89,6 @@ export interface CreateApprovalTypeRequest {
   post_salutation?: string | null;
   allow_attachments?: boolean;
   department_id?: string | null;
-  default_work_assignee_id?: string | null;
 }
 
 export interface UpdateApprovalTypeRequest {
@@ -101,7 +100,6 @@ export interface UpdateApprovalTypeRequest {
   post_salutation?: string | null;
   allow_attachments?: boolean;
   department_id?: string | null;
-  default_work_assignee_id?: string | null;
 }
 
 export interface ApprovalTypeAttachment {
@@ -136,7 +134,7 @@ export interface ApprovalChain {
   id: string;
   name: string;
   approval_type_id: string;
-  default_work_assignee_id?: string | null;
+  work_assignee_id?: string | null;
   steps: Array<{
     step_order: number;
     name: string;
@@ -160,7 +158,7 @@ export interface ApprovalRequest {
   status: string;
   work_status?: "pending" | "assigned" | "in_progress" | "done" | "not_done";
   request_number?: string;
-  initiator?: { full_name: string };
+  initiator?: { full_name: string; signature_url?: string | null };
   approval_types?: unknown;
   departments?: unknown;
   has_attachments?: boolean;
@@ -243,14 +241,14 @@ export interface UpdateApprovalTypeAttachmentRequest {
 export interface CreateApprovalChainRequest {
   name: string;
   approval_type_id: string;
-  default_work_assignee_id?: string | null;
+  work_assignee_id?: string | null;
   steps: ApprovalChain["steps"];
 }
 
 export interface UpdateApprovalChainRequest {
   name?: string;
   approval_type_id?: string;
-  default_work_assignee_id?: string | null;
+  work_assignee_id?: string | null;
   steps?: ApprovalChain["steps"];
 }
 
@@ -273,6 +271,10 @@ export interface ApprovalActionRequest {
   comment?: string;
 }
 
+export interface RejectApprovalActionRequest {
+  comment: string;
+}
+
 export interface WorkAssigneeOption {
   id: string;
   full_name: string;
@@ -286,6 +288,7 @@ export interface CreateUserRequest {
   email: string;
   password: string;
   full_name: string;
+  signature_url?: string | null;
   department_id?: string | null;
   department_ids?: string[];
   role_id?: string | null;
@@ -296,6 +299,7 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   email?: string;
   full_name?: string;
+  signature_url?: string | null;
   department_id?: string | null;
   department_ids?: string[];
   role_id?: string | null;
@@ -312,6 +316,7 @@ export interface UpdatePasswordRequest {
 
 export interface UpdateProfileRequest {
   full_name: string;
+  signature_url?: string | null;
 }
 
 export interface UpdateCompanySettingsRequest {

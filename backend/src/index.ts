@@ -27,7 +27,7 @@ async function main() {
   const port = Number(process.env.PORT) || 4000;
 
   // CORS configuration - restrict in production
-  const corsOrigin = process.env.CORS_ORIGIN;
+  const corsOrigin = process.env.APP_BASE_URL;
   const allowedOrigins: Array<string | RegExp> = [
     `http://localhost:${port}`,
     `http://127.0.0.1:${port}`,

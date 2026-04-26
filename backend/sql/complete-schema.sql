@@ -46,9 +46,12 @@ CREATE TABLE IF NOT EXISTS profiles (
   is_locked BOOLEAN NOT NULL DEFAULT false,
   locked_at TIMESTAMPTZ,
   last_failed_login_at TIMESTAMPTZ,
+  signature_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS signature_url TEXT;
 
 CREATE TABLE IF NOT EXISTS approval_types (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

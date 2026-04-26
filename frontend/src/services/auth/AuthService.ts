@@ -35,6 +35,10 @@ export class AuthService extends BaseService {
     );
   }
 
+  async uploadSignature(file: File): Promise<{ profile: Profile }> {
+    return this.handleRequest(() => api.auth.uploadSignature(file));
+  }
+
   async setup(data: SetupRequest): Promise<LoginResponse> {
     return this.handleRequest(() => 
       api.setup.complete(data)

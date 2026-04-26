@@ -4,27 +4,26 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  ArrowRight,
   Loader2,
+  Users,
+  ShieldCheck,
+  Building2,
+  FileText,
+  GitBranch,
+  type LucideIcon,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/StatusBadge";
+import { Card, CardContent } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/auth-hooks";
-import { useApprovalRequests, useAuditLogs } from "@/hooks/services";
+import {
+  useApprovalChains,
+  useApprovalRequests,
+  useApprovalTypes,
+  useDepartments,
+  useProfiles,
+  useRoles,
+} from "@/hooks/services";
 import type { RequestStatus } from "@/lib/constants";
-
-const getApprovalTypeName = (approvalTypes: unknown): string => {
-  if (
-    approvalTypes &&
-    typeof approvalTypes === "object" &&
-    "name" in approvalTypes
-  ) {
-    return (approvalTypes as { name: string }).name;
-  }
-  return "—";
-};
 
 type RequestRow = {
   id: string;
@@ -37,28 +36,84 @@ type RequestRow = {
   approval_types: { name: string } | null;
 };
 
-type AuditRow = {
-  id: string;
-  user_name: string;
-  action: string;
-  target: string;
-  details: string | null;
-  created_at: string;
+type DashboardCard = {
+  label: string;
+  value: number | string;
+  icon: LucideIcon;
+  path: string;
+  show?: boolean;
+  tone: {
+    card: string;
+    iconBg: string;
+    subtext: string;
+  };
+  detail: string;
 };
+
+const cardTones = {
+  rose: {
+    card: "bg-[#f5e7ea]",
+    iconBg: "bg-[#b86b7a]",
+    subtext: "text-[#8b4f5b]",
+  },
+  amber: {
+    card: "bg-[#f3ead8]",
+    iconBg: "bg-[#a9864d]",
+    subtext: "text-[#7f653a]",
+  },
+  mint: {
+    card: "bg-[#e2eee6]",
+    iconBg: "bg-[#6b9277]",
+    subtext: "text-[#526f5b]",
+  },
+  lilac: {
+    card: "bg-[#ece8f3]",
+    iconBg: "bg-[#8574a6]",
+    subtext: "text-[#665982]",
+  },
+  sky: {
+    card: "bg-[#e2edf3]",
+    iconBg: "bg-[#638da3]",
+    subtext: "text-[#4b6c7d]",
+  },
+  violet: {
+    card: "bg-[#eee8ee]",
+    iconBg: "bg-[#8a6f88]",
+    subtext: "text-[#6c566a]",
+  },
+  emerald: {
+    card: "bg-[#e5eee1]",
+    iconBg: "bg-[#789568]",
+    subtext: "text-[#5b714f]",
+  },
+  blue: {
+    card: "bg-[#e4eaf2]",
+    iconBg: "bg-[#697fa0]",
+    subtext: "text-[#50617a]",
+  },
+  coral: {
+    card: "bg-[#f3e6df]",
+    iconBg: "bg-[#aa7963]",
+    subtext: "text-[#805b4a]",
+  },
+} satisfies Record<string, { card: string; iconBg: string; subtext: string }>;
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { profile, isAdmin } = useAuth();
+  const { isAdmin, hasPermission } = useAuth();
 
-  const { data: requests = [], isLoading: loading } = useApprovalRequests() as {
+  const {
+    data: requests = [],
+    isLoading: loading,
+  } = useApprovalRequests() as {
     data: RequestRow[];
     isLoading: boolean;
   };
-  const { data: auditLogs = [] } = useAuditLogs();
-  // Memoize filtered audit logs to prevent unnecessary recalculations
-  const filteredAuditLogs = useMemo(() => {
-    return isAdmin ? auditLogs.slice(0, 5) : [];
-  }, [auditLogs, isAdmin]);
+  const { data: users = [] } = useProfiles();
+  const { data: roles = [] } = useRoles();
+  const { data: departments = [] } = useDepartments();
+  const { data: approvalTypes = [] } = useApprovalTypes();
+  const { data: approvalChains = [] } = useApprovalChains();
 
   const stats = useMemo(() => {
     const total = requests.length;
@@ -72,25 +127,87 @@ export default function Dashboard() {
         label: "Total Requests",
         value: total,
         icon: ClipboardList,
-        color: "text-primary",
+        path: "/approvals",
+        tone: cardTones.rose,
+        detail: `${pending} open requests`,
       },
       {
         label: "Approved",
         value: approved,
         icon: CheckCircle,
-        color: "text-success",
+        path: "/approvals?status=approved",
+        tone: cardTones.mint,
+        detail: "Completed requests",
       },
       {
         label: "Rejected",
         value: rejected,
         icon: XCircle,
-        color: "text-destructive",
+        path: "/approvals?status=rejected",
+        tone: cardTones.coral,
+        detail: "Declined requests",
       },
-      { label: "Pending", value: pending, icon: Clock, color: "text-warning" },
-    ];
+      {
+        label: "Pending",
+        value: pending,
+        icon: Clock,
+        path: "/approvals?status=open",
+        tone: cardTones.amber,
+        detail: "Awaiting action",
+      },
+    ] satisfies DashboardCard[];
   }, [requests]);
 
-  const recent = requests.slice(0, 4);
+  const canManage = (permission: string) =>
+    isAdmin || hasPermission(permission) || hasPermission("all");
+
+  const adminCards = [
+    {
+      label: "Users",
+      value: users.length,
+      icon: Users,
+      path: "/admin?tab=users",
+      show: canManage("manage_users"),
+      tone: cardTones.sky,
+      detail: "Team members",
+    },
+    {
+      label: "Roles & Permissions",
+      value: roles.length,
+      icon: ShieldCheck,
+      path: "/admin?tab=roles",
+      show: canManage("manage_roles"),
+      tone: cardTones.violet,
+      detail: "Access groups",
+    },
+    {
+      label: "Departments",
+      value: departments.length,
+      icon: Building2,
+      path: "/admin?tab=departments",
+      show: canManage("manage_departments"),
+      tone: cardTones.emerald,
+      detail: "Active departments",
+    },
+    {
+      label: "Approval Types",
+      value: approvalTypes.length,
+      icon: FileText,
+      path: "/admin?tab=approval-types",
+      show: canManage("manage_approval_types"),
+      tone: cardTones.blue,
+      detail: "Request templates",
+    },
+    {
+      label: "Approval Chains",
+      value: approvalChains.length,
+      icon: GitBranch,
+      path: "/admin?tab=chains",
+      show: canManage("manage_chains"),
+      tone: cardTones.lilac,
+      detail: "Workflow paths",
+    },
+  ].filter((card) => card.show) satisfies DashboardCard[];
 
   if (loading) {
     return (
@@ -105,140 +222,77 @@ export default function Dashboard() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Overview of approval requests and activity
+          Overview of approval requests
         </p>
-        <div className="mt-4 rounded-lg border border-muted/70 bg-muted/40 p-4">
-          <p className="text-sm text-foreground/90">
-            Welcome back, <span className="font-semibold">{profile?.full_name ?? "there"}</span>!
+      </div>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-foreground">
+          Request Overview
+        </h2>
+        <div className="grid auto-rows-[132px] grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {stats.map((card) => (
+            <MetricCard key={card.label} card={card} onNavigate={navigate} />
+          ))}
+        </div>
+      </section>
+
+      {adminCards.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground">
+            Administration
+          </h2>
+          <div className="grid auto-rows-[132px] grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {adminCards.map((card) => (
+              <MetricCard key={card.label} card={card} onNavigate={navigate} />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function MetricCard({
+  card,
+  onNavigate,
+}: {
+  card: DashboardCard;
+  onNavigate: (path: string) => void;
+}) {
+  return (
+    <Card
+      className={`h-full cursor-pointer border-0 shadow-none transition-snappy hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${card.tone.card}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onNavigate(card.path)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onNavigate(card.path);
+        }
+      }}
+    >
+      <CardContent className="flex h-full items-center justify-start gap-3 p-4">
+        <div
+          className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full ${card.tone.iconBg}`}
+        >
+          <card.icon className="h-8 w-8 text-white" />
+        </div>
+        <div className="min-w-0 text-left">
+          <p className="text-[1.65rem] font-bold leading-none text-slate-950">
+            {card.value}
           </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Here's a quick summary of your approval activity.
+          <p className="mt-1 truncate text-left text-xs font-semibold text-slate-800">
+            {card.label}
+          </p>
+          <p
+            className={`mt-2 truncate text-left text-[11px] font-medium ${card.tone.subtext}`}
+          >
+            {card.detail}
           </p>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => (
-          <Card key={stat.label} className="border">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className={`p-2 rounded bg-muted ${stat.color}`}>
-                <stat.icon className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-foreground">
-                  {stat.value}
-                </p>
-                <p className="text-xs text-muted-foreground">{stat.label}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="border">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold">
-                Recent Requests
-              </CardTitle>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate("/approvals")}
-                className="text-xs text-primary"
-              >
-                View All <ArrowRight className="ml-1 h-3 w-3" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y">
-              {recent.map((req) => (
-                <div
-                  key={req.id}
-                  className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-snappy"
-                  onClick={() => navigate(`/approvals/${req.id}`)}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground">
-                        {req.request_number}
-                      </span>
-                      <StatusBadge status={req.status} />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {getApprovalTypeName(req.approval_types)}
-                    </p>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Step {req.current_step}/{req.total_steps}
-                  </div>
-                </div>
-              ))}
-              {recent.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  No requests yet
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold">
-                Recent Activity
-              </CardTitle>
-              {isAdmin && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate("/audit-logs")}
-                  className="text-xs text-primary"
-                >
-                  View All <ArrowRight className="ml-1 h-3 w-3" />
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y">
-              {!isAdmin && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Audit activity is visible to administrators.
-                </div>
-              )}
-              {isAdmin &&
-                filteredAuditLogs.map((log) => (
-                  <div key={log.id} className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground">
-                        {log.user_name}
-                      </span>
-                      <span className="text-xs text-muted-foreground">·</span>
-                      <span className="text-xs text-muted-foreground">
-                        {log.action}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {log.details}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground/70 mt-1">
-                      {new Date(log.created_at).toLocaleString()}
-                    </p>
-                  </div>
-                ))}
-              {isAdmin && filteredAuditLogs.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  No audit entries yet
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

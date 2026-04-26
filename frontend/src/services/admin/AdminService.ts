@@ -36,4 +36,10 @@ export class AdminService extends BaseService {
       api.admin.resetUserPassword(userId, newPassword)
     );
   }
+
+  async uploadUserSignature(userId: string, file: File): Promise<{
+    profile: Profile;
+  }> {
+    return this.handleRequest(() => api.admin.uploadUserSignature(userId, file));
+  }
 }

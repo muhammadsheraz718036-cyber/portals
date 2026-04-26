@@ -209,7 +209,7 @@ type RequestRow = {
   work_completed_by: string | null;
   work_completed_at: string | null;
   final_authority_user_id: string | null;
-  initiator?: { full_name: string };
+  initiator?: { full_name: string; signature_url?: string | null };
   work_assignee?: {
     id: string | null;
     full_name: string | null;
@@ -240,6 +240,12 @@ type ActionRow = {
   comment: string | null;
   approver_user_id: string | null;
   created_at: string;
+};
+
+type ActorProfile = {
+  full_name: string;
+  signature_url: string | null;
+  department_name: string | null;
 };
 
 /** Ensure line items have stable `id` for LineItemsManager (API JSON may omit or use numbers). */
@@ -286,6 +292,7 @@ export default function RequestDetail() {
   const [actioning, setActioning] = useState(false);
   const [showUpdateForm, setShowUpdateForm] = useState(false);
   const [updateComment, setUpdateComment] = useState("");
+  const [rejectionComment, setRejectionComment] = useState("");
   const [workCompletionComment, setWorkCompletionComment] = useState("");
   const [selectedWorkStatus, setSelectedWorkStatus] = useState<
     "assigned" | "in_progress" | "done" | "not_done"
@@ -295,7 +302,6 @@ export default function RequestDetail() {
   const [updatingFormData, setUpdatingFormData] = useState<
     Record<string, unknown>
   >({});
-  const [printGeneratedAt, setPrintGeneratedAt] = useState<Date | null>(null);
   const printLetterRef = useRef<HTMLDivElement>(null);
 
   const resolveMutation = useResolveRequestNumber();
@@ -316,14 +322,23 @@ export default function RequestDetail() {
   const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
-  const { data: workAssignees = [] } = useWorkAssignees(
-    request?.department_id ?? undefined,
-  );
+  const { data: workAssignees = [] } = useWorkAssignees(null);
   const actions = useMemo(
     () => (requestData?.actions ?? []) as ActionRow[],
     [requestData?.actions],
   );
   const actorNames = requestData?.actorNames ?? {};
+  const actorProfiles = (requestData?.actorProfiles ?? {}) as Record<
+    string,
+    ActorProfile
+  >;
+  const approvedSignatureActions = useMemo(
+    () =>
+      actions.filter(
+        (action) => action.status === "approved" && Boolean(action.acted_by),
+      ),
+    [actions],
+  );
 
   // Only fetch attachments if the request type supports them
   const supportsAttachments =
@@ -380,8 +395,6 @@ export default function RequestDetail() {
   const pageWidth = isLandscape ? "11in" : "8.5in";
   const pageHeight = isLandscape ? "8.5in" : "11in";
   const pageSize = isLandscape ? "11in 8.5in" : "8.5in 11in";
-  const watermarkEmail = user?.email?.trim() || "unknown@approvalhub";
-  const printSignatureTimestamp = (printGeneratedAt ?? new Date()).toLocaleString();
 
   const timelineSteps = useMemo(() => {
     const displayGroups = new Map<number, ActionRow[]>();
@@ -437,12 +450,6 @@ export default function RequestDetail() {
     documentTitle: request?.request_number
       ? `Request_${request.request_number}`
       : "Request_Letter",
-    onBeforePrint: async () => {
-      setPrintGeneratedAt(new Date());
-      await new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => resolve());
-      });
-    },
     pageStyle: `
       @page {
         size: ${isLandscape ? "landscape" : "portrait"};
@@ -521,12 +528,19 @@ export default function RequestDetail() {
 
   const handleReject = async () => {
     if (!request) return;
+    const trimmedComment = rejectionComment.trim();
+    if (!trimmedComment) {
+      toast.error("Enter a rejection reason before rejecting the request.");
+      return;
+    }
+
     setActioning(true);
     try {
       await rejectMutation.mutateAsync({
         id: request.id,
-        data: { comment: "" },
+        data: { comment: trimmedComment },
       });
+      setRejectionComment("");
       toast.success("Request rejected successfully");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reject request");
@@ -1056,6 +1070,13 @@ export default function RequestDetail() {
         )}
         <div className="mt-12 flex justify-start">
           <div className="text-left w-full max-w-[210px]">
+            {request?.initiator?.signature_url && (
+              <img
+                src={request.initiator.signature_url}
+                alt={`${initiatorName || "Initiator"} signature`}
+                className="mb-1 h-14 max-w-[180px] object-contain"
+              />
+            )}
             <p className="font-bold" style={{ fontSize: "14px" }}>
               {initiatorName}
             </p>
@@ -1070,17 +1091,75 @@ export default function RequestDetail() {
             </p>
           </div>
         </div>
-        <div
-          className="mt-auto pt-4"
-          style={{
-            borderTop: "1px solid #cbd5e1",
-            fontSize: "11px",
-            color: "#64748b",
-            fontFamily: "Arial, sans-serif",
-          }}
-        >
-          Printed from {companyName} by {watermarkEmail} on {printSignatureTimestamp}
-        </div>
+        {approvedSignatureActions.length > 0 && (
+          <div className="mt-8">
+            <p
+              className="font-bold"
+              style={{
+                fontSize: "13px",
+                fontFamily: "Arial, sans-serif",
+                marginBottom: "0.5rem",
+              }}
+            >
+              Approval Signatures
+            </p>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+              {approvedSignatureActions.map((action) => {
+                const actorId = action.acted_by as string;
+                const actorProfile = actorProfiles[actorId];
+                const actorName =
+                  actorProfile?.full_name ??
+                  actorNames[actorId] ??
+                  "Unknown approver";
+
+                return (
+                  <div
+                    key={`print-signature-${action.id}`}
+                    className="min-h-[88px]"
+                  >
+                    {actorProfile?.signature_url ? (
+                      <img
+                        src={actorProfile.signature_url}
+                        alt={`${actorName} signature`}
+                        className="mb-1 h-12 max-w-[160px] object-contain"
+                      />
+                    ) : (
+                      <div className="mb-1 h-12" />
+                    )}
+                    <div className="border-t border-foreground/70 pt-1">
+                      <p className="font-bold" style={{ fontSize: "13px" }}>
+                        {actorName}
+                      </p>
+                      <p
+                        className="text-muted-foreground"
+                        style={{ fontSize: "11px" }}
+                      >
+                        {getTimelineRoleTitle(action)}
+                      </p>
+                      {actorProfile?.department_name && (
+                        <p
+                          className="text-muted-foreground"
+                          style={{ fontSize: "11px" }}
+                        >
+                          {actorProfile.department_name}
+                        </p>
+                      )}
+                      <p
+                        className="text-muted-foreground"
+                        style={{ fontSize: "11px" }}
+                      >
+                        Approved{" "}
+                        {new Date(
+                          action.acted_at ?? action.created_at,
+                        ).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1520,6 +1599,9 @@ export default function RequestDetail() {
                   const iconKey = iconKeyForAction(primary.status);
                   const roleTitle = getTimelineRoleTitle(primary);
                   const actionSummary = getTimelineActionSummary(primary);
+                  const primaryActorProfile = primary.acted_by
+                    ? actorProfiles[primary.acted_by]
+                    : undefined;
 
                   return (
                     <div
@@ -1588,6 +1670,24 @@ export default function RequestDetail() {
                                 </span>
                               )}
                           </div>
+                          {primary.status === "approved" &&
+                            primaryActorProfile?.signature_url && (
+                              <div className="mt-3 rounded-lg border bg-white p-2">
+                                <img
+                                  src={primaryActorProfile.signature_url}
+                                  alt={`${
+                                    primaryActorProfile.full_name ??
+                                    "Approver"
+                                  } signature`}
+                                  className="h-10 max-w-[180px] object-contain"
+                                />
+                                {primaryActorProfile.department_name && (
+                                  <p className="mt-1 text-xs text-slate-600">
+                                    {primaryActorProfile.department_name}
+                                  </p>
+                                )}
+                              </div>
+                            )}
 
                           {primary.comment && (
                             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/50">
@@ -1786,9 +1886,21 @@ export default function RequestDetail() {
                     )}{" "}
                     Approve
                   </Button>
+                  <div className="space-y-1.5">
+                    <Textarea
+                      value={rejectionComment}
+                      onChange={(event) => setRejectionComment(event.target.value)}
+                      placeholder="Required: explain why this request is being rejected"
+                      rows={4}
+                      disabled={actioning}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      This reason will be saved in the timeline and sent to the initiator.
+                    </p>
+                  </div>
                   <Button
                     onClick={handleReject}
-                    disabled={actioning}
+                    disabled={actioning || rejectionComment.trim().length === 0}
                     variant="destructive"
                     className="w-full gap-2"
                     size="sm"

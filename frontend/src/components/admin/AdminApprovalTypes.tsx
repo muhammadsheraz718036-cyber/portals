@@ -77,7 +77,6 @@ interface ApprovalType {
   pre_salutation?: string;
   post_salutation?: string;
   department_id?: string | null;
-  default_work_assignee_id?: string | null;
 }
 
 export function AdminApprovalTypes() {

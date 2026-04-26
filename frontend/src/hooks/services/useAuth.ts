@@ -70,6 +70,21 @@ export const useUpdateProfile = () => {
   });
 };
 
+export const useUploadProfileSignature = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (file: File) => services.auth.uploadSignature(file),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
+      toast.success('Signature uploaded successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to upload signature');
+    },
+  });
+};
+
 export const useSetupStatus = () => {
   return useQuery({
     queryKey: ['auth', 'setup-status'],

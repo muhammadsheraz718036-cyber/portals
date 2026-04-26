@@ -5,6 +5,7 @@ import {
   CreateApprovalRequestRequest, 
   UpdateApprovalRequestRequest,
   ApprovalActionRequest,
+  RejectApprovalActionRequest,
   WorkAssigneeOption,
 } from '../types';
 import { api } from '../../lib/api';
@@ -20,12 +21,20 @@ export class ApprovalRequestService extends BaseService {
     request: ApprovalRequest;
     actions: ApprovalRequestAction[];
     actorNames: Record<string, string>;
+    actorProfiles?: Record<
+      string,
+      { full_name: string; signature_url: string | null; department_name: string | null }
+    >;
   }> {
     return this.handleRequest(() => 
       api.approvalRequests.get(id) as unknown as Promise<{
         request: ApprovalRequest;
         actions: ApprovalRequestAction[];
         actorNames: Record<string, string>;
+        actorProfiles?: Record<
+          string,
+          { full_name: string; signature_url: string | null; department_name: string | null }
+        >;
       }>
     );
   }
@@ -60,7 +69,7 @@ export class ApprovalRequestService extends BaseService {
     });
   }
 
-  async reject(id: string, data: ApprovalActionRequest): Promise<void> {
+  async reject(id: string, data: RejectApprovalActionRequest): Promise<void> {
     return this.handleRequest(async () => {
       await api.approvalRequests.reject(id, data);
     });

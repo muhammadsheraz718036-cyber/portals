@@ -6,14 +6,15 @@ import {
   CreateApprovalRequestRequest,
   UpdateApprovalRequestRequest,
   ApprovalActionRequest,
+  RejectApprovalActionRequest,
 } from "../../services/types";
 
 export const useApprovalRequests = () => {
   return useQuery({
     queryKey: [QUERY_KEYS.APPROVAL_REQUESTS],
     queryFn: () => services.approvalRequests.list(),
-    staleTime: 2 * 60 * 1000,
-    refetchInterval: 5 * 60 * 1000,
+    staleTime: 15 * 1000,
+    refetchInterval: 15 * 1000,
   });
 };
 
@@ -104,8 +105,8 @@ export const useRejectRequest = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data?: ApprovalActionRequest }) =>
-      services.approvalRequests.reject(id, data || {}),
+    mutationFn: ({ id, data }: { id: string; data: RejectApprovalActionRequest }) =>
+      services.approvalRequests.reject(id, data),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });

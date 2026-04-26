@@ -32,6 +32,7 @@ type RequestContext = {
   work_status: string;
   work_completed_at: string | null;
   company_name: string | null;
+  company_logo_url: string | null;
 };
 
 type EventSummary = {
@@ -42,6 +43,8 @@ type EventSummary = {
   actionLabel?: string | null;
   actorName?: string | null;
   actorComment?: string | null;
+  occurredAt?: string | null;
+  occurredAtLabel?: string | null;
 };
 
 function escapeHtml(value: string): string {
@@ -110,29 +113,6 @@ function formatFieldValue(value: unknown): string {
   return formatScalar(value);
 }
 
-function isGroupedItems(value: unknown): value is Array<Record<string, unknown>> {
-  return Array.isArray(value) && value.every((item) => typeof item === "object" && item !== null);
-}
-
-function buildGroupedItemRows(items: Array<Record<string, unknown>>): Array<{ label: string; value: string }> {
-  const rows: Array<{ label: string; value: string }> = [];
-
-  for (const item of items) {
-    const group = String(item.__group || "General");
-    for (const [key, value] of Object.entries(item)) {
-      if (key === "id" || key === "__group") {
-        continue;
-      }
-      rows.push({
-        label: `${group} - ${startCase(key)}`,
-        value: formatFieldValue(value),
-      });
-    }
-  }
-
-  return rows;
-}
-
 function formatStatusLabel(status: string): string {
   return startCase(status);
 }
@@ -140,7 +120,6 @@ function formatStatusLabel(status: string): string {
 function buildRequestUrl(requestId: string): string {
   const baseUrl = (
     process.env.APP_BASE_URL ||
-    process.env.FRONTEND_APP_URL ||
     `http://localhost:${process.env.PORT || "4000"}`
   ).replace(/\/+$/, "");
 
@@ -166,18 +145,57 @@ function formatDateTime(value: string | null | undefined): string {
   });
 }
 
+function getFormDataText(formData: Record<string, unknown> | null, keys: string[]): string | null {
+  if (!formData || typeof formData !== "object") {
+    return null;
+  }
+
+  const normalizedKeys = new Map(
+    Object.keys(formData).map((key) => [key.toLowerCase().replace(/[_\s-]+/g, ""), key]),
+  );
+
+  for (const key of keys) {
+    const actualKey = normalizedKeys.get(key.toLowerCase().replace(/[_\s-]+/g, ""));
+    if (!actualKey) {
+      continue;
+    }
+
+    const value = formData[actualKey];
+    if (value == null) {
+      continue;
+    }
+
+    const text = String(value).trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function getRequestTitle(request: RequestContext): string {
+  return (
+    getFormDataText(request.form_data, ["title", "request_title", "request name", "subject"]) ||
+    request.approval_type_name ||
+    request.request_number
+  );
+}
+
 function buildFieldRows(formData: Record<string, unknown> | null): Array<{ label: string; value: string }> {
   if (!formData || typeof formData !== "object") {
     return [];
   }
 
   return Object.entries(formData).flatMap(([key, value]) => {
-    if (value === undefined) {
+    if (
+      value === undefined ||
+      key === "items" ||
+      key === "content" ||
+      key === "pre_comments" ||
+      key === "post_comments"
+    ) {
       return [];
-    }
-
-    if (key === "items" && isGroupedItems(value)) {
-      return buildGroupedItemRows(value);
     }
 
     return [{
@@ -187,6 +205,60 @@ function buildFieldRows(formData: Record<string, unknown> | null): Array<{ label
   });
 }
 
+function buildOutlookButtonHtml(label: string, url: string, primaryColor: string): string {
+  const safeUrl = escapeHtml(url);
+  const safeLabel = escapeHtml(label);
+  const safeColor = escapeHtml(primaryColor);
+
+  return `
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="border-collapse:separate;">
+    <tr>
+      <td align="center" style="padding: 10px 0;">
+        
+        <!--[if mso]>
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml"
+          href="${safeUrl}"
+          style="height:48px;v-text-anchor:middle;width:240px;"
+          arcsize="50%"
+          stroke="f"
+          fillcolor="${safeColor}">
+          <w:anchorlock/>
+          <center style="
+            color:#ffffff;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:15px;
+            font-weight:600;">
+            ${safeLabel}
+          </center>
+        </v:roundrect>
+        <![endif]-->
+
+        <!--[if !mso]><!-- -->
+        <a href="${safeUrl}" target="_blank"
+          style="
+            display:inline-block;
+            background-color:${safeColor};
+            color:#ffffff;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:15px;
+            font-weight:600;
+            line-height:48px;
+            padding:0 28px;
+            text-align:center;
+            text-decoration:none;
+            border-radius:999px;
+            -webkit-text-size-adjust:none;
+            mso-hide:all;
+          ">
+          ${safeLabel}
+        </a>
+        <!--<![endif]-->
+
+      </td>
+    </tr>
+  </table>`;
+}
+
 function renderHtmlEmail(args: {
   recipientName: string;
   request: RequestContext;
@@ -194,133 +266,123 @@ function renderHtmlEmail(args: {
   fields: Array<{ label: string; value: string }>;
   requestUrl: string;
   pendingRecipients?: PendingRecipient[];
+  hideRequesterDetails?: boolean;
 }): string {
-  const { recipientName, request, event, fields, requestUrl, pendingRecipients = [] } = args;
-  const companyName = request.company_name?.trim() || "Approval Central";
+  const { recipientName, request, event, fields, requestUrl, pendingRecipients = [], hideRequesterDetails = false } = args;
+  const primaryColor = process.env.EMAIL_PRIMARY_COLOR || "{{Primary Color}}";
+  const companyName = request.company_name?.trim() || "{{Company Name}}";
+  const logoUrl = request.company_logo_url?.trim() || "{{Company Logo URL}}";
+  const requestTitle = getRequestTitle(request);
+  const requesterName = request.initiator_name || request.initiator_email || "Unknown";
+  const submittedOn = formatDateTime(request.created_at);
+  const occurredOn = event.occurredAt ? formatDateTime(event.occurredAt) : null;
+  const safePrimaryColor = escapeHtml(primaryColor);
 
-  const detailRows = [
+  const summaryRows = [
     ["Request Number", request.request_number],
-    ["Approval Type", request.approval_type_name],
+    ["Request Type", request.approval_type_name],
     ["Current Status", formatStatusLabel(request.status)],
-    ["Department", request.department_name || "Not assigned"],
-    ["Initiated By", request.initiator_name || request.initiator_email || "Unknown"],
-    ["Submitted On", formatDateTime(request.created_at)],
-    ["Current Step", `${request.current_step} of ${request.total_steps}`],
+    ...(!hideRequesterDetails
+      ? [
+          ["Requester", requesterName],
+          ["Department", request.department_name || "Not assigned"],
+        ]
+      : []),
+    ["Submission Date", submittedOn],
+    ...(occurredOn
+      ? [[event.occurredAtLabel || "Activity Date", occurredOn]]
+      : []),
   ];
 
-  const pendingHtml =
-    pendingRecipients.length > 0
-      ? `
-        <div style="margin-top:24px;">
-          <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Current approvers</h3>
-          <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-            <thead>
-              <tr>
-                <th align="left" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569;text-transform:uppercase;">Step</th>
-                <th align="left" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569;text-transform:uppercase;">Reviewer</th>
-                <th align="left" style="padding:10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569;text-transform:uppercase;">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${pendingRecipients
-                .map(
-                  (recipient) => `
-                    <tr>
-                      <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;">${recipient.step_order}</td>
-                      <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(recipient.full_name || recipient.email)}</td>
-                      <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(recipient.action_label || recipient.role_name)}</td>
-                    </tr>`,
-                )
-                .join("")}
-            </tbody>
-          </table>
-        </div>`
-      : "";
+  const actorRows = [
+    event.actorName ? ["By", event.actorName] : null,
+    event.actorComment ? ["Comment", event.actorComment] : null,
+  ].filter((row): row is [string, string] => row !== null);
 
-  const fieldsHtml =
-    fields.length > 0
-      ? `
-        <div style="margin-top:24px;">
-          <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Request details</h3>
-          <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-            <tbody>
-              ${fields
-                .map(
-                  (field) => `
-                    <tr>
-                      <td valign="top" style="width:35%;padding:10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#334155;">${escapeHtml(field.label)}</td>
-                      <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;white-space:pre-wrap;">${escapeHtml(field.value)}</td>
-                    </tr>`,
-                )
-                .join("")}
-            </tbody>
-          </table>
-        </div>`
-      : "";
-
-  const actorHtml =
-    event.actorName || event.actorComment
-      ? `
-        <div style="margin-top:24px;padding:16px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;">
-          <div style="font-size:13px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">Latest activity</div>
-          ${event.actorName ? `<div style="margin-top:8px;color:#0f172a;"><strong>By:</strong> ${escapeHtml(event.actorName)}</div>` : ""}
-          ${event.actorComment ? `<div style="margin-top:8px;color:#0f172a;white-space:pre-wrap;"><strong>Comment:</strong> ${escapeHtml(event.actorComment)}</div>` : ""}
-        </div>`
-      : "";
 
   return `<!DOCTYPE html>
-<html lang="en">
-  <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
-    <div style="max-width:760px;margin:0 auto;padding:32px 16px;">
-      <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;">
-        <div style="padding:28px 32px;background:linear-gradient(135deg,#0f172a,#1d4ed8);color:#ffffff;">
-          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.85;">${escapeHtml(companyName)}</div>
-          <h1 style="margin:12px 0 8px;font-size:28px;line-height:1.2;">${escapeHtml(event.heading)}</h1>
-          <p style="margin:0;font-size:15px;line-height:1.6;opacity:0.92;">${escapeHtml(event.intro)}</p>
-        </div>
-
-        <div style="padding:28px 32px;">
-          <p style="margin:0 0 18px;font-size:15px;line-height:1.7;">Hello ${escapeHtml(recipientName)},</p>
-
-          <div style="padding:18px 20px;border-radius:14px;background:#eff6ff;border:1px solid #bfdbfe;">
-            <div style="font-size:12px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.06em;">${escapeHtml(event.highlightLabel)}</div>
-            <div style="margin-top:6px;font-size:20px;font-weight:700;color:#0f172a;">${escapeHtml(event.highlightValue)}</div>
-            ${event.actionLabel ? `<div style="margin-top:6px;font-size:14px;color:#334155;">Required action: ${escapeHtml(event.actionLabel)}</div>` : ""}
-          </div>
-
-          <div style="margin-top:24px;">
-            <h3 style="margin:0 0 12px;font-size:16px;color:#0f172a;">Request summary</h3>
-            <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-              <tbody>
-                ${detailRows
-                  .map(
-                    ([label, value]) => `
-                      <tr>
-                        <td valign="top" style="width:35%;padding:10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#334155;">${escapeHtml(label)}</td>
-                        <td style="padding:10px;border-bottom:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(value)}</td>
-                      </tr>`,
-                  )
-                  .join("")}
-              </tbody>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="x-apple-disable-message-reformatting" />
+    <!--[if mso]>
+    <xml>
+      <o:OfficeDocumentSettings xmlns:o="urn:schemas-microsoft-com:office:office">
+        <o:AllowPNG/>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+    <![endif]-->
+  </head>
+  <body bgcolor="#ffffff" style="margin:0;padding:0;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#111827;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+    <center style="width:100%;background-color:#ffffff;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;background-color:#ffffff;">
+              <tr>
+                <td align="center" bgcolor="#ffffff" style="padding:26px 28px 22px 28px;background-color:#ffffff;border-bottom:4px solid ${safePrimaryColor};">
+                  <img src="${escapeHtml(logoUrl)}" width="160" alt="${escapeHtml(companyName)}" style="display:block;width:160px;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;" />
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:28px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;">
+                    <tr style="margin:0;padding:0; text-align:center;">
+                      <td style="padding:0 0 6px 0;font-family:Arial,Helvetica,sans-serif;font-size:20px !important;line-height:28px;color:${safePrimaryColor};font-weight:bold;text-transform:uppercase;">
+                        ${escapeHtml(companyName)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:20px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:#4b5563;">
+                        Hello ${escapeHtml(recipientName)}, <br><br> ${escapeHtml(event.intro)}
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              ${actorRows.length > 0 ? `
+                <tr>
+                  <td style="padding:0 32px 18px 32px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;border:1px solid #e5e7eb;">
+                      ${actorRows
+                        .map(
+                          ([label, value]) => `
+                            <tr>
+                              <td width="38%" valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background-color:#f9fafb;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;font-weight:bold;color:#374151;">${escapeHtml(label)}</td>
+                              <td valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#111827;white-space:pre-wrap;">${escapeHtml(value)}</td>
+                            </tr>`,
+                        )
+                        .join("")}
+                    </table>
+                  </td>
+                </tr>`
+                : ""}
+              <tr>
+                <td style="padding:0 32px 8px 32px;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;border:1px solid #e5e7eb;">
+                    ${summaryRows
+                      .map(
+                        ([label, value]) => `
+                          <tr>
+                            <td width="38%" valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background-color:#f9fafb;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;font-weight:bold;color:#374151;">${escapeHtml(label)}</td>
+                            <td valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#111827;">${escapeHtml(value)}</td>
+                          </tr>`,
+                      )
+                      .join("")}
+                  </table>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:18px 32px 6px 32px;">
+                  ${buildOutlookButtonHtml("Click to open request", requestUrl, primaryColor)}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 32px 32px 32px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:21px;color:#4b5563;text-align:center;">
+                  This is an automated email, do not reply.
+                </td>
+              </tr>
             </table>
-          </div>
-
-          ${actorHtml}
-          ${pendingHtml}
-          ${fieldsHtml}
-
-          <div style="margin-top:28px;">
-            <a href="${escapeHtml(requestUrl)}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:700;">
-              Open Request
-            </a>
-          </div>
-
-          <p style="margin:24px 0 0;font-size:13px;line-height:1.6;color:#64748b;">
-            This message was sent because this approval item is linked to the email address on your account.
-          </p>
-        </div>
-      </div>
-    </div>
+    </center>
   </body>
 </html>`;
 }
@@ -332,8 +394,12 @@ function renderTextEmail(args: {
   fields: Array<{ label: string; value: string }>;
   requestUrl: string;
   pendingRecipients?: PendingRecipient[];
+  hideRequesterDetails?: boolean;
 }): string {
-  const { recipientName, request, event, fields, requestUrl, pendingRecipients = [] } = args;
+  const { recipientName, request, event, requestUrl, hideRequesterDetails = false } = args;
+  const requestTitle = getRequestTitle(request);
+  const requesterName = request.initiator_name || request.initiator_email || "Unknown";
+  const occurredOn = event.occurredAt ? formatDateTime(event.occurredAt) : null;
 
   const lines = [
     `${event.heading}`,
@@ -342,29 +408,23 @@ function renderTextEmail(args: {
     "",
     event.intro,
     "",
-    `${event.highlightLabel}: ${event.highlightValue}`,
-    event.actionLabel ? `Required action: ${event.actionLabel}` : null,
-    "",
+    `Request Title: ${requestTitle}`,
     `Request Number: ${request.request_number}`,
     `Approval Type: ${request.approval_type_name}`,
     `Current Status: ${formatStatusLabel(request.status)}`,
-    `Department: ${request.department_name || "Not assigned"}`,
-    `Initiated By: ${request.initiator_name || request.initiator_email || "Unknown"}`,
-    `Submitted On: ${formatDateTime(request.created_at)}`,
-    `Current Step: ${request.current_step} of ${request.total_steps}`,
-    event.actorName ? `Latest activity by: ${event.actorName}` : null,
-    event.actorComment ? `Comment: ${event.actorComment}` : null,
-    pendingRecipients.length > 0 ? "" : null,
-    pendingRecipients.length > 0 ? "Current approvers:" : null,
-    ...pendingRecipients.map(
-      (recipient) =>
-        `- Step ${recipient.step_order}: ${recipient.full_name || recipient.email} (${recipient.action_label || recipient.role_name})`,
-    ),
-    fields.length > 0 ? "" : null,
-    fields.length > 0 ? "Request details:" : null,
-    ...fields.map((field) => `- ${field.label}: ${field.value}`),
+    hideRequesterDetails ? null : `Requester: ${requesterName}`,
+    hideRequesterDetails ? null : `Department: ${request.department_name || "Not assigned"}`,
+    `Submission Date: ${formatDateTime(request.created_at)}`,
+    occurredOn ? `${event.occurredAtLabel || "Activity Date"}: ${occurredOn}` : null,
     "",
-    `Open request: ${requestUrl}`,
+    `${event.highlightLabel}: ${event.highlightValue}`,
+    event.actionLabel ? `Required action: ${event.actionLabel}` : null,
+    event.actorName ? `By: ${event.actorName}` : null,
+    event.actorComment ? `Comment: ${event.actorComment}` : null,
+    "",
+    `Review & Approve: ${requestUrl}`,
+    "",
+    "This is an automated email, do not reply.",
   ].filter((line): line is string => line !== null);
 
   return lines.join("\n");
@@ -418,6 +478,12 @@ export class EmailNotificationService {
 
     if (!this.initialized) {
       const port = Number(process.env.SMTP_PORT || "587");
+      this.logStatus("info", "initializing smtp transporter", {
+        host: process.env.SMTP_HOST,
+        port,
+        secure: process.env.SMTP_SECURE === "true" || port === 465,
+        hasAuth: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
+      });
       this.transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port,
@@ -457,7 +523,8 @@ export class EmailNotificationService {
          work_assignee.email AS work_assignee_email,
          ar.work_status,
          ar.work_completed_at::text,
-         cs.company_name
+         cs.company_name,
+         cs.logo_url AS company_logo_url
        FROM approval_requests ar
        JOIN approval_types at ON at.id = ar.approval_type_id
        JOIN profiles initiator ON initiator.id = ar.initiator_id
@@ -492,6 +559,60 @@ export class EmailNotificationService {
     return rows;
   }
 
+  private logPendingRecipientSummary(
+    message: string,
+    request: RequestContext,
+    pendingRecipients: PendingRecipient[],
+  ): void {
+    this.logStatus("info", message, {
+      requestId: request.id,
+      requestNumber: request.request_number,
+      pendingRecipientCount: pendingRecipients.length,
+      pendingRecipients: pendingRecipients.map((recipient) => ({
+        email: recipient.email,
+        stepOrder: recipient.step_order,
+        actionLabel: recipient.action_label || recipient.role_name,
+      })),
+    });
+  }
+
+  private async notifyPendingApprovers(args: {
+    request: RequestContext;
+    subject: string;
+    event: Omit<EventSummary, "actionLabel">;
+    emptyMessage: string;
+  }): Promise<void> {
+    const pendingRecipients = await this.getPendingRecipients(args.request.id);
+    this.logPendingRecipientSummary(
+      "resolved pending approval email recipients",
+      args.request,
+      pendingRecipients,
+    );
+
+    if (pendingRecipients.length === 0) {
+      this.logStatus("warn", args.emptyMessage, {
+        requestId: args.request.id,
+        requestNumber: args.request.request_number,
+        status: args.request.status,
+        currentStep: args.request.current_step,
+      });
+      return;
+    }
+
+    for (const recipient of pendingRecipients) {
+      await this.sendToRecipient({
+        recipient,
+        subject: args.subject,
+        request: args.request,
+        event: {
+          ...args.event,
+          actionLabel: recipient.action_label || recipient.role_name,
+        },
+        pendingRecipients: [recipient],
+      });
+    }
+  }
+
   private async sendEmail(args: {
     to: string;
     subject: string;
@@ -510,10 +631,16 @@ export class EmailNotificationService {
 
     const transporter = this.getTransporter();
     if (!transporter) {
+      const missing = [
+        !process.env.SMTP_HOST ? "SMTP_HOST" : null,
+        !process.env.SMTP_PORT ? "SMTP_PORT" : null,
+        !process.env.SMTP_FROM ? "SMTP_FROM" : null,
+      ].filter((value): value is string => value !== null);
       this.logStatus("warn", "smtp configuration incomplete", {
         to: args.to,
         subject: args.subject,
         requestNumber: args.requestNumber,
+        missing,
       });
       return;
     }
@@ -547,6 +674,10 @@ export class EmailNotificationService {
     pendingRecipients?: PendingRecipient[];
   }): Promise<void> {
     if (!args.recipient.email) {
+      this.logStatus("warn", "email recipient skipped because email is missing", {
+        subject: args.subject,
+        requestNumber: args.request.request_number,
+      });
       return;
     }
 
@@ -554,6 +685,10 @@ export class EmailNotificationService {
     const fields = buildFieldRows(args.request.form_data);
     const recipientName =
       args.recipient.full_name?.trim() || args.recipient.email.trim();
+    const hideRequesterDetails =
+      Boolean(args.request.initiator_email) &&
+      args.recipient.email.trim().toLowerCase() ===
+        args.request.initiator_email?.trim().toLowerCase();
 
     await this.sendEmail({
       to: args.recipient.email,
@@ -565,6 +700,7 @@ export class EmailNotificationService {
         fields,
         requestUrl,
         pendingRecipients: args.pendingRecipients,
+        hideRequesterDetails,
       }),
       text: renderTextEmail({
         recipientName,
@@ -573,6 +709,7 @@ export class EmailNotificationService {
         fields,
         requestUrl,
         pendingRecipients: args.pendingRecipients,
+        hideRequesterDetails,
       }),
       requestNumber: args.request.request_number,
     });
@@ -628,23 +765,17 @@ export class EmailNotificationService {
         requestNumber: request.request_number,
       });
 
-      const pendingRecipients = await this.getPendingRecipients(requestId);
-
-      for (const recipient of pendingRecipients) {
-        await this.sendToRecipient({
-          recipient,
-          subject: `Approval required: ${request.request_number}`,
-          request,
-          event: {
-            heading: "A request is waiting for your approval",
-            intro: "A new approval item has been assigned to you. Review the request details below and take action in the app.",
-            highlightLabel: "Approval needed",
-            highlightValue: request.request_number,
-            actionLabel: recipient.action_label || recipient.role_name,
-          },
-          pendingRecipients: [recipient],
-        });
-      }
+      await this.notifyPendingApprovers({
+        request,
+        subject: `Approval required: ${request.request_number}`,
+        event: {
+          heading: "A request is waiting for your approval",
+          intro: "A new approval request has been assigned to you. Review the request details below and take action in the app.",
+          highlightLabel: "Approval needed",
+          highlightValue: request.request_number,
+        },
+        emptyMessage: "request submission notification skipped because no pending approver email recipients were found",
+      });
     });
   }
 
@@ -668,27 +799,27 @@ export class EmailNotificationService {
         status: request.status,
       });
 
-      const pendingRecipients = await this.getPendingRecipients(requestId);
-
-      if (pendingRecipients.length > 0) {
-        for (const recipient of pendingRecipients) {
-          await this.sendToRecipient({
-            recipient,
-            subject: `Approval required: ${request.request_number}`,
-            request,
-            event: {
-              heading: "A request is waiting for your approval",
-              intro: "The previous step was completed and this request is now assigned to you.",
-              highlightLabel: "Next step ready",
-              highlightValue: request.request_number,
-              actionLabel: recipient.action_label || recipient.role_name,
-              actorName,
-              actorComment,
-            },
-            pendingRecipients: [recipient],
-          });
-        }
+      if (request.status === "approved") {
+        this.logStatus("info", "approval notification has no next approver because request is fully approved", {
+          requestId,
+          requestNumber: request.request_number,
+        });
+        return;
       }
+
+      await this.notifyPendingApprovers({
+        request,
+        subject: `Approval required: ${request.request_number}`,
+        event: {
+          heading: "A request is waiting for your approval",
+          intro: "The previous step was completed and this request is now assigned to you.",
+          highlightLabel: "Next step ready",
+          highlightValue: request.request_number,
+          actorName,
+          actorComment,
+        },
+        emptyMessage: "approval notification skipped because no next pending approver email recipients were found",
+      });
     });
   }
 
@@ -698,10 +829,39 @@ export class EmailNotificationService {
     actorComment?: string,
   ): Promise<void> {
     await this.safeNotify(async () => {
-      this.logStatus("info", "request rejected notification skipped for initiator", {
+      const request = await this.getRequestContext(requestId);
+      if (!request || !request.initiator_email) {
+        this.logStatus("warn", "rejection notification skipped because initiator email was not found", {
+          requestId,
+          hasRequest: Boolean(request),
+        });
+        return;
+      }
+
+      this.logStatus("info", "processing request rejected notification", {
         requestId,
+        requestNumber: request.request_number,
         actorName,
-        actorComment,
+      });
+
+      await this.sendToRecipient({
+        recipient: {
+          email: request.initiator_email,
+          full_name: request.initiator_name,
+        },
+        subject: `Request rejected: ${request.request_number}`,
+        request,
+        event: {
+          heading: "Your request was rejected",
+          intro: "An approver rejected your request. Review the latest activity and comments below.",
+          highlightLabel: "Rejected request",
+          highlightValue: request.request_number,
+          actionLabel: "Review the rejection details",
+          actorName,
+          actorComment,
+          occurredAt: request.updated_at,
+          occurredAtLabel: "Rejection Date",
+        },
       });
     });
   }
@@ -713,6 +873,11 @@ export class EmailNotificationService {
     await this.safeNotify(async () => {
       const request = await this.getRequestContext(requestId);
       if (!request || !request.work_assignee_email) {
+        this.logStatus("warn", "work assignment notification skipped because assignee email was not found", {
+          requestId,
+          hasRequest: Boolean(request),
+          workAssigneeId: request?.work_assignee_id,
+        });
         return;
       }
 
@@ -743,6 +908,10 @@ export class EmailNotificationService {
     await this.safeNotify(async () => {
       const request = await this.getRequestContext(requestId);
       if (!request || !request.initiator_email) {
+        this.logStatus("warn", "work completion notification skipped because initiator email was not found", {
+          requestId,
+          hasRequest: Boolean(request),
+        });
         return;
       }
 
@@ -777,6 +946,11 @@ export class EmailNotificationService {
     await this.safeNotify(async () => {
       const request = await this.getRequestContext(requestId);
       if (!request || !request.initiator_email) {
+        this.logStatus("warn", "work status notification skipped because initiator email was not found", {
+          requestId,
+          hasRequest: Boolean(request),
+          workStatus,
+        });
         return;
       }
 
@@ -818,10 +992,39 @@ export class EmailNotificationService {
     actorComment?: string,
   ): Promise<void> {
     await this.safeNotify(async () => {
-      this.logStatus("info", "changes-requested notification skipped for initiator", {
+      const request = await this.getRequestContext(requestId);
+      if (!request || !request.initiator_email) {
+        this.logStatus("warn", "changes notification skipped because initiator email was not found", {
+          requestId,
+          hasRequest: Boolean(request),
+        });
+        return;
+      }
+
+      this.logStatus("info", "processing request changes notification", {
         requestId,
+        requestNumber: request.request_number,
         actorName,
-        actorComment,
+      });
+
+      await this.sendToRecipient({
+        recipient: {
+          email: request.initiator_email,
+          full_name: request.initiator_name,
+        },
+        subject: `Request updated by approver: ${request.request_number}`,
+        request,
+        event: {
+          heading: "Your request was updated by an approver",
+          intro: "An approver made changes to your request during review. Review the latest activity and request details below.",
+          highlightLabel: "Request changes",
+          highlightValue: request.request_number,
+          actionLabel: "Review the updated request",
+          actorName,
+          actorComment,
+          occurredAt: request.updated_at,
+          occurredAtLabel: "Update Date",
+        },
       });
     });
   }
@@ -841,23 +1044,17 @@ export class EmailNotificationService {
         requestNumber: request.request_number,
       });
 
-      const pendingRecipients = await this.getPendingRecipients(requestId);
-
-      for (const recipient of pendingRecipients) {
-        await this.sendToRecipient({
-          recipient,
-          subject: `Approval required: ${request.request_number}`,
-          request,
-          event: {
-            heading: "A resubmitted request is waiting for your approval",
-            intro: "The initiator updated the request and it is back in your queue for review.",
-            highlightLabel: "Resubmitted approval",
-            highlightValue: request.request_number,
-            actionLabel: recipient.action_label || recipient.role_name,
-          },
-          pendingRecipients: [recipient],
-        });
-      }
+      await this.notifyPendingApprovers({
+        request,
+        subject: `Approval required: ${request.request_number}`,
+        event: {
+          heading: "A resubmitted request is waiting for your approval",
+          intro: "The initiator updated the request and it is back in your queue for review.",
+          highlightLabel: "Resubmitted approval",
+          highlightValue: request.request_number,
+        },
+        emptyMessage: "resubmission notification skipped because no pending approver email recipients were found",
+      });
     });
   }
 }

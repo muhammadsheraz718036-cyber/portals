@@ -219,14 +219,6 @@ export default function NewRequest() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="w-full p-6 flex items-center justify-center min-h-[40vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
     <div className="p-4 sm:p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
@@ -288,6 +280,7 @@ export default function NewRequest() {
                   </p>
                   <Select
                     value={selectedType}
+                    disabled={loading}
                     onValueChange={(v) => {
                       setSelectedType(v);
                       setFormValues({});
@@ -298,7 +291,18 @@ export default function NewRequest() {
                     }}
                   >
                     <SelectTrigger className="h-10">
-                      <SelectValue placeholder="Choose an approval type..." />
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        {loading && (
+                          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                        )}
+                        <SelectValue
+                          placeholder={
+                            loading
+                              ? "Loading approval types..."
+                              : "Choose an approval type..."
+                          }
+                        />
+                      </div>
                     </SelectTrigger>
                     <SelectContent>
                       {types.map((type) => (
@@ -312,7 +316,7 @@ export default function NewRequest() {
                 </div>
               </div>
 
-              {types.length === 0 && (
+              {!loading && types.length === 0 && (
                 <p className="px-1 text-sm text-muted-foreground">
                   No approval types configured yet.
                 </p>

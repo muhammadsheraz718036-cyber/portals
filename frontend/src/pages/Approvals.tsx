@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Search, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
 } from "@/hooks/services";
 import { useDebounce } from "@/hooks/useDebounce";
 import type { RequestStatus } from "@/lib/constants";
+import { isWithinDateRange } from "@/lib/dateFilters";
 
 type RequestRow = {
   id: string;
@@ -39,7 +40,7 @@ type RequestRow = {
 };
 
 type TabDefinition = {
-  key: "approval" | "my" | "other";
+  key: "all" | "approval" | "my" | "other";
   label: string;
   count: number;
   emptyMessage: string;
@@ -47,16 +48,34 @@ type TabDefinition = {
 };
 
 const DEPARTMENT_FALLBACK = "No Department Assigned";
+const STATUS_FILTERS = new Set([
+  "all",
+  "open",
+  "pending",
+  "in_progress",
+  "approved",
+  "rejected",
+]);
 
 function getDepartmentLabel(request: RequestRow) {
   return request.departments?.name?.trim() || DEPARTMENT_FALLBACK;
 }
 
+function getInitialStatusFilter(value: string | null): string {
+  if (!value) return "all";
+  return STATUS_FILTERS.has(value) ? value : "all";
+}
+
 export default function Approvals() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { isAdmin, hasPermission } = useAuth();
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>(() =>
+    getInitialStatusFilter(searchParams.get("status")),
+  );
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+  const [fromDate, setFromDate] = useState(searchParams.get("from") ?? "");
+  const [toDate, setToDate] = useState(searchParams.get("to") ?? "");
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
@@ -93,7 +112,13 @@ export default function Approvals() {
 
     const applyFilters = (requests: RequestRow[]) =>
       requests.filter((request) => {
-        if (statusFilter !== "all" && request.status !== statusFilter) {
+        const statusMatches =
+          statusFilter === "all" ||
+          (statusFilter === "open"
+            ? request.status === "pending" || request.status === "in_progress"
+            : request.status === statusFilter);
+
+        if (!statusMatches) {
           return false;
         }
 
@@ -104,6 +129,10 @@ export default function Approvals() {
           return false;
         }
 
+        if (!isWithinDateRange(request.created_at, fromDate, toDate)) {
+          return false;
+        }
+
         if (!normalizedSearch) {
           return true;
         }
@@ -111,27 +140,52 @@ export default function Approvals() {
         const initiatorName = (names[request.initiator_id] ?? "").toLowerCase();
         const typeName = (request.approval_types?.name ?? "").toLowerCase();
         const departmentName = getDepartmentLabel(request).toLowerCase();
+        const submittedDate = new Date(request.created_at);
+        const isoDate = request.created_at.slice(0, 10).toLowerCase();
+        const localDate = submittedDate.toLocaleDateString().toLowerCase();
 
         return (
           request.request_number.toLowerCase().includes(normalizedSearch) ||
           initiatorName.includes(normalizedSearch) ||
           typeName.includes(normalizedSearch) ||
-          departmentName.includes(normalizedSearch)
+          departmentName.includes(normalizedSearch) ||
+          isoDate.includes(normalizedSearch) ||
+          localDate.includes(normalizedSearch)
         );
       });
 
     return {
+      allRequests: applyFilters(rows),
       myRequests: applyFilters(segregated.myRequests),
       approvalRequests: applyFilters(segregated.approvalRequests),
       allOther: applyFilters(segregated.allOther),
     };
-  }, [debouncedSearch, departmentFilter, names, segregated, statusFilter]);
+  }, [
+    debouncedSearch,
+    departmentFilter,
+    fromDate,
+    names,
+    rows,
+    segregated,
+    statusFilter,
+    toDate,
+  ]);
 
   const tabs = useMemo(() => {
     const canReview =
       isAdmin || hasPermission("approve_reject") || hasPermission("all");
+    const canViewAllRequests =
+      isAdmin || hasPermission("view_all_requests") || hasPermission("all");
 
     const nextTabs: TabDefinition[] = [];
+
+    nextTabs.push({
+      key: "all",
+      label: "All",
+      count: filtered.allRequests.length,
+      emptyMessage: "No requests match your filters.",
+      requests: filtered.allRequests,
+    });
 
     if (canReview) {
       nextTabs.push({
@@ -151,12 +205,12 @@ export default function Approvals() {
       requests: filtered.myRequests,
     });
 
-    if (isAdmin) {
+    if (canViewAllRequests) {
       nextTabs.push({
         key: "other",
-        label: "Submitted by Other Teams",
+        label: "Submitted by Others",
         count: filtered.allOther.length,
-        emptyMessage: "No requests from other teams match your filters.",
+        emptyMessage: "No requests from other users match your filters.",
         requests: filtered.allOther,
       });
     }
@@ -164,12 +218,40 @@ export default function Approvals() {
     return nextTabs;
   }, [filtered, hasPermission, isAdmin]);
 
-  const tabsListClassName =
-    tabs.length === 1
-      ? "grid w-full grid-cols-1"
-      : tabs.length === 2
-        ? "grid w-full grid-cols-2"
-        : "grid w-full grid-cols-3";
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value === "all") {
+        next.delete("status");
+      } else {
+        next.set("status", value);
+      }
+      return next;
+    });
+  };
+
+  const updateDateParam = (key: "from" | "to", value: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value) {
+        next.set(key, value);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  };
+
+  const handleFromDateChange = (value: string) => {
+    setFromDate(value);
+    updateDateParam("from", value);
+  };
+
+  const handleToDateChange = (value: string) => {
+    setToDate(value);
+    updateDateParam("to", value);
+  };
 
   const renderTable = (requests: RequestRow[]) => (
     <div className="overflow-x-auto">
@@ -275,19 +357,20 @@ export default function Approvals() {
             <div className="relative min-w-[220px] flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search by request no., type, person, or department..."
+                placeholder="Search by request no., type, person, department, or date..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 className="pl-9"
               />
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
               <SelectTrigger className="w-[170px]">
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="open">Pending</SelectItem>
+                <SelectItem value="pending">Pending Only</SelectItem>
                 <SelectItem value="in_progress">In Progress</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
@@ -313,11 +396,42 @@ export default function Approvals() {
                 )}
               </SelectContent>
             </Select>
+            <Input
+              type="date"
+              value={fromDate}
+              onChange={(event) => handleFromDateChange(event.target.value)}
+              className="w-[155px]"
+              aria-label="From date"
+            />
+            <Input
+              type="date"
+              value={toDate}
+              onChange={(event) => handleToDateChange(event.target.value)}
+              className="w-[155px]"
+              aria-label="To date"
+            />
+            {(fromDate || toDate) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  handleFromDateChange("");
+                  handleToDateChange("");
+                }}
+              >
+                Clear Dates
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-6">
-          <Tabs defaultValue={tabs[0]?.key ?? "my"} className="w-full">
-            <TabsList className={tabsListClassName}>
+          <Tabs defaultValue="all" className="w-full">
+            <TabsList
+              className="grid w-full"
+              style={{
+                gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
+              }}
+            >
               {tabs.map((tab) => (
                 <TabsTrigger key={tab.key} value={tab.key}>
                   {tab.label} ({tab.count})

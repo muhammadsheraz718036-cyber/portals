@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,20 +6,47 @@ import { PasswordInput } from "@/components/PasswordInput";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-hooks";
 import { toast } from "sonner";
-import { User, KeyRound, Loader2 } from "lucide-react";
-import { useUpdatePassword, useUpdateProfile } from "@/hooks/services";
+import { User, KeyRound, Loader2, Upload } from "lucide-react";
+import {
+  useUpdatePassword,
+  useUpdateProfile,
+  useUploadProfileSignature,
+} from "@/hooks/services";
 import { isPasswordPolicyValid, PASSWORD_POLICY_HINT } from "@/lib/passwordPolicy";
 
 export default function Profile() {
   const { profile, refreshSession } = useAuth();
   const updateProfileMutation = useUpdateProfile();
+  const uploadSignatureMutation = useUploadProfileSignature();
   const updatePasswordMutation = useUpdatePassword();
   const [fullName, setFullName] = useState(profile?.full_name || "");
+  const [signaturePreview, setSignaturePreview] = useState(profile?.signature_url || "");
+  const [signatureFile, setSignatureFile] = useState<File | null>(null);
   const [updatingProfile, setUpdatingProfile] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [updatingPassword, setUpdatingPassword] = useState(false);
+
+  useEffect(() => {
+    setFullName(profile?.full_name || "");
+    setSignaturePreview(profile?.signature_url || "");
+    setSignatureFile(null);
+  }, [profile?.full_name, profile?.signature_url]);
+
+  const handleSignatureFileChange = (file: File | undefined) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.error("Signature must be a PNG or JPG image");
+      return;
+    }
+    setSignatureFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSignaturePreview(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleUpdateProfile = async () => {
     if (!fullName.trim()) {
@@ -29,7 +56,13 @@ export default function Profile() {
 
     setUpdatingProfile(true);
     try {
-      await updateProfileMutation.mutateAsync({ full_name: fullName.trim() });
+      await updateProfileMutation.mutateAsync({
+        full_name: fullName.trim(),
+      });
+      if (signatureFile) {
+        await uploadSignatureMutation.mutateAsync(signatureFile);
+        setSignatureFile(null);
+      }
       await refreshSession(); // Refresh the session to get updated profile
     } catch (err: unknown) {
       toast.error(
@@ -105,12 +138,33 @@ export default function Profile() {
               disabled
             />
           </div>
+          <div className="space-y-1.5">
+            <Label>Signature Image</Label>
+            <Input
+              type="file"
+              accept="image/png,image/jpeg"
+              onChange={(e) => handleSignatureFileChange(e.target.files?.[0])}
+            />
+            {signaturePreview && (
+              <div className="rounded-md border bg-white p-2">
+                <img
+                  src={signaturePreview}
+                  alt="Signature preview"
+                  className="h-14 max-w-[220px] object-contain"
+                />
+              </div>
+            )}
+          </div>
           <Button
             onClick={handleUpdateProfile}
             disabled={updatingProfile}
             className="gap-2"
           >
-            {updatingProfile && <Loader2 className="h-4 w-4 animate-spin" />}
+            {updatingProfile ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : signatureFile ? (
+              <Upload className="h-4 w-4" />
+            ) : null}
             Update Profile
           </Button>
         </CardContent>

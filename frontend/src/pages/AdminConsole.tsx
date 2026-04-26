@@ -7,10 +7,28 @@ import { AdminChains } from "@/components/admin/AdminChains";
 import { AdminUsers } from "@/components/admin/AdminUsers";
 import { AdminSettings } from "@/components/admin/AdminSettings";
 import { useAuth } from "@/contexts/auth-hooks";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
+
+const adminTabs = [
+  "users",
+  "roles",
+  "departments",
+  "approval-types",
+  "chains",
+  "settings",
+] as const;
+
+type AdminTab = (typeof adminTabs)[number];
+
+function getInitialTab(tab: string | null): AdminTab {
+  return adminTabs.includes(tab as AdminTab) ? (tab as AdminTab) : "users";
+}
 
 export default function AdminConsole() {
-  const [activeTab, setActiveTab] = useState("users");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<AdminTab>(() =>
+    getInitialTab(searchParams.get("tab")),
+  );
   const { isAdmin, hasPermission } = useAuth();
 
   const hasAdminAccess =
@@ -24,6 +42,12 @@ export default function AdminConsole() {
 
   if (!hasAdminAccess) return <Navigate to="/" replace />;
 
+  const handleTabChange = (value: string) => {
+    const nextTab = getInitialTab(value);
+    setActiveTab(nextTab);
+    setSearchParams({ tab: nextTab });
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -33,7 +57,7 @@ export default function AdminConsole() {
         </p>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="bg-muted/50">
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="roles">Roles & Permissions</TabsTrigger>

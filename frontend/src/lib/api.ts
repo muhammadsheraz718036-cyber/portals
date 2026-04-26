@@ -27,6 +27,7 @@ export interface Profile {
   id: string;
   full_name: string;
   email: string;
+  signature_url?: string | null;
   department_id: string | null;
   department_ids: string[];
   department_names: string[];
@@ -58,6 +59,25 @@ async function request<T>(
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(buildUrl(path), { ...init, headers });
   if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const msg = data?.error ?? data?.message ?? res.statusText;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data as T;
+}
+
+async function uploadForm<T>(path: string, formData: FormData): Promise<T> {
+  const token = getStoredToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(buildUrl(path), {
+    method: "POST",
+    headers,
+    body: formData,
+  });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -101,11 +121,16 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
-    updateProfile: (body: { full_name: string }) =>
+    updateProfile: (body: { full_name: string; signature_url?: string | null }) =>
       request<{ profile: Profile }>("/api/auth/me/profile", {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
+    uploadSignature: (file: File) => {
+      const formData = new FormData();
+      formData.append("signature", file);
+      return uploadForm<{ profile: Profile }>("/api/auth/me/signature", formData);
+    },
   },
 
   companySettings: {
@@ -179,7 +204,6 @@ export const api = {
       post_salutation?: string | null;
       allow_attachments?: boolean;
       department_id?: string | null;
-      default_work_assignee_id?: string | null;
     }) =>
       request("/api/approval-types", {
         method: "POST",
@@ -196,7 +220,6 @@ export const api = {
         post_salutation?: string | null;
         allow_attachments?: boolean;
         department_id?: string | null;
-        default_work_assignee_id?: string | null;
       },
     ) =>
       request(`/api/approval-types/${id}`, {
@@ -212,7 +235,7 @@ export const api = {
     create: (body: {
       name: string;
       approval_type_id: string;
-      default_work_assignee_id?: string | null;
+      work_assignee_id?: string | null;
       steps: Array<{
         step_order: number;
         name: string;
@@ -231,7 +254,7 @@ export const api = {
       body: {
         name?: string;
         approval_type_id?: string;
-        default_work_assignee_id?: string | null;
+        work_assignee_id?: string | null;
         steps?: Array<{
           step_order: number;
           name: string;
@@ -256,6 +279,7 @@ export const api = {
         id: string;
         full_name: string;
         email: string;
+        signature_url?: string | null;
         department_id: string | null;
         role_id: string | null;
         department_name: string | null;
@@ -275,6 +299,7 @@ export const api = {
       email: string;
       password: string;
       full_name: string;
+      signature_url?: string | null;
       department_id?: string | null;
       department_ids?: string[];
       role_id?: string | null;
@@ -293,6 +318,7 @@ export const api = {
       body: {
         email?: string;
         full_name?: string;
+        signature_url?: string | null;
         department_id?: string | null;
         department_ids?: string[];
         role_id?: string | null;
@@ -315,6 +341,14 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ new_password }),
       }),
+    uploadUserSignature: (userId: string, file: File) => {
+      const formData = new FormData();
+      formData.append("signature", file);
+      return uploadForm<{ profile: Profile }>(
+        `/api/admin/users/${userId}/signature`,
+        formData,
+      );
+    },
   },
 
   approvalRequests: {
@@ -331,12 +365,16 @@ export const api = {
     get: (id: string) =>
       request<{
         request: Record<string, unknown> & {
-          initiator?: { full_name: string };
+          initiator?: { full_name: string; signature_url?: string | null };
           approval_types?: unknown;
           departments?: unknown;
         };
         actions: Record<string, unknown>[];
         actorNames: Record<string, string>;
+        actorProfiles?: Record<
+          string,
+          { full_name: string; signature_url: string | null; department_name: string | null }
+        >;
       }>(`/api/approval-requests/${id}`),
     create: (body: {
       approval_type_id: string;
@@ -356,7 +394,7 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    reject: (id: string, body: { comment?: string }) =>
+    reject: (id: string, body: { comment: string }) =>
       request("/api/approval-requests/" + id + "/reject", {
         method: "POST",
         body: JSON.stringify(body),

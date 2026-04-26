@@ -21,6 +21,7 @@ import {
   getMimeType,
 } from "../fileUpload.js";
 import path from "path";
+import fs from "fs/promises";
 import { EmailNotificationService } from "../services/EmailNotificationService.js";
 
 export const apiRouter = Router();
@@ -36,6 +37,22 @@ function isFileInsideUploads(filePath: string): boolean {
   return (
     resolved === uploadsRoot || resolved.startsWith(`${uploadsRoot}${path.sep}`)
   );
+}
+
+async function signatureFileToDataUrl(file: Express.Multer.File): Promise<string> {
+  const extension = path.extname(file.originalname).toLowerCase();
+  const allowedExtensions = new Set([".jpg", ".jpeg", ".png"]);
+  const allowedMimeTypes = new Set(["image/jpeg", "image/png"]);
+
+  if (!allowedExtensions.has(extension) || !allowedMimeTypes.has(file.mimetype)) {
+    throw new HttpError(400, "Signature must be a PNG or JPG image");
+  }
+  if (!validateFileSize(file.size, 2)) {
+    throw new HttpError(400, "Signature image must be 2MB or smaller");
+  }
+
+  const buffer = await fs.readFile(file.path);
+  return `data:${file.mimetype};base64,${buffer.toString("base64")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -731,11 +748,11 @@ async function listEligibleWorkAssignees(
 
 async function ensureEligibleWorkAssignee(
   client: { query: typeof pool.query },
-  opts: { departmentId: string | null; initiatorId: string; assigneeId: string },
+  opts: { departmentId: string | null; assigneeId: string; excludeUserId?: string | null },
 ): Promise<{ id: string; full_name: string; email: string }> {
   const eligible = await listEligibleWorkAssignees(client, {
     departmentId: opts.departmentId,
-    excludeUserId: opts.initiatorId,
+    excludeUserId: opts.excludeUserId,
   });
   const assignee = eligible.find((candidate) => candidate.id === opts.assigneeId);
   if (!assignee) {
@@ -744,7 +761,7 @@ async function ensureEligibleWorkAssignee(
   return assignee;
 }
 
-async function resolveDefaultWorkAssigneeId(
+async function resolveChainWorkAssigneeId(
   client: { query: typeof pool.query },
   opts: { approvalChainId: string },
 ): Promise<string | null> {
@@ -1366,6 +1383,7 @@ apiRouter.patch(
 
 const profileUpdateBody = z.object({
   full_name: z.string().min(1),
+  signature_url: z.string().nullable().optional(),
 });
 
 apiRouter.patch(
@@ -1375,14 +1393,50 @@ apiRouter.patch(
     const body = profileUpdateBody.parse(req.body);
     const userId = req.auth!.userId;
 
+    const updates = ["full_name = $1"];
+    const values: unknown[] = [body.full_name.trim()];
+    let paramIdx = 2;
+    if (body.signature_url !== undefined) {
+      updates.push(`signature_url = $${paramIdx}`);
+      values.push(body.signature_url?.trim() || null);
+      paramIdx++;
+    }
+    updates.push("updated_at = now()");
+    values.push(userId);
+
     await pool.query(
-      `UPDATE profiles SET full_name = $1, updated_at = now() WHERE id = $2`,
-      [body.full_name.trim(), userId],
+      `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${paramIdx}`,
+      values,
     );
 
     // Return updated profile
     const profile = await loadProfileById(userId);
     res.json({ profile });
+  }),
+);
+
+apiRouter.post(
+  "/auth/me/signature",
+  requireAuth,
+  upload.single("signature"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const file = req.file as Express.Multer.File | undefined;
+    if (!file) {
+      throw new HttpError(400, "Signature image is required");
+    }
+
+    try {
+      const signatureDataUrl = await signatureFileToDataUrl(file);
+      await pool.query(
+        `UPDATE profiles SET signature_url = $1, updated_at = now() WHERE id = $2`,
+        [signatureDataUrl, req.auth!.userId],
+      );
+
+      const profile = await loadProfileById(req.auth!.userId);
+      res.json({ profile });
+    } finally {
+      await deleteUploadedFile(file.path);
+    }
   }),
 );
 
@@ -1979,11 +2033,10 @@ apiRouter.post(
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().default(false),
         department_id: z.string().uuid().nullable().optional(),
-        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, default_work_assignee_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [
         body.name.trim(),
         body.description ?? "",
@@ -1993,7 +2046,6 @@ apiRouter.post(
         body.post_salutation ?? null,
         body.allow_attachments,
         body.department_id ?? null,
-        body.default_work_assignee_id ?? null,
         req.auth!.userId,
       ],
     );
@@ -2035,7 +2087,6 @@ apiRouter.patch(
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().optional(),
         department_id: z.string().uuid().nullable().optional(),
-        default_work_assignee_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -2073,10 +2124,6 @@ apiRouter.patch(
       parts.push(`department_id = $${n++}`);
       vals.push(body.department_id);
     }
-    if (body.default_work_assignee_id !== undefined) {
-      parts.push(`default_work_assignee_id = $${n++}`);
-      vals.push(body.default_work_assignee_id);
-    }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
     vals.push(req.params.id);
@@ -2098,9 +2145,6 @@ apiRouter.patch(
       changes.push(`pre_salutation updated`);
     if (body.post_salutation !== undefined)
       changes.push(`post_salutation updated`);
-    if (body.default_work_assignee_id !== undefined)
-      changes.push(`default work assignee updated`);
-
     await logAudit(
       req.auth!.userId,
       req.profile!.full_name,
@@ -2694,6 +2738,7 @@ apiRouter.get(
     res.json(
       rows.map((row) => ({
         ...row,
+        work_assignee_id: row.default_work_assignee_id,
         steps: normalizeWorkflowSteps(row.steps),
       })),
     );
@@ -2719,7 +2764,7 @@ apiRouter.post(
         name: z.string().min(1),
         approval_type_id: z.string().uuid(),
         steps: z.array(workflowChainStepSchema).min(1),
-        default_work_assignee_id: z.string().uuid().nullable().optional(),
+        work_assignee_id: z.string().uuid(),
       })
       .parse(req.body);
     const normalizedSteps = normalizeWorkflowSteps(body.steps);
@@ -2727,6 +2772,10 @@ apiRouter.post(
     let created;
     try {
       await client.query("BEGIN");
+      const assignee = await ensureEligibleWorkAssignee(client, {
+        departmentId: null,
+        assigneeId: body.work_assignee_id,
+      });
       const { rows } = await client.query(
         `INSERT INTO approval_chains (name, approval_type_id, steps, default_work_assignee_id, created_by)
          VALUES ($1, $2, $3::jsonb, $4, $5)
@@ -2735,11 +2784,14 @@ apiRouter.post(
           body.name.trim(),
           body.approval_type_id,
           JSON.stringify(normalizedSteps),
-          body.default_work_assignee_id ?? null,
+          assignee.id,
           req.auth!.userId,
         ],
       );
-      created = rows[0];
+      created = {
+        ...rows[0],
+        work_assignee_id: rows[0].default_work_assignee_id,
+      };
       await syncApprovalChainSteps(client, created.id, normalizedSteps);
       await client.query("COMMIT");
     } catch (error) {
@@ -2784,7 +2836,7 @@ apiRouter.patch(
         name: z.string().min(1).optional(),
         approval_type_id: z.string().uuid().optional(),
         steps: z.array(workflowChainStepSchema).min(1).optional(),
-        default_work_assignee_id: z.string().uuid().nullable().optional(),
+        work_assignee_id: z.string().uuid().optional(),
       })
       .parse(req.body);
     const parts: string[] = [];
@@ -2802,9 +2854,9 @@ apiRouter.patch(
       parts.push(`steps = $${n++}::jsonb`);
       vals.push(JSON.stringify(normalizeWorkflowSteps(body.steps)));
     }
-    if (body.default_work_assignee_id !== undefined) {
+    if (body.work_assignee_id !== undefined) {
       parts.push(`default_work_assignee_id = $${n++}`);
-      vals.push(body.default_work_assignee_id);
+      vals.push(body.work_assignee_id);
     }
     if (parts.length === 0) throw new HttpError(400, "No fields to update");
     parts.push(`updated_at = now()`);
@@ -2813,12 +2865,21 @@ apiRouter.patch(
     let updated;
     try {
       await client.query("BEGIN");
+      if (body.work_assignee_id !== undefined) {
+        await ensureEligibleWorkAssignee(client, {
+          departmentId: null,
+          assigneeId: body.work_assignee_id,
+        });
+      }
       const { rows } = await client.query(
         `UPDATE approval_chains SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`,
         vals,
       );
       if (rows.length === 0) throw new HttpError(404, "Not found");
-      updated = rows[0];
+      updated = {
+        ...rows[0],
+        work_assignee_id: rows[0].default_work_assignee_id,
+      };
       if (body.steps !== undefined) {
         await syncApprovalChainSteps(client, req.params.id, normalizeWorkflowSteps(body.steps));
       }
@@ -2836,8 +2897,7 @@ apiRouter.patch(
     if (body.approval_type_id !== undefined)
       changes.push(`approval_type_id updated`);
     if (body.steps !== undefined) changes.push(`steps updated`);
-    if (body.default_work_assignee_id !== undefined)
-      changes.push(`default work assignee updated`);
+    if (body.work_assignee_id !== undefined) changes.push(`work assignee updated`);
 
     await logAudit(
       req.auth!.userId,
@@ -2971,6 +3031,7 @@ const createUserBody = z.object({
   role_id: z.string().uuid().nullable().optional(),
   role_ids: z.array(z.string().uuid()).optional(), // Support multiple roles on creation
   is_admin: z.boolean().optional(),
+  signature_url: z.string().nullable().optional(),
 });
 
 apiRouter.post(
@@ -3013,8 +3074,8 @@ apiRouter.post(
       );
       const id = u.rows[0].id;
       await client.query(
-        `INSERT INTO profiles (id, email, full_name, department_id, role_id, is_admin)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO profiles (id, email, full_name, department_id, role_id, is_admin, signature_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           id,
           body.email.toLowerCase(),
@@ -3022,6 +3083,7 @@ apiRouter.post(
           assignedDepartmentIds[0] ?? null,
           assignedRoleIds[0] ?? null,
           body.is_admin ?? false,
+          body.signature_url?.trim() || null,
         ],
       );
 
@@ -3129,9 +3191,55 @@ apiRouter.patch(
   }),
 );
 
+apiRouter.post(
+  "/admin/users/:userId/signature",
+  requireAuth,
+  upload.single("signature"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_users") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const file = req.file as Express.Multer.File | undefined;
+    if (!file) {
+      throw new HttpError(400, "Signature image is required");
+    }
+
+    try {
+      const signatureDataUrl = await signatureFileToDataUrl(file);
+      const result = await pool.query(
+        `UPDATE profiles SET signature_url = $1, updated_at = now() WHERE id = $2`,
+        [signatureDataUrl, req.params.userId],
+      );
+      if (result.rowCount === 0) {
+        throw new HttpError(404, "User not found");
+      }
+
+      await logAudit(
+        req.auth!.userId,
+        req.profile!.full_name,
+        "UPDATE",
+        "User",
+        "Updated user signature",
+      );
+
+      const profile = await loadProfileById(req.params.userId);
+      res.json({ profile });
+    } finally {
+      await deleteUploadedFile(file.path);
+    }
+  }),
+);
+
 const updateUserBody = z.object({
   email: z.string().email().optional(),
   full_name: z.string().min(1).optional(),
+  signature_url: z.string().nullable().optional(),
   department_id: z.string().uuid().nullable().optional(),
   department_ids: z.array(z.string().uuid()).optional(),
   role_id: z.string().uuid().nullable().optional(),
@@ -3158,7 +3266,18 @@ apiRouter.patch(
     const body = updateUserBody.parse(req.body);
 
     if (!isAdmin && body.is_admin !== undefined) {
-      throw new HttpError(403, "Only admins can change admin access");
+      const { rows } = await pool.query<{ is_admin: boolean }>(
+        `SELECT is_admin FROM profiles WHERE id = $1`,
+        [req.params.userId],
+      );
+      if (rows.length === 0) {
+        throw new HttpError(404, "User not found");
+      }
+      if (rows[0].is_admin !== body.is_admin) {
+        throw new HttpError(403, "Only admins can change admin access");
+      }
+
+      delete body.is_admin;
     }
 
     // Prevent non-admin users from changing role and permissions for users with admin console access
@@ -3290,6 +3409,11 @@ apiRouter.patch(
         values.push(body.full_name.trim());
         paramIdx++;
       }
+      if (body.signature_url !== undefined) {
+        updates.push(`signature_url = $${paramIdx}`);
+        values.push(body.signature_url?.trim() || null);
+        paramIdx++;
+      }
       if (body.department_id !== undefined || body.department_ids !== undefined) {
         updates.push(`department_id = $${paramIdx}`);
         values.push(assignedDepartmentIds[0] ?? null);
@@ -3369,6 +3493,8 @@ apiRouter.patch(
         changes.push(`email: "${body.email.toLowerCase()}"`);
       if (body.full_name !== undefined)
         changes.push(`full_name: "${body.full_name}"`);
+      if (body.signature_url !== undefined)
+        changes.push("signature updated");
       if (body.department_id !== undefined || body.department_ids !== undefined)
         changes.push(`departments: [${assignedDepartmentIds.join(", ")}]`);
       if (body.role_id !== undefined || body.role_ids !== undefined)
@@ -3816,7 +3942,10 @@ apiRouter.get(
           'allow_attachments', at.allow_attachments
         ) AS approval_types,
         json_build_object('name', d.name) AS departments,
-        json_build_object('full_name', ip.full_name) AS initiator,
+        json_build_object(
+          'full_name', ip.full_name,
+          'signature_url', ip.signature_url
+        ) AS initiator,
         json_build_object(
           'id', wa.id,
           'full_name', wa.full_name,
@@ -3857,16 +3986,33 @@ apiRouter.get(
       ),
     ] as string[];
     const actorNames: Record<string, string> = {};
+    const actorProfiles: Record<
+      string,
+      { full_name: string; signature_url: string | null; department_name: string | null }
+    > = {};
     if (actorIds.length > 0) {
       const { rows: actors } = await pool.query<{
         id: string;
         full_name: string;
-      }>(`SELECT id, full_name FROM profiles WHERE id = ANY($1::uuid[])`, [
-        actorIds,
-      ]);
-      for (const a of actors) actorNames[a.id] = a.full_name;
+        signature_url: string | null;
+        department_name: string | null;
+      }>(
+        `SELECT p.id, p.full_name, p.signature_url, d.name AS department_name
+           FROM profiles p
+           LEFT JOIN departments d ON d.id = p.department_id
+          WHERE p.id = ANY($1::uuid[])`,
+        [actorIds],
+      );
+      for (const a of actors) {
+        actorNames[a.id] = a.full_name;
+        actorProfiles[a.id] = {
+          full_name: a.full_name,
+          signature_url: a.signature_url,
+          department_name: a.department_name,
+        };
+      }
     }
-    res.json({ request: rows[0], actions, actorNames });
+    res.json({ request: rows[0], actions, actorNames, actorProfiles });
   }),
 );
 
@@ -3931,10 +4077,7 @@ apiRouter.post(
     const uid = req.auth!.userId;
 
     if (!body.approval_chain_id) {
-      throw new HttpError(
-        400,
-        "Approval chain is required because default work assignee is configured at chain level",
-      );
+      throw new HttpError(400, "Approval chain is required");
     }
 
     const { rows: typeRows } = await pool.query<{ department_id: string | null }>(
@@ -3997,24 +4140,13 @@ apiRouter.post(
     let createdRequest: Record<string, unknown>;
     try {
       await client.query("BEGIN");
-      const defaultWorkAssigneeId = await resolveDefaultWorkAssigneeId(client, {
+      const chainWorkAssigneeId = await resolveChainWorkAssigneeId(client, {
         approvalChainId: body.approval_chain_id,
       });
 
-      if (!defaultWorkAssigneeId) {
-        throw new HttpError(
-          400,
-          "No default work assignee is configured on the selected approval chain",
-        );
+      if (!chainWorkAssigneeId) {
+        throw new HttpError(400, "No work assignee is configured on the selected approval chain");
       }
-
-      await ensureEligibleWorkAssignee(client, {
-        // Global approval types (no fixed department) can target any eligible assignee.
-        // Department-scoped types must keep assignees within the request department scope.
-        departmentId: typeRows[0].department_id ? requestDeptId : null,
-        initiatorId: uid,
-        assigneeId: defaultWorkAssigneeId,
-      });
 
       const ins = await client.query(
         `INSERT INTO approval_requests (
@@ -4033,7 +4165,7 @@ apiRouter.post(
           chainSteps.length || body.total_steps,
           chainSteps.length > 0 ? "in_progress" : body.status,
           "pending",
-          defaultWorkAssigneeId,
+          chainWorkAssigneeId,
           uid,
         ],
       );
@@ -4080,6 +4212,13 @@ apiRouter.post(
 // Approve an approval request
 const actionBody = z.object({
   comment: z.string().optional(),
+});
+
+const rejectActionBody = z.object({
+  comment: z
+    .string()
+    .trim()
+    .min(1, "A rejection reason is required"),
 });
 
 const assignWorkBody = z.object({
@@ -4247,7 +4386,7 @@ apiRouter.post(
   "/approval-requests/:id/reject",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
-    const body = actionBody.parse(req.body);
+    const body = rejectActionBody.parse(req.body);
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const userPermissions = req.profile!.permissions || [];
@@ -4294,7 +4433,7 @@ apiRouter.post(
         `UPDATE approval_actions
             SET status = 'rejected', acted_by = $1, acted_at = now(), comment = $2
           WHERE id = $3`,
-        [userId, body.comment || null, currentAction.id],
+        [userId, body.comment, currentAction.id],
       );
       await syncRequestStepAction(client, {
         requestId,
@@ -4401,8 +4540,8 @@ apiRouter.post(
       }
 
       const assignee = await ensureEligibleWorkAssignee(client, {
-        departmentId: request.department_id,
-        initiatorId: request.initiator_id,
+        departmentId: null,
+        excludeUserId: request.initiator_id,
         assigneeId: body.assignee_id,
       });
 
@@ -4489,7 +4628,7 @@ apiRouter.post(
       const { rows: updatedRequests } = await client.query(
         `UPDATE approval_requests
             SET work_status = $1,
-                work_completed_by = CASE WHEN $1 = 'done' THEN $2 ELSE NULL END,
+                work_completed_by = CASE WHEN $1 = 'done' THEN $2::uuid ELSE NULL::uuid END,
                 work_completed_at = CASE WHEN $1 = 'done' THEN now() ELSE NULL END,
                 updated_at = now()
           WHERE id = $3
@@ -4750,6 +4889,14 @@ apiRouter.patch(
         auditLabel,
       );
 
+      if (editedByApprover) {
+        await emailNotificationService.notifyChangesRequested(
+          requestId,
+          req.profile!.full_name,
+          body.comment,
+        );
+      }
+
       res.json({ request: updatedRequests[0], actions: updatedActions });
       return;
     } catch (error) {
@@ -4787,6 +4934,7 @@ async function loadProfileById(id: string) {
        p.id,
        p.full_name,
        p.email,
+       p.signature_url,
        p.department_id,
        p.role_id,
        p.is_admin,

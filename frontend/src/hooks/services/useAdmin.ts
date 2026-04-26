@@ -102,3 +102,26 @@ export const useResetUserPassword = () => {
     },
   });
 };
+
+export const useUploadUserSignature = () => {
+  const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+
+  return useMutation({
+    mutationFn: ({ userId, file }: { userId: string; file: File }) => {
+      if (!hasPermission("manage_users")) {
+        throw new Error("You do not have permission to manage users");
+      }
+      return services.admin.uploadUserSignature(userId, file);
+    },
+    onSuccess: (_, { userId }) => {
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["profiles", userId] });
+      queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+      toast.success("Signature uploaded successfully");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to upload signature");
+    },
+  });
+};

@@ -75,6 +75,10 @@ export async function verifyDatabaseReady(): Promise<void> {
 
   // 1. Ensure approver_user_id column + supporting indexes exist.
   await pool.query(`
+    ALTER TABLE profiles
+      ADD COLUMN IF NOT EXISTS signature_url TEXT
+  `);
+  await pool.query(`
     ALTER TABLE approval_actions
       ADD COLUMN IF NOT EXISTS approver_user_id UUID
   `);
