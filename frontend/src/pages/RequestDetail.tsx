@@ -1061,7 +1061,6 @@ export default function RequestDetail() {
             </p>
           </div>
         </div>
-      </div>
         <div
           className="mt-auto pt-4"
           style={{
@@ -1103,53 +1102,53 @@ export default function RequestDetail() {
   return (
     <div className="p-4 sm:p-6">
       <div className="mx-auto w-full max-w-7xl space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3 no-print">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate("/approvals")}
-          >
-            <ArrowLeft className="mr-1 h-4 w-4" /> Back
-          </Button>
-          <Separator orientation="vertical" className="h-6" />
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">{displayId}</h1>
-              <StatusBadge status={request.status} />
+        <div className="flex flex-wrap items-start justify-between gap-3 no-print">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/approvals")}
+            >
+              <ArrowLeft className="mr-1 h-4 w-4" /> Back
+            </Button>
+            <Separator orientation="vertical" className="h-6" />
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold tracking-tight text-foreground">{displayId}</h1>
+                <StatusBadge status={request.status} />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Review request details, timeline, and work completion.
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Review request details, timeline, and work completion.
-            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {canDeleteRequest() && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteRequest}
+                className="gap-2"
+                disabled={actioning}
+              >
+                {actioning ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                Delete Request
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePrint}
+              className="gap-2"
+            >
+              <Printer className="h-4 w-4" /> Print Letter
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {canDeleteRequest() && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleDeleteRequest}
-              className="gap-2"
-              disabled={actioning}
-            >
-              {actioning ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-              Delete Request
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePrint}
-            className="gap-2"
-          >
-            <Printer className="h-4 w-4" /> Print Letter
-          </Button>
-        </div>
-      </div>
 
       <div
         className="print-only"
