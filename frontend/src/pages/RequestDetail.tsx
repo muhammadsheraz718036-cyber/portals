@@ -682,9 +682,8 @@ export default function RequestDetail() {
     if (profile.is_admin) return true;
 
     return (
-      request.initiator_id === user.id &&
-      (profile.permissions?.includes("delete_initiated_requests") ||
-        profile.permissions?.includes("all"))
+      profile.permissions?.includes("delete_initiated_requests") ||
+      profile.permissions?.includes("all")
     );
   };
 
@@ -1068,7 +1067,7 @@ export default function RequestDetail() {
             </>
           </div>
         )}
-        <div className="mt-12 flex justify-start">
+        <div className="mt-4 flex justify-start">
           <div className="text-left w-full max-w-[210px]">
             {request?.initiator?.signature_url && (
               <img
@@ -1092,7 +1091,7 @@ export default function RequestDetail() {
           </div>
         </div>
         {approvedSignatureActions.length > 0 && (
-          <div className="mt-8">
+          <div className="mt-4">
             <p
               className="font-bold"
               style={{
@@ -1103,7 +1102,7 @@ export default function RequestDetail() {
             >
               Approval Signatures
             </p>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+            <div className="grid grid-cols-3 gap-x-4 gap-y-2">
               {approvedSignatureActions.map((action) => {
                 const actorId = action.acted_by as string;
                 const actorProfile = actorProfiles[actorId];
@@ -1599,9 +1598,6 @@ export default function RequestDetail() {
                   const iconKey = iconKeyForAction(primary.status);
                   const roleTitle = getTimelineRoleTitle(primary);
                   const actionSummary = getTimelineActionSummary(primary);
-                  const primaryActorProfile = primary.acted_by
-                    ? actorProfiles[primary.acted_by]
-                    : undefined;
 
                   return (
                     <div
@@ -1670,25 +1666,6 @@ export default function RequestDetail() {
                                 </span>
                               )}
                           </div>
-                          {primary.status === "approved" &&
-                            primaryActorProfile?.signature_url && (
-                              <div className="mt-3 rounded-lg border bg-white p-2">
-                                <img
-                                  src={primaryActorProfile.signature_url}
-                                  alt={`${
-                                    primaryActorProfile.full_name ??
-                                    "Approver"
-                                  } signature`}
-                                  className="h-10 max-w-[180px] object-contain"
-                                />
-                                {primaryActorProfile.department_name && (
-                                  <p className="mt-1 text-xs text-slate-600">
-                                    {primaryActorProfile.department_name}
-                                  </p>
-                                )}
-                              </div>
-                            )}
-
                           {primary.comment && (
                             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">

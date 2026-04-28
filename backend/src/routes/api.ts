@@ -4712,10 +4712,10 @@ apiRouter.delete(
     const request = requests[0];
     const isInitiator = request.initiator_id === userId;
 
-    if (!isAdmin && (!hasDeletePermission || !isInitiator)) {
+    if (!isAdmin && !hasDeletePermission) {
       throw new HttpError(
         403,
-        "Only admins or the initiator with delete permission can delete this request",
+        "Only admins or users with delete request permission can delete this request",
       );
     }
 
