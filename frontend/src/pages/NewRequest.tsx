@@ -465,15 +465,15 @@ export default function NewRequest() {
                       display: "flex",
                       flexDirection: "column",
                       minHeight: "100%",
-                      height: "100%",
+                      height: "auto",
                       width: "100%",
                       padding: "0.5in",
                       boxSizing: "border-box",
-                      overflow: "hidden",
+                      overflow: "visible",
                     }}
                   >
                     <div className="relative z-10 flex-1 flex flex-col">
-                      <div className="text-center border-b-2 border-foreground pb-3">
+                      <div className="text-center border-b-2 border-foreground pb-2">
                         {settings?.logo_url && (
                           <img
                             src={settings.logo_url}
@@ -494,7 +494,7 @@ export default function NewRequest() {
                       </div>
 
                       <div
-                        className="flex justify-between mt-3"
+                        className="flex justify-between mt-2"
                         style={{ fontSize: "14px" }}
                       >
                         <div>
@@ -513,14 +513,13 @@ export default function NewRequest() {
                         </div>
                       </div>
 
-                      <div>
+                      <div className="my-4">
                         {preComments ? (
                           <div
                             style={{
                               fontSize: "14px",
                               fontFamily: "Arial, sans-serif",
                               marginBottom: "0.625rem",
-                              marginTop: "0.625rem",
                             }}
                             dangerouslySetInnerHTML={{
                               __html: safePreComments,
@@ -542,13 +541,13 @@ export default function NewRequest() {
                               if (groupFields.length === 0) return null;
 
                                 return (
-                                  <div key={group} className="pb-3">
-                                    <h3 className="text-sm font-semibold mb-2">
+                                  <div key={group}>
+                                    <h3 className="text-xs font-semibold">
                                       {group}
                                     </h3>
                                     {groupItems.length === 0 ? (
-                                      <p className="text-sm text-muted-foreground py-2">
-                                        No values entered for this group.
+                                      <p className="text-xs text-muted-foreground py-2">
+                                        No entries for this group.
                                       </p>
                                     ) : (
                                       <table
@@ -560,7 +559,7 @@ export default function NewRequest() {
                                             {groupFields.map((field) => (
                                               <th
                                                 key={`${group}-${field.name}-header`}
-                                                className="border border-foreground bg-muted font-semibold text-center"
+                                                className="border text-xs border-foreground bg-muted font-semibold text-center"
                                               >
                                                 {field.label || field.name}
                                               </th>
@@ -614,8 +613,15 @@ export default function NewRequest() {
                         ) : null}
                       </div>
 
-                      <div className="mt-12 flex justify-start">
+                      <div className="flex justify-start">
                         <div className="text-left w-full max-w-[210px]">
+                          {profile?.signature_url && (
+                            <img
+                              src={profile.signature_url}
+                              alt={`${profile?.full_name || "Initiator"} signature`}
+                              className="mb-0 block h-14 max-w-[180px] object-contain"
+                            />
+                          )}
                           <p className="font-bold" style={{ fontSize: "14px" }}>
                             {profile?.full_name ?? ""}
                           </p>
@@ -624,6 +630,12 @@ export default function NewRequest() {
                             style={{ fontSize: "13px" }}
                           >
                             {profile?.role_name || "No Role Assigned"}
+                          </p>
+                          <p
+                            className="text-muted-foreground"
+                            style={{ fontSize: "13px" }}
+                          >
+                            {profile?.department_name || ""}
                           </p>
                           <p
                             className="text-muted-foreground"
@@ -649,8 +661,8 @@ export default function NewRequest() {
                         className="bg-card border rounded shadow-sm"
                         style={{
                           width: pageWidth,
-                          height: pageHeight,
-                          overflow: "hidden",
+                          minHeight: pageHeight,
+                          overflow: "visible",
                           boxSizing: "border-box",
                           display: "flex",
                           flexDirection: "column",

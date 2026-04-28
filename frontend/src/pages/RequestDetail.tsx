@@ -452,47 +452,46 @@ export default function RequestDetail() {
       : "Request_Letter",
     pageStyle: `
       @page {
-        size: ${isLandscape ? "landscape" : "portrait"};
+        size: ${pageSize};
         margin: 0;
       }
       html, body {
         margin: 0 !important;
         padding: 0 !important;
         width: 100% !important;
-        height: 100% !important;
+        min-height: 100% !important;
       }
       #print-letter {
         display: block !important;
         width: ${pageWidth} !important;
-        height: ${pageHeight} !important;
+        min-height: ${pageHeight} !important;
+        height: auto !important;
         margin: 0 !important;
         padding: 0 !important;
         box-sizing: border-box !important;
-        overflow: hidden !important;
-        page-break-inside: avoid !important;
-        page-break-before: avoid !important;
-        page-break-after: avoid !important;
+        overflow: visible !important;
       }
       #print-letter > div {
         width: 100% !important;
-        height: 100% !important;
+        min-height: ${pageHeight} !important;
+        height: auto !important;
         margin: 0 !important;
-        padding: 1in !important;
         box-sizing: border-box !important;
-        overflow: hidden !important;
+        overflow: visible !important;
         display: flex !important;
         flex-direction: column !important;
       }
       #print-letter .relative {
         height: auto !important;
-        min-height: auto !important;
+        min-height: 0 !important;
         flex: 1 !important;
-        page-break-inside: avoid !important;
       }
-      #print-letter * {
-        page-break-inside: avoid !important;
-        page-break-before: avoid !important;
-        page-break-after: avoid !important;
+      #print-letter table,
+      #print-letter tr,
+      #print-letter img,
+      #print-letter .grid > div {
+        break-inside: avoid;
+        page-break-inside: avoid;
       }
       #print-letter table { width: 100% !important; table-layout: auto !important; }
       #print-letter table td { word-break: break-word !important; }
@@ -922,11 +921,11 @@ export default function RequestDetail() {
         display: "flex",
         flexDirection: "column",
         minHeight: "100%",
-        height: "100%",
+        height: "auto",
         width: "100%",
         padding: "0.5in",
         boxSizing: "border-box",
-        overflow: "hidden",
+        overflow: "visible",
       }}
     >
       <div className="relative z-10 flex-1 flex flex-col">
@@ -1067,13 +1066,13 @@ export default function RequestDetail() {
             </>
           </div>
         )}
-        <div className="mt-4 flex justify-start">
+        <div className="flex justify-start">
           <div className="text-left w-full max-w-[210px]">
             {request?.initiator?.signature_url && (
               <img
                 src={request.initiator.signature_url}
                 alt={`${initiatorName || "Initiator"} signature`}
-                className="mb-1 h-14 max-w-[180px] object-contain"
+                className="mb-0 block h-14 max-w-[180px] object-contain"
               />
             )}
             <p className="font-bold" style={{ fontSize: "14px" }}>
@@ -1091,18 +1090,18 @@ export default function RequestDetail() {
           </div>
         </div>
         {approvedSignatureActions.length > 0 && (
-          <div className="mt-4">
+          <div className="mt-2">
             <p
               className="font-bold"
               style={{
                 fontSize: "13px",
                 fontFamily: "Arial, sans-serif",
-                marginBottom: "0.5rem",
+                marginBottom: "0.25rem",
               }}
             >
               Approval Signatures
             </p>
-            <div className="grid grid-cols-3 gap-x-4 gap-y-2">
+            <div className="grid grid-cols-3 gap-x-4 gap-y-1">
               {approvedSignatureActions.map((action) => {
                 const actorId = action.acted_by as string;
                 const actorProfile = actorProfiles[actorId];
@@ -1114,18 +1113,18 @@ export default function RequestDetail() {
                 return (
                   <div
                     key={`print-signature-${action.id}`}
-                    className="min-h-[88px]"
+                    className="min-h-[76px]"
                   >
                     {actorProfile?.signature_url ? (
                       <img
                         src={actorProfile.signature_url}
                         alt={`${actorName} signature`}
-                        className="mb-1 h-12 max-w-[160px] object-contain"
+                        className="mb-0 block h-12 max-w-[160px] object-contain"
                       />
                     ) : (
-                      <div className="mb-1 h-12" />
+                      <div className="mb-0 h-12" />
                     )}
-                    <div className="border-t border-foreground/70 pt-1">
+                    <div className="border-t border-foreground/70 pt-0.5">
                       <p className="font-bold" style={{ fontSize: "13px" }}>
                         {actorName}
                       </p>
@@ -1244,7 +1243,7 @@ export default function RequestDetail() {
         style={{
           display: "none",
           width: pageWidth,
-          height: pageHeight,
+          minHeight: pageHeight,
           boxSizing: "border-box",
         }}
       >
