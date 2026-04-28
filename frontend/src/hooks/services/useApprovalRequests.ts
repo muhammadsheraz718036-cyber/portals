@@ -35,6 +35,7 @@ export const useCreateApprovalRequest = () => {
       services.approvalRequests.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
       toast.success("Request created successfully");
     },
     onError: (error: Error) => {
@@ -93,6 +94,7 @@ export const useApproveRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
       toast.success("Request approved successfully");
     },
     onError: (error: Error) => {
@@ -110,6 +112,7 @@ export const useRejectRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
       toast.success("Request rejected successfully");
     },
     onError: (error: Error) => {
@@ -127,6 +130,7 @@ export const useAssignWorkRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
       toast.success("Work assignee updated");
     },
     onError: (error: Error) => {
@@ -151,6 +155,7 @@ export const useUpdateWorkStatusRequest = () => {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.REQUEST_DETAIL(id) });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
       toast.success("Work status updated");
     },
     onError: (error: Error) => {

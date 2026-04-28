@@ -6,7 +6,7 @@ export interface LineItem {
   [key: string]: string | number | unknown;
 }
 
-function getGroups(repeatableFields: ApprovalFormField[]) {
+export function getGroups(repeatableFields: ApprovalFormField[]) {
   return Array.from(
     new Set(repeatableFields.map((field) => field.group || "General")),
   );

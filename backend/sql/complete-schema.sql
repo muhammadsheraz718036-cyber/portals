@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  request_id UUID REFERENCES approval_requests(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS company_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_name TEXT NOT NULL DEFAULT 'ApprovalHub',
@@ -373,6 +386,8 @@ CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(sta
 CREATE INDEX IF NOT EXISTS idx_approval_actions_request ON approval_actions(request_id);
 CREATE INDEX IF NOT EXISTS idx_approval_chains_type ON approval_chains(approval_type_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_approval_types_department_id ON approval_types(department_id);
 CREATE INDEX IF NOT EXISTS idx_approval_type_attachments_type ON approval_type_attachments(approval_type_id);
 CREATE INDEX IF NOT EXISTS idx_request_attachments_request ON request_attachments(request_id);
@@ -1032,7 +1047,7 @@ BEGIN
   AND table_name IN (
     'users', 'departments', 'roles', 'profiles', 'approval_types', 
     'approval_chains', 'approval_requests', 'approval_actions', 
-    'audit_logs', 'company_settings', 'approval_type_attachments', 
+    'audit_logs', 'notifications', 'company_settings', 'approval_type_attachments', 
     'request_attachments', 'migration_log'
   );
   

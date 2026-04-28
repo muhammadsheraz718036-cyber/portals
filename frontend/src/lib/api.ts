@@ -48,6 +48,19 @@ export interface AuthUser {
   email: string;
 }
 
+export interface AppNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+  request_id: string | null;
+  request_number: string | null;
+  actor_name: string | null;
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit & { skipAuth?: boolean },
@@ -425,6 +438,22 @@ export const api = {
       request<{ id: string }>(
         `/api/approval-requests/by-number/${encodeURIComponent(requestNumber)}`,
       ),
+  },
+
+  notifications: {
+    list: (limit = 30) =>
+      request<{
+        notifications: AppNotification[];
+        unreadCount: number;
+      }>(`/api/notifications?limit=${encodeURIComponent(String(limit))}`),
+    markRead: (id: string) =>
+      request<{ success: boolean }>(`/api/notifications/${id}/read`, {
+        method: "POST",
+      }),
+    markAllRead: () =>
+      request<{ success: boolean }>("/api/notifications/read-all", {
+        method: "POST",
+      }),
   },
 
   auditLogs: {

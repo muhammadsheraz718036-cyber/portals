@@ -127,6 +127,28 @@ export async function verifyDatabaseReady(): Promise<void> {
       ON approval_requests(work_assignee_id)
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      actor_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+      request_id UUID REFERENCES approval_requests(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      read_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_created
+      ON notifications(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+      ON notifications(user_id, read_at)
+  `);
+  await pool.query(`
     DO $$
     BEGIN
       IF EXISTS (

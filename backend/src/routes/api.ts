@@ -815,6 +815,171 @@ async function logAudit(
   }
 }
 
+type NotificationClient = { query: typeof pool.query };
+
+async function createNotification(
+  client: NotificationClient,
+  opts: {
+    userId: string | null | undefined;
+    actorId?: string | null;
+    requestId?: string | null;
+    type: string;
+    title: string;
+    body: string;
+    metadata?: Record<string, unknown>;
+    skipActor?: boolean;
+  },
+): Promise<void> {
+  if (!opts.userId) return;
+  if (opts.skipActor !== false && opts.actorId && opts.userId === opts.actorId) return;
+
+  await client.query(
+    `INSERT INTO notifications
+       (user_id, actor_id, request_id, type, title, body, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [
+      opts.userId,
+      opts.actorId ?? null,
+      opts.requestId ?? null,
+      opts.type,
+      opts.title,
+      opts.body,
+      JSON.stringify(opts.metadata ?? {}),
+    ],
+  );
+}
+
+async function getRequestNotificationContext(
+  client: NotificationClient,
+  requestId: string,
+): Promise<{
+  id: string;
+  request_number: string;
+  initiator_id: string;
+  work_assignee_id: string | null;
+  approval_type_name: string | null;
+} | null> {
+  const { rows } = await client.query<{
+    id: string;
+    request_number: string;
+    initiator_id: string;
+    work_assignee_id: string | null;
+    approval_type_name: string | null;
+  }>(
+    `SELECT ar.id,
+            ar.request_number,
+            ar.initiator_id,
+            ar.work_assignee_id,
+            at.name AS approval_type_name
+       FROM approval_requests ar
+       LEFT JOIN approval_types at ON at.id = ar.approval_type_id
+      WHERE ar.id = $1`,
+    [requestId],
+  );
+  return rows[0] ?? null;
+}
+
+async function notifyPendingApprovalAssignees(
+  client: NotificationClient,
+  opts: {
+    requestId: string;
+    actorId?: string | null;
+    title: string;
+    body: string;
+    type?: string;
+  },
+): Promise<void> {
+  const request = await getRequestNotificationContext(client, opts.requestId);
+  if (!request) return;
+
+  const { rows } = await client.query<{
+    user_id: string;
+    action_label: string | null;
+    role_name: string | null;
+  }>(
+    `SELECT DISTINCT aa.approver_user_id AS user_id,
+            aa.action_label,
+            aa.role_name
+       FROM approval_actions aa
+       JOIN profiles p ON p.id = aa.approver_user_id
+      WHERE aa.request_id = $1
+        AND aa.status = 'pending'
+        AND aa.approver_user_id IS NOT NULL
+        AND p.is_active = true`,
+    [opts.requestId],
+  );
+
+  for (const recipient of rows) {
+    await createNotification(client, {
+      userId: recipient.user_id,
+      actorId: opts.actorId ?? null,
+      requestId: opts.requestId,
+      type: opts.type ?? "approval_required",
+      title: opts.title,
+      body: opts.body,
+      metadata: {
+        request_number: request.request_number,
+        approval_type_name: request.approval_type_name,
+        action_label: recipient.action_label || recipient.role_name,
+      },
+    });
+  }
+}
+
+async function notifyRequestInitiator(
+  client: NotificationClient,
+  opts: {
+    requestId: string;
+    actorId?: string | null;
+    type: string;
+    title: string;
+    body: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const request = await getRequestNotificationContext(client, opts.requestId);
+  if (!request) return;
+  await createNotification(client, {
+    userId: request.initiator_id,
+    actorId: opts.actorId ?? null,
+    requestId: opts.requestId,
+    type: opts.type,
+    title: opts.title,
+    body: opts.body,
+    metadata: {
+      request_number: request.request_number,
+      approval_type_name: request.approval_type_name,
+      ...(opts.metadata ?? {}),
+    },
+  });
+}
+
+async function notifyWorkAssignee(
+  client: NotificationClient,
+  opts: {
+    requestId: string;
+    actorId?: string | null;
+    title: string;
+    body: string;
+    type?: string;
+  },
+): Promise<void> {
+  const request = await getRequestNotificationContext(client, opts.requestId);
+  if (!request?.work_assignee_id) return;
+  await createNotification(client, {
+    userId: request.work_assignee_id,
+    actorId: opts.actorId ?? null,
+    requestId: opts.requestId,
+    type: opts.type ?? "work_assigned",
+    title: opts.title,
+    body: opts.body,
+    metadata: {
+      request_number: request.request_number,
+      approval_type_name: request.approval_type_name,
+    },
+  });
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4182,6 +4347,12 @@ apiRouter.post(
             formData: body.form_data,
           },
         });
+        await notifyPendingApprovalAssignees(client, {
+          requestId: createdRequest.id as string,
+          actorId: uid,
+          title: "Approval required",
+          body: `${req.profile!.full_name} submitted ${createdRequest.request_number} for your approval.`,
+        });
       }
 
       await client.query("COMMIT");
@@ -4337,6 +4508,26 @@ apiRouter.post(
             WHERE id = $1`,
           [requestId],
         );
+        await notifyRequestInitiator(client, {
+          requestId,
+          actorId: userId,
+          type: "request_approved",
+          title: "Request approved",
+          body: `${lockedRequest.request_number ?? "Your request"} has been fully approved.`,
+        });
+        await notifyWorkAssignee(client, {
+          requestId,
+          actorId: userId,
+          title: "Work assigned",
+          body: `${lockedRequest.request_number ?? "An approved request"} has been assigned to you.`,
+        });
+      } else {
+        await notifyPendingApprovalAssignees(client, {
+          requestId,
+          actorId: userId,
+          title: "Approval required",
+          body: `${req.profile!.full_name} approved the previous step. This request is now waiting for you.`,
+        });
       }
 
       await client.query("COMMIT");
@@ -4462,6 +4653,13 @@ apiRouter.post(
           WHERE id = $1`,
         [requestId],
       );
+      await notifyRequestInitiator(client, {
+        requestId,
+        actorId: userId,
+        type: "request_rejected",
+        title: "Request rejected",
+        body: `${req.profile!.full_name} rejected ${lockedRequest.request_number}.`,
+      });
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -4573,6 +4771,14 @@ apiRouter.post(
         [assignee.id, userId, requestId],
       );
 
+      await notifyWorkAssignee(client, {
+        requestId,
+        actorId: userId,
+        type: "work_assigned",
+        title: "Work assignment updated",
+        body: `${request.request_number} has been assigned to you.`,
+      });
+
       await client.query("COMMIT");
 
       await logAudit(
@@ -4661,6 +4867,18 @@ apiRouter.post(
           RETURNING *`,
         [body.status, userId, requestId],
       );
+
+      await notifyRequestInitiator(client, {
+        requestId,
+        actorId: userId,
+        type: body.status === "done" ? "work_completed" : "work_status_updated",
+        title: body.status === "done" ? "Work completed" : "Work status updated",
+        body:
+          body.status === "done"
+            ? `${request.request_number} has been marked done.`
+            : `${request.request_number} work status is now ${body.status.replace(/_/g, " ")}.`,
+        metadata: { work_status: body.status },
+      });
 
       await client.query("COMMIT");
 
@@ -4894,6 +5112,13 @@ apiRouter.patch(
             historyComment,
           ],
         );
+        await notifyRequestInitiator(client, {
+          requestId,
+          actorId: userId,
+          type: "request_edited",
+          title: "Request updated during approval",
+          body: `${req.profile!.full_name} updated ${request.request_number} during review.`,
+        });
       }
 
       await client.query("COMMIT");
@@ -4931,6 +5156,80 @@ apiRouter.patch(
     } finally {
       client.release();
     }
+  }),
+);
+
+apiRouter.get(
+  "/notifications",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const userId = req.auth!.userId;
+    const limit = Math.min(
+      Math.max(Number.parseInt(String(req.query.limit ?? "30"), 10) || 30, 1),
+      100,
+    );
+
+    const { rows } = await pool.query(
+      `SELECT n.id,
+              n.type,
+              n.title,
+              n.body,
+              n.metadata,
+              n.read_at,
+              n.created_at,
+              n.request_id,
+              ar.request_number,
+              actor.full_name AS actor_name
+         FROM notifications n
+         LEFT JOIN approval_requests ar ON ar.id = n.request_id
+         LEFT JOIN profiles actor ON actor.id = n.actor_id
+        WHERE n.user_id = $1
+        ORDER BY n.created_at DESC
+        LIMIT $2`,
+      [userId, limit],
+    );
+
+    const { rows: unreadRows } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM notifications
+        WHERE user_id = $1 AND read_at IS NULL`,
+      [userId],
+    );
+
+    res.json({
+      notifications: rows,
+      unreadCount: Number(unreadRows[0]?.count ?? 0),
+    });
+  }),
+);
+
+apiRouter.post(
+  "/notifications/read-all",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    await pool.query(
+      `UPDATE notifications
+          SET read_at = COALESCE(read_at, now())
+        WHERE user_id = $1
+          AND read_at IS NULL`,
+      [req.auth!.userId],
+    );
+    res.json({ success: true });
+  }),
+);
+
+apiRouter.post(
+  "/notifications/:id/read",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    await pool.query(
+      `UPDATE notifications
+          SET read_at = COALESCE(read_at, now())
+        WHERE id = $1
+          AND user_id = $2`,
+      [req.params.id, req.auth!.userId],
+    );
+    res.json({ success: true });
   }),
 );
 
