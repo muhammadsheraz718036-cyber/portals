@@ -1,13 +1,15 @@
 import "./env.js";
-import express from "express";
 import cors from "cors";
+import express from "express";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ZodError } from "zod";
-import { verifyDatabaseReady } from "./verifyDb.js";
-import { apiRouter } from "./routes/api.js";
+import { pool } from "./db.js";
+import { env, resolveFrontendDistPath } from "./env.js";
 import { HttpError } from "./httpError.js";
+import { apiRouter } from "./routes/api.js";
+import { verifyDatabaseReady } from "./verifyDb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,23 +26,18 @@ async function main() {
   await verifyDatabaseReady();
 
   const app = express();
-  const port = Number(process.env.PORT) || 4000;
+  const port = env.PORT;
 
-  // CORS configuration - restrict in production
-  const corsOrigin = process.env.APP_BASE_URL;
+  app.disable("x-powered-by");
+  app.set("trust proxy", env.TRUST_PROXY);
+
   const allowedOrigins: Array<string | RegExp> = [
     `http://localhost:${port}`,
     `http://127.0.0.1:${port}`,
+    ...env.CORS_ORIGINS,
   ];
-  if (corsOrigin) {
-    allowedOrigins.push(
-      ...corsOrigin
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter((origin) => origin.length > 0),
-    );
-  }
-  if (process.env.NODE_ENV !== "production") {
+
+  if (env.NODE_ENV !== "production") {
     allowedOrigins.push(
       new RegExp(`^http://192\\.168\\.\\d+\\.\\d+:${port}$`),
       new RegExp(`^http://10\\.\\d+\\.\\d+\\.\\d+:${port}$`),
@@ -52,57 +49,80 @@ async function main() {
     cors({
       origin: (origin, callback) => {
         if (!origin) {
-          return callback(null, true);
+          callback(null, true);
+          return;
         }
-        const isAllowed = allowedOrigins.some((allowed) => {
-          if (typeof allowed === "string") {
-            return allowed === origin;
-          }
-          return allowed.test(origin);
-        });
+
+        const isAllowed = allowedOrigins.some((allowed) =>
+          typeof allowed === "string" ? allowed === origin : allowed.test(origin),
+        );
+
         if (isAllowed) {
           callback(null, true);
-        } else {
-          callback(new Error(`CORS policy violation: ${origin} not allowed`));
+          return;
         }
+
+        callback(new Error(`CORS policy violation: ${origin} not allowed`));
       },
       credentials: true,
       methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
-      maxAge: 86400, // 24 hours
+      maxAge: 86400,
     }),
   );
 
-  // Request size limit
   app.use(express.json({ limit: "2mb" }));
-
-  // Security: Prevent parameter pollution
   app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
-  // Security: Set X-Content-Type-Options to prevent MIME sniffing
-  app.use((req, res, next) => {
+  app.use((_req, res, next) => {
     res.set("X-Content-Type-Options", "nosniff");
     res.set("X-Frame-Options", "DENY");
-    res.set("X-XSS-Protection", "1; mode=block");
     res.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     next();
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      service: "approval-central-api",
+      environment: env.NODE_ENV,
+      uptimeSeconds: Math.round(process.uptime()),
+    });
+  });
+
+  app.get("/health/ready", async (_req, res, next) => {
+    try {
+      await pool.query("SELECT 1");
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.use("/api", apiRouter);
 
-  const frontendDistPath = path.resolve(__dirname, "../../frontend/dist");
-  if (!fs.existsSync(frontendDistPath)) {
-    throw new Error(`Frontend build output not found at ${frontendDistPath}. Run npm run build in frontend first.`);
+  const frontendDistPath = resolveFrontendDistPath();
+  if (!frontendDistPath || !fs.existsSync(frontendDistPath)) {
+    throw new Error(
+      "Frontend build output not found. Run backend `npm run build` before starting production.",
+    );
   }
-  app.use(express.static(frontendDistPath));
+
+  app.use(
+    express.static(frontendDistPath, {
+      index: false,
+      maxAge: env.NODE_ENV === "production" ? "1d" : 0,
+      etag: true,
+    }),
+  );
+
   app.get("/*", (req, res, next) => {
     if (req.path.startsWith("/api")) {
-      return next();
+      next();
+      return;
     }
+
     res.sendFile(path.join(frontendDistPath, "index.html"));
   });
 
@@ -117,12 +137,15 @@ async function main() {
         res.status(err.status).json({ error: err.message });
         return;
       }
+
       if (err instanceof ZodError) {
-        res
-          .status(400)
-          .json({ error: err.flatten().fieldErrors, message: err.message });
+        res.status(400).json({
+          error: err.flatten().fieldErrors,
+          message: err.message,
+        });
         return;
       }
+
       if (isPgError(err)) {
         if (err.code === "42P01") {
           res.status(503).json({
@@ -131,49 +154,72 @@ async function main() {
           });
           return;
         }
+
         if (err.code === "23503") {
-          res
-            .status(400)
-            .json({
-              error:
-                "Invalid reference: related row does not exist (foreign key).",
-            });
+          res.status(400).json({
+            error: "Invalid reference: related row does not exist (foreign key).",
+          });
           return;
         }
+
         if (err.code === "23505") {
-          res
-            .status(400)
-            .json({ error: "Duplicate value violates a unique constraint." });
+          res.status(400).json({
+            error: "Duplicate value violates a unique constraint.",
+          });
           return;
         }
+
         console.error("Database error:", err);
-        // Don't leak database errors in production
-        const msg =
-          process.env.NODE_ENV === "development"
-            ? err.message || "Database error"
-            : "An unexpected error occurred";
-        res.status(500).json({ error: msg });
+        res.status(500).json({
+          error:
+            env.NODE_ENV === "development"
+              ? err.message || "Database error"
+              : "An unexpected error occurred",
+        });
         return;
       }
+
       console.error("Unhandled error:", err);
-      // Don't leak error details in production
       res.status(500).json({
         error:
-          process.env.NODE_ENV === "development"
+          env.NODE_ENV === "development"
             ? String(err)
             : "Internal server error",
       });
     },
   );
 
-
-  app.listen(port, "0.0.0.0", () => {
+  const server = app.listen(port, "0.0.0.0", () => {
     console.log(`approval-central-api listening on http://0.0.0.0:${port}`);
-    console.log(`Accessible at: http://localhost:${port} (local) and http://<your-ip>:${port} (network)`);
+    if (env.APP_BASE_URL) {
+      console.log(`Public base URL: ${env.APP_BASE_URL}`);
+    }
   });
+
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  server.requestTimeout = 120000;
+
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.log(`Received ${signal}, shutting down gracefully...`);
+
+    server.close(async () => {
+      await pool.end();
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-main().catch((e) => {
-  console.error(e);
+main().catch((error) => {
+  console.error(error);
   process.exit(1);
 });

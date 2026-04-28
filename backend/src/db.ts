@@ -1,13 +1,15 @@
 import pg from "pg";
+import { env } from "./env.js";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required");
-}
-
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS ?? 10000),
-  max: 20,
+  connectionString: env.DATABASE_URL,
+  connectionTimeoutMillis: env.PG_CONNECTION_TIMEOUT_MS,
+  max: env.DB_POOL_MAX,
+  ssl: env.PG_SSL
+    ? {
+        rejectUnauthorized: env.PG_SSL_REJECT_UNAUTHORIZED,
+      }
+    : undefined,
 });

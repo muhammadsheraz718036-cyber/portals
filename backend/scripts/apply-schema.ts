@@ -1,15 +1,12 @@
-import { config } from "dotenv";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import pg from "pg";
+import { fileURLToPath } from "node:url";
+import "../src/env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-config({ path: resolve(__dirname, "../.env") });
-config();
-
 const url = process.env.DATABASE_URL;
+
 if (!url) {
   console.error("Set DATABASE_URL in backend/.env (see backend/.env.example)");
   process.exit(1);
@@ -65,7 +62,7 @@ async function applyMigrations() {
       );
       await client.query("COMMIT");
       appliedCount += 1;
-      console.log(`✅ Applied migration: ${file}`);
+      console.log(`Applied migration: ${file}`);
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -79,10 +76,10 @@ await client.connect();
 try {
   await client.query(sql);
   const appliedMigrations = await applyMigrations();
-  console.log("✅ Complete schema applied successfully!");
-  console.log("📊 All tables, indexes, constraints, and initial data created.");
+  console.log("Complete schema applied successfully.");
+  console.log("All tables, indexes, constraints, and initial data created.");
   if (appliedMigrations > 0) {
-    console.log(`📦 Applied ${appliedMigrations} pending migration(s).`);
+    console.log(`Applied ${appliedMigrations} pending migration(s).`);
   }
 } finally {
   await client.end();

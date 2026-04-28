@@ -1,14 +1,12 @@
-import { config } from "dotenv";
-import { resolve, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import pg from "pg";
+import { fileURLToPath } from "node:url";
+import "../src/env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-config({ path: resolve(__dirname, "../.env") });
-config();
-
 const url = process.env.DATABASE_URL;
+
 if (!url) {
   console.error("Set DATABASE_URL in backend/.env (see backend/.env.example)");
   process.exit(1);
@@ -41,7 +39,7 @@ async function run() {
     await ensureSchemaMigrationsTable();
 
     if (!existsSync(migrationsDir)) {
-      console.log("ℹ️ No migrations directory found. Nothing to apply.");
+      console.log("No migrations directory found. Nothing to apply.");
       return;
     }
 
@@ -50,7 +48,7 @@ async function run() {
       .sort((a, b) => a.localeCompare(b));
 
     if (files.length === 0) {
-      console.log("ℹ️ No SQL migrations found. Nothing to apply.");
+      console.log("No SQL migrations found. Nothing to apply.");
       return;
     }
 
@@ -73,7 +71,7 @@ async function run() {
         );
         await client.query("COMMIT");
         appliedCount += 1;
-        console.log(`✅ Applied migration: ${file}`);
+        console.log(`Applied migration: ${file}`);
       } catch (error) {
         await client.query("ROLLBACK");
         throw error;
@@ -81,11 +79,11 @@ async function run() {
     }
 
     if (appliedCount === 0) {
-      console.log("ℹ️ Database is already up to date.");
+      console.log("Database is already up to date.");
       return;
     }
 
-    console.log(`✅ Applied ${appliedCount} migration(s).`);
+    console.log(`Applied ${appliedCount} migration(s).`);
   } finally {
     await client.end();
   }

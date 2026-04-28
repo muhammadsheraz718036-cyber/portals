@@ -284,29 +284,97 @@ export default function Approvals() {
   };
 
   const renderTable = (requests: RequestRow[]) => (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <>
+      <div className="space-y-3 md:hidden">
+        {requests.map((request) => (
+          <button
+            key={request.id}
+            type="button"
+            className="w-full rounded-xl border bg-card p-4 text-left transition-snappy hover:bg-muted/30"
+            onClick={() => navigate(`/approvals/${request.id}`)}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="whitespace-nowrap text-sm font-semibold text-primary">
+                  {request.request_number}
+                </p>
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {request.approval_types?.name ?? "-"}
+                </p>
+              </div>
+              <StatusBadge status={request.status} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Submitted By
+                </p>
+                <p className="mt-1 text-foreground">
+                  {names[request.initiator_id] ?? "-"}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Department
+                </p>
+                <p className="mt-1 text-foreground">
+                  {getDepartmentLabel(request)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Progress
+                </p>
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{
+                        width: `${request.total_steps ? (request.current_step / request.total_steps) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="whitespace-nowrap text-xs text-muted-foreground">
+                    {request.current_step}/{request.total_steps}
+                  </span>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Submitted On
+                </p>
+                <p className="mt-1 text-foreground">
+                  {new Date(request.created_at).toLocaleDateString()}
+                </p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
+      <table className="min-w-[980px] w-full table-fixed text-sm">
         <thead>
           <tr className="border-b bg-muted/30">
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[140px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Request No.
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[190px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Request Type
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[230px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Submitted By
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[150px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Initiator Department
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[130px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Status
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[130px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Progress
             </th>
-            <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <th className="w-[120px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Submitted On
             </th>
           </tr>
@@ -318,22 +386,28 @@ export default function Approvals() {
               className="cursor-pointer transition-snappy hover:bg-muted/30"
               onClick={() => navigate(`/approvals/${request.id}`)}
             >
-              <td className="px-4 py-3 font-medium text-primary">
+              <td className="px-4 py-3 align-top font-medium text-primary">
+                <span className="whitespace-nowrap">
                 {request.request_number}
+                </span>
               </td>
-              <td className="px-4 py-3">
+              <td className="px-4 py-3 align-top">
+                <div className="hyphens-none break-normal">
                 {request.approval_types?.name ?? "-"}
+                </div>
               </td>
-              <td className="px-4 py-3">
+              <td className="px-4 py-3 align-top">
+                <div className="hyphens-none break-normal">
                 {names[request.initiator_id] ?? "-"}
+                </div>
               </td>
-              <td className="px-4 py-3 text-muted-foreground">
+              <td className="px-4 py-3 align-top text-muted-foreground">
                 {getDepartmentLabel(request)}
               </td>
-              <td className="px-4 py-3">
+              <td className="px-4 py-3 align-top">
                 <StatusBadge status={request.status} />
               </td>
-              <td className="px-4 py-3">
+              <td className="px-4 py-3 align-top">
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
                     <div
@@ -343,19 +417,22 @@ export default function Approvals() {
                       }}
                     />
                   </div>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="whitespace-nowrap text-xs text-muted-foreground">
                     {request.current_step}/{request.total_steps}
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-3 text-xs text-muted-foreground">
+              <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+                <span className="whitespace-nowrap">
                 {new Date(request.created_at).toLocaleDateString()}
+                </span>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 
   if (loading) {

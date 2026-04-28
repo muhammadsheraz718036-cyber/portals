@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => ({
     ...(mode === "development" && {
       proxy: {
         "/api": {
-          target: "http://localhost:4000",
+          target: "http://localhost:3001",
           changeOrigin: true,
         },
       },
@@ -30,14 +30,6 @@ export default defineConfig(({ mode }) => ({
   build: {
     outDir: "dist",
     sourcemap: mode === "development",
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ["react", "react-dom"],
-          ui: ["@radix-ui/react-dialog", "@radix-ui/react-dropdown-menu"],
-        },
-      },
-    },
   },
   // Environment variables
   define: {

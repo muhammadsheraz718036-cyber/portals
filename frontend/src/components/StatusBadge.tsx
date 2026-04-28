@@ -15,7 +15,10 @@ const statusConfig: Record<RequestStatus | string, { label: string; className: s
 export function StatusBadge({ status }: { status: string }) {
   const config = statusConfig[status] || statusConfig.pending;
   return (
-    <Badge variant="outline" className={`${config.className} font-medium text-xs`}>
+    <Badge
+      variant="outline"
+      className={`${config.className} shrink-0 whitespace-nowrap font-medium text-xs`}
+    >
       {config.label}
     </Badge>
   );

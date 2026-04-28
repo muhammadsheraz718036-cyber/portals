@@ -1,9 +1,7 @@
 import jwt from "jsonwebtoken";
+import { env } from "../env.js";
 function getJwtSecret() {
-    const s = process.env.JWT_SECRET;
-    if (!s)
-        throw new Error("JWT_SECRET is required");
-    return s;
+    return env.JWT_SECRET;
 }
 export function signToken(payload) {
     const opts = { expiresIn: "7d" };

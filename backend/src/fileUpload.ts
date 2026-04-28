@@ -2,9 +2,9 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
+import { paths } from './env.js';
 
-// Ensure uploads directory exists
-const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+export const UPLOADS_DIR = paths.uploadDir;
 
 export const ensureUploadsDir = async () => {
   try {

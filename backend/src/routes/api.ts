@@ -19,13 +19,14 @@ import {
   deleteUploadedFile,
   validateFileSize,
   getMimeType,
+  UPLOADS_DIR,
 } from "../fileUpload.js";
 import path from "path";
 import fs from "fs/promises";
 import { EmailNotificationService } from "../services/EmailNotificationService.js";
 
 export const apiRouter = Router();
-const uploadsRoot = path.resolve(process.cwd(), "uploads");
+const uploadsRoot = path.resolve(UPLOADS_DIR);
 const emailNotificationService = new EmailNotificationService();
 
 function sanitizeDownloadFilename(filename: string): string {

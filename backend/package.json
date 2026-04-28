@@ -5,8 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "cd ../frontend && npm run build && tsc",
+    "build": "npm run build:frontend && npm run build:backend && npm run package:frontend",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "build:backend": "tsc -p tsconfig.json",
+    "package:frontend": "node scripts/copy-frontend-dist.mjs",
     "start": "node dist/index.js",
+    "pm2:start": "node scripts/pm2-cli.mjs start ecosystem.config.cjs",
+    "pm2:save": "node scripts/pm2-cli.mjs save",
+    "pm2:status": "node scripts/pm2-cli.mjs status",
+    "pm2:logs": "node scripts/pm2-cli.mjs logs approval-central",
     "db:schema": "tsx scripts/apply-schema.ts",
     "db:migrate": "tsx scripts/run-migrations.ts"
   },
@@ -31,6 +38,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^22.16.5",
     "@types/pg": "^8.11.10",
+    "pm2": "^6.0.14",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }

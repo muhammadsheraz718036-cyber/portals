@@ -1,754 +1,403 @@
 # Approval Central
 
-A comprehensive approval request management system built with React (frontend) and Express (backend). The system allows users to create, approve, reject, and track approval requests with customizable workflows.
+Approval Central is a full-stack approval workflow system with:
 
-## Table of Contents
+- a React + Vite frontend in `frontend/`
+- an Express + PostgreSQL backend in `backend/`
+- a production build where the backend serves the frontend from the same Node process
 
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Database Setup](#database-setup)
-- [Running the Application](#running-the-application)
-- [Development](#development)
-- [Building for Production](#building-for-production)
-- [Security](#security)
-- [Troubleshooting](#troubleshooting)
-- [API Documentation](#api-documentation)
-- [Support & Contributing](#support--contributing)
-- [License](#license)
+## Stack
 
----
-
-## Overview
-
-Approval Central is an enterprise-grade approval workflow management system designed to streamline the process of creating and managing approval requests across departments. It features:
-
-- **Role-based access control** with granular permissions
-- **Multi-step approval chains** with configurable workflows
-- **Rich forms** with custom field types and validation
-- **Real-time request tracking** and status updates
-- **Comprehensive audit logs** for compliance
-- **Production-ready security** with JWT authentication
-
----
-
-## Features
-
-### Core Features
-
--  User authentication with JWT tokens
--  Role-based access control (RBAC)
--  Create and manage approval requests
--  Configurable approval chains with multiple steps
--  Custom form fields (text, number, date, select, radio, checkbox, textarea)
--  Rich text editor for request content
--  Line items (repeatable field groups)
--  Request filtering and search
--  Multi-department support
--  Approval action history
--  Audit logging for compliance
-
-### Admin Features
-
--  User management and role assignment
--  Approval type configuration
--  Approval chain creation
--  Department management
--  Audit log viewing
--  System settings (company name, logo)
-
-### Security Features
-
--  JWT-based authentication with token expiration
--  bcryptjs password hashing
--  CORS configuration
--  Security headers
--  SQL injection prevention (parameterized queries)
--  Input validation with Zod
--  XSS protection via safe HTML handling
--  Comprehensive audit logging
-
----
-
-## Tech Stack
-
-### Frontend
-
-- **React 18** with TypeScript
-- **Vite** for fast development and optimized builds
-- **TailwindCSS** for styling
-- **TipTap** for rich text editing
-- **Shadcn/UI** for component library
-- **React Router** for navigation
-- **Sonner** for notifications
-
-### Backend
-
-- **Express.js** for REST APIs
-- **Node.js** with TypeScript
-- **PostgreSQL** for the database
-- **JWT** for authentication
-- **bcryptjs** for password hashing
-- **Zod** for schema validation
-- **CORS** for cross-origin requests
-
-### Development Tools
-
-- **ESLint** for code quality
-- **TypeScript** for type safety
-- **tsx** for TypeScript execution
-
----
-
-## Prerequisites
-
-- **Node.js** 20.0 or higher
-- **npm** 10.0 or higher
-- **PostgreSQL** 14.0 or higher
-- **Git** for version control
-
-### System Requirements
-
-- **OS**: Windows, macOS, or Linux
-- **RAM**: 4GB minimum (8GB recommended)
-- **Disk Space**: 2GB for dependencies and database
-
----
+- Node.js 20+
+- npm 10+
+- PostgreSQL 14+
+- React 18
+- Vite
+- Express
+- TypeScript
+- PM2
 
 ## Project Structure
 
-```
+```text
 approval-central/
- backend/                    # Express API server
-    src/
-       index.ts           # Main server entry point
-       env.ts             # Environment configuration
-       db.ts              # Database connection
-       httpError.ts       # Custom HTTP error class
-       asyncHandler.ts    # Async error wrapper
-       asyncMiddleware.ts # Async middleware wrapper
-       verifyDb.ts        # Database verification
-       auth/
-          jwt.ts         # JWT token utilities
-          password.ts    # Password hashing
-       middleware/
-          auth.ts        # Authentication middleware
-       routes/
-           api.ts         # API endpoints
-    sql/
-       complete-schema.sql # Full database schema
-       migrations/        # Optional incremental migrations
-    scripts/
-       apply-schema.ts    # Full schema setup script
-       run-migrations.ts  # Incremental migration runner
-    .env.example           # Backend environment template
-    package.json           # Backend dependencies and scripts
-    tsconfig.json          # Backend TypeScript config
-
- frontend/                   # React Vite application
-    src/
-       main.tsx           # Vite entry point
-       App.tsx            # Main app component
-       pages/             # Page components
-       components/        # Reusable components
-       contexts/          # React contexts
-       hooks/             # Custom hooks
-       lib/               # Utilities and API client
-       integrations/      # External service integrations
-       test/              # Test files
-    public/                # Static assets
-    .env.example           # Frontend environment template
-    package.json           # Frontend dependencies and scripts
-    tsconfig.app.json      # Frontend TypeScript config
-    tsconfig.json
-    vite.config.ts         # Vite configuration
-
- .gitignore                 # Git ignore file
- README.md                  # This file
- SECURITY_SETUP.md          # Security configuration guide
+|-- backend/
+|   |-- src/
+|   |-- sql/
+|   |-- scripts/
+|   |-- .env.example
+|   `-- ecosystem.config.cjs
+|-- frontend/
+|   |-- src/
+|   |-- public/
+|   `-- .env.example
+`-- README.md
 ```
 
----
+## How It Runs
 
-## Installation
+Development:
 
-### 1. Clone the repository
+- frontend runs on `http://localhost:8080`
+- backend runs on `http://localhost:3001`
+- Vite proxies `/api` to the backend
 
-```bash
-git clone <repository-url>
-cd approval-central
-```
+Production:
 
-### 2. Setup Backend
+- backend serves both the frontend and API
+- the app is exposed from one Node process on the port in `backend/.env`
+- current production-style setup in this repo uses port `8080`
+
+## Install
+
+From the repo root:
 
 ```bash
 cd backend
-cp .env.example .env
 npm install
-npm run build
-```
 
-> Edit `backend/.env` before starting the backend. See [Backend Configuration](#backend-configuration-env) below.
-
-### 3. Setup Database
-
-```bash
-cd backend
-npm run db:schema
-```
-
-If you are using incremental migrations instead of the complete schema file, run:
-
-```bash
-npm run db:migrate
-```
-
-### 4. Setup Frontend
-
-```bash
 cd ../frontend
-cp .env.example .env
 npm install
 ```
 
----
+## Configure Environment
 
-## Configuration
+### Backend
 
-### Backend Configuration (`backend/.env`)
+Copy `backend/.env.example` to `backend/.env` and set your real values.
 
-Create or update `backend/.env` with your local values:
+Example development config:
 
-```bash
-DATABASE_URL=postgresql://username:password@localhost:5432/approval_central
-JWT_SECRET=your-very-long-random-secret
-PORT=4000
-CORS_ORIGIN=http://localhost:8080
+```env
+DATABASE_URL=postgresql://postgres:password@localhost:5432/approval_center
+JWT_SECRET=replace-with-a-long-random-string
+PORT=3001
 NODE_ENV=development
+APP_BASE_URL=http://localhost:8080
+CORS_ORIGIN=http://localhost:8080
+TRUST_PROXY=false
 ```
 
-- `DATABASE_URL`: PostgreSQL connection string
-- `JWT_SECRET`: Secret used to sign JWT tokens
-- `PORT`: Backend port, default `4000`
-- `CORS_ORIGIN`: Frontend origin allowed to call the backend
-- `NODE_ENV`: Typically `development` or `production`
+Example production config:
 
-### Frontend Configuration (`frontend/.env`)
+```env
+DATABASE_URL=postgresql://postgres:password@db-host:5432/approval_center
+JWT_SECRET=replace-with-a-strong-secret-32-characters-or-more
+PORT=8080
+NODE_ENV=production
+APP_BASE_URL=http://10.1.20.194:8080
+CORS_ORIGIN=http://10.1.20.194:8080
+TRUST_PROXY=true
+UPLOAD_DIR=storage/uploads
+PG_SSL=false
+PG_SSL_REJECT_UNAUTHORIZED=true
+PG_CONNECTION_TIMEOUT_MS=10000
+DB_POOL_MAX=20
+EMAIL_NOTIFICATIONS_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@example.com
+SMTP_PASS=your-app-password
+SMTP_FROM="Approval Central <notifications@example.com>"
+```
 
-The frontend uses the Vite dev proxy to forward `/api` requests to the backend:
+Important:
+
+- `JWT_SECRET` must be strong in production.
+- If your database password contains special characters like `@`, `:`, or `/`, URL-encode the password in `DATABASE_URL`.
+- `APP_BASE_URL` must match the real browser URL used by users.
+- `TRUST_PROXY=true` is recommended when Node is behind a reverse proxy.
+
+### Frontend
+
+The frontend usually does not need a local `.env` file.
+
+Default recommended config:
+
+```env
+VITE_API_URL=
+```
+
+Notes:
+
+- leave `VITE_API_URL` empty in development so Vite uses the proxy
+- leave it empty in production when the frontend is served by the backend on the same origin
+
+## Create Database
+
+Create the database first:
 
 ```bash
-# Leave empty to use same-origin /api via proxy to http://localhost:4000
-# VITE_API_URL=
+createdb approval_center
 ```
 
-Set `VITE_API_URL` when your backend is hosted on a different URL in development or production.
-
----
-
-## Database Setup
-
-### Create the database
-
-```bash
-createdb approval_central
-```
-
-or:
+Or in PostgreSQL:
 
 ```sql
-CREATE DATABASE approval_central;
+CREATE DATABASE approval_center;
 ```
 
-### Apply the schema
+## Apply Schema
+
+From `backend/`:
 
 ```bash
-cd backend
 npm run db:schema
 ```
 
-### Run migrations
-
-Use this command if you have incremental migrations:
+If you are updating an existing installation with migrations:
 
 ```bash
-cd backend
 npm run db:migrate
 ```
 
----
+## Run in Development
 
-## Running the Application
-
-### Development Mode
-
-**Terminal 1: Start the backend**
+Terminal 1:
 
 ```bash
 cd backend
 npm run dev
 ```
 
-**Terminal 2: Start the frontend**
+Terminal 2:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Default URLs:
+Open:
 
-- Frontend: `http://localhost:8080`
-- Backend API: `http://localhost:4000`
+- frontend: `http://localhost:8080`
+- backend health: `http://localhost:3001/health`
 
-If port `8080` is already in use, Vite will choose the next available port, such as `http://localhost:8081`.
+## Build for Production
 
-### Initial Admin Setup
-
-Open the frontend and navigate to:
-
-- `http://localhost:8080/setup`
-
-Create the first administrator account through the setup page.
-
-### Production Deployment
-
-#### Backend Deployment
-
-1. **Build the backend:**
-   ```bash
-   cd backend
-   npm run build
-   ```
-
-2. **Configure environment variables:**
-   - Copy `backend/.env.example` to `backend/.env`
-   - Set `DATABASE_URL` to your production database
-   - Set `JWT_SECRET` to a secure random string
-   - Set `CORS_ORIGIN` to your frontend domain (e.g., `https://yourdomain.com`)
-   - Set `NODE_ENV=production`
-
-3. **Start the backend:**
-   ```bash
-   npm start
-   ```
-
-#### Frontend Deployment
-
-1. **Build the frontend:**
-   ```bash
-   cd frontend
-   npm run build
-   ```
-
-2. **Configure environment variables:**
-   - Copy `frontend/.env.example` to `frontend/.env`
-   - Set `VITE_API_URL` to your backend API URL (e.g., `https://api.yourdomain.com`)
-
-3. **Deploy the `dist/` folder:**
-   - Upload the contents of `frontend/dist/` to your web server
-   - Configure your web server to serve the static files
-   - Set up SSL certificates for HTTPS
-
-#### Example Nginx Configuration
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name yourdomain.com;
-    root /path/to/frontend/dist;
-    index index.html;
-
-    ssl_certificate /path/to/ssl/cert.pem;
-    ssl_certificate_key /path/to/ssl/private.key;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-#### Docker Deployment (Optional)
-
-**backend/Dockerfile:**
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY dist/ ./dist/
-EXPOSE 4000
-CMD ["npm", "start"]
-```
-
-**frontend/Dockerfile:**
-```dockerfile
-FROM nginx:alpine
-COPY dist/ /usr/share/nginx/html/
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"
-```
-
-The production build is available in `frontend/dist/`.
-
-#### Backend Deployment
-
-1. **Build the backend:**
-   ```bash
-   cd backend
-   npm run build
-   ```
-
-2. **Configure environment variables:**
-   - Copy `backend/.env.example` to `backend/.env`
-   - Set `DATABASE_URL` to your production database
-   - Set `JWT_SECRET` to a secure random string
-   - Set `CORS_ORIGIN` to your frontend domain (e.g., `https://yourdomain.com`)
-   - Set `NODE_ENV=production`
-
-3. **Start the backend:**
-   ```bash
-   npm start
-   ```
-
-#### Frontend Deployment
-
-1. **Build the frontend:**
-   ```bash
-   cd frontend
-   npm run build
-   ```
-
-2. **Configure environment variables:**
-   - Copy `frontend/.env.example` to `frontend/.env`
-   - Set `VITE_API_URL` to your backend API URL (e.g., `https://api.yourdomain.com`)
-
-3. **Deploy the `dist/` folder:**
-   - Upload the contents of `frontend/dist/` to your web server
-   - Configure your web server to serve the static files
-   - Set up SSL certificates for HTTPS
-
-#### Example Nginx Configuration
-
-```nginx
-# Frontend (port 80/443)
-server {
-    listen 443 ssl;
-    server_name yourdomain.com;
-    root /path/to/frontend/dist;
-    index index.html;
-
-    # SSL configuration
-    ssl_certificate /path/to/ssl/cert.pem;
-    ssl_certificate_key /path/to/ssl/private.key;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Proxy API requests to backend
-    location /api {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-# Backend API (internal, port 4000)
-# The backend runs on localhost:4000 and is proxied through the frontend
-```
-
-#### Docker Deployment (Optional)
-
-**backend/Dockerfile:**
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY dist/ ./dist/
-EXPOSE 4000
-CMD ["npm", "start"]
-```
-
-**frontend/Dockerfile:**
-```dockerfile
-FROM nginx:alpine
-COPY dist/ /usr/share/nginx/html/
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
-
-The production build is available in `frontend/dist/`.
-
----
-
-## Development
-
-### Linting
+From `backend/`:
 
 ```bash
-cd frontend
-npm run lint
-```
-
-### TypeScript Checking
-
-```bash
-cd frontend
-npx tsc --noEmit
-cd ../backend
 npm run build
 ```
 
-### Testing
+This command:
+
+1. builds the frontend
+2. compiles the backend TypeScript
+3. copies the frontend build into `backend/dist/public`
+
+## Run in Production Without PM2
+
+From `backend/`:
 
 ```bash
-cd frontend
-npm run test
-npm run test:watch
-```
-
----
-
-## Building for Production
-
-### Environment Configuration
-
-1. **Backend Environment Variables**:
-   - Copy `backend/.env.example` to `backend/.env`
-   - Configure your production database URL, JWT secrets, and other settings
-
-2. **Frontend Environment Variables**:
-   - Copy `frontend/.env.example` to `frontend/.env`
-   - Set `VITE_API_URL` to your production backend URL (e.g., `https://api.yourdomain.com`)
-
-### Backend Deployment
-
-```bash
-cd backend
-npm install --production
 npm run build
 npm start
 ```
 
-The backend will run on the port specified by the `PORT` environment variable (default: 4000).
+Open the app on the port configured in `backend/.env`.
 
-### Frontend Deployment
+Example:
+
+```text
+http://10.1.20.194:8080
+```
+
+## Run in Production With PM2
+
+From `backend/`:
+
+```bash
+npm run build
+npm run pm2:start
+npm run pm2:save
+```
+
+Useful PM2 commands:
+
+```bash
+npm run pm2:status
+npm run pm2:logs
+node scripts/pm2-cli.mjs restart approval-central --update-env
+node scripts/pm2-cli.mjs stop approval-central
+```
+
+Notes:
+
+- PM2 is installed locally in `backend`
+- PM2 uses `backend/.pm2/` as its home directory in this project
+- if you change `backend/.env`, restart with `--update-env`
+
+## Production Topology
+
+Recommended production setup:
+
+- Node.js 20 LTS or newer
+- PostgreSQL on the same trusted network or same server
+- PM2 as the Node process manager
+- optional reverse proxy in front of Node such as Nginx, IIS, Apache, or a datacenter load balancer
+
+If you use a reverse proxy, forward the public site to the Node app.
+
+Example target:
+
+```text
+http://127.0.0.1:8080
+```
+
+Forward these headers:
+
+- `Host`
+- `X-Forwarded-For`
+- `X-Forwarded-Proto`
+
+The Node app already:
+
+- serves the SPA
+- exposes `GET /health`
+- exposes `GET /health/ready`
+- shuts down gracefully on `SIGINT` and `SIGTERM`
+
+## Exact Commands Summary
+
+### First-time local setup
+
+```bash
+cd backend
+npm install
+copy .env.example .env
+npm run db:schema
+
+cd ../frontend
+npm install
+copy .env.example .env
+```
+
+Windows PowerShell alternative:
+
+```powershell
+Copy-Item backend/.env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
+```
+
+### Start local development
+
+```bash
+cd backend
+npm run dev
+```
 
 ```bash
 cd frontend
-npm install --production
+npm run dev
+```
+
+### Build production package
+
+```bash
+cd backend
 npm run build
 ```
 
-This creates a `dist/` directory with static files that can be served by any web server (nginx, Apache, etc.).
-
-**Example nginx configuration:**
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
-    root /path/to/frontend/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-### Docker Deployment (Optional)
-
-If you prefer containerized deployment, you can create Dockerfiles for both services:
-
-**backend/Dockerfile:**
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY dist/ ./dist/
-EXPOSE 4000
-CMD ["npm", "start"]
-```
-
-**frontend/Dockerfile:**
-```dockerfile
-FROM nginx:alpine
-COPY dist/ /usr/share/nginx/html/
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
-
-### Production Checklist
-
-- [ ] Set secure JWT secrets
-- [ ] Configure production database
-- [ ] Set up SSL/TLS certificates
-- [ ] Configure CORS for your domain
-- [ ] Set up proper logging and monitoring
-- [ ] Configure backup strategies for database
-- [ ] Test all features in production environment
-
----
-
-## Database
-
-The database schema includes the application’s core entities:
-
-- `users` - Authentication records
-- `profiles` - User profile details, roles, and permissions
-- `roles` - Role definitions and permissions
-- `departments` - Department metadata
-- `approval_types` - Definitions for request types
-- `approval_chains` - Multi-step workflow definitions
-- `approval_requests` - Submitted requests
-- `approval_actions` - Approval history
-- `audit_logs` - Audit trails and activity logs
-
-### Backup and restore
+### Start production directly with Node
 
 ```bash
-pg_dump -h localhost -U username approval_central > backup.sql
-psql -h localhost -U username approval_central < backup.sql
+cd backend
+npm start
 ```
 
----
+### Start production with PM2
 
-## Security
+```bash
+cd backend
+npm run pm2:start
+npm run pm2:save
+```
 
-The application includes these security measures:
+## Frontend Scripts
 
-- **JWT authentication** with expiration
-- **Password hashing** using `bcryptjs`
-- **Parameterized SQL queries** to prevent injection
-- **CORS** limited to the frontend origin
-- **Input validation** with Zod
-- **Audit logging** for important actions
-- **Secrets stored in `.env` files** and not committed to git
+From `frontend/`:
 
-For detailed security guidance, see [SECURITY_SETUP.md](./SECURITY_SETUP.md).
+```bash
+npm run dev
+npm run build
+npm run build:dev
+npm run preview
+npm run lint
+npm run test
+npm run test:watch
+```
 
----
+## Backend Scripts
+
+From `backend/`:
+
+```bash
+npm run dev
+npm run build
+npm start
+npm run db:schema
+npm run db:migrate
+npm run pm2:start
+npm run pm2:save
+npm run pm2:status
+npm run pm2:logs
+```
+
+## Health Endpoints
+
+- `GET /health`
+- `GET /health/ready`
+
+Examples:
+
+```text
+http://localhost:3001/health
+http://10.1.20.194:8080/health
+```
+
+## Deployment Checklist
+
+- `backend/.env` exists and uses production values
+- `JWT_SECRET` is strong and unique
+- PostgreSQL is reachable from the app server
+- `npm run build` completed successfully
+- `npm run db:schema` or `npm run db:migrate` completed successfully
+- the public URL matches `APP_BASE_URL`
+- if using a reverse proxy, it forwards traffic to the correct Node port
+- TLS/HTTPS is terminated at the proxy or load balancer if needed
+- `backend/storage/uploads` is included in backup strategy
+- database backups are scheduled
 
 ## Troubleshooting
 
-### Backend issues
+### App does not open on the expected URL
 
-- **`DATABASE_URL is required`**
-  - Make sure `backend/.env` exists and includes `DATABASE_URL`
-  - Confirm PostgreSQL is running
-- **`EADDRINUSE`**
-  - Stop the process using port `4000`
-  - Change `PORT` in `backend/.env`
-- **`Cannot find module`**
-  - Run `npm install` in `backend`
+- make sure `PORT` in `backend/.env` matches the URL you are opening
+- if using PM2 after changing `.env`, run:
 
-### Frontend issues
-
-- **Module not found**
-  - Run `npm install` in `frontend`
-- **CORS errors**
-  - Verify backend is reachable at `http://localhost:4000`
-  - Confirm `CORS_ORIGIN` is `http://localhost:8080`
-- **Blank page or build errors**
-  - Clear browser cache
-  - Rebuild frontend with `npm run build`
-
-### Database issues
-
-- **Database does not exist**
-  - Create it with `createdb approval_central`
-- **`pgcrypto` extension missing**
-  - Enable it manually with:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+```bash
+node scripts/pm2-cli.mjs restart approval-central --update-env
 ```
 
----
+### Database connection fails
 
-## API Documentation
+- confirm PostgreSQL is running
+- confirm `DATABASE_URL` is correct
+- confirm the database exists
+- URL-encode special characters in the password
 
-### Setup
+### Frontend cannot reach API in development
 
-- `GET /api/setup/status` - Check whether setup is complete
-- `POST /api/setup` - Create the first administrator account
+- backend must be running on `3001`
+- frontend must be running on `8080`
+- keep `VITE_API_URL` empty to use the Vite proxy
 
-### Authentication
+### PM2 starts but old config is still used
 
-- `POST /api/auth/login` - Login
-- `GET /api/auth/me` - Current user profile
-- `PATCH /api/auth/me/password` - Change password
+Restart with updated environment:
 
-### Admin
-
-- `GET /api/users` - List users
-- `POST /api/users` - Create a user
-- `GET /api/approval-types` - List approval types
-- `POST /api/approval-types` - Create approval type
-
----
-
-## Support & Contributing
-
-### Reporting issues
-
-1. Search existing issues first
-2. Include reproduction steps
-3. Provide environment details (OS, Node version, database, ports)
-
-### Contributing
-
-1. Create a feature branch
-2. Keep code typed and linted
-3. Update documentation
-4. Test locally
-5. Open a PR with a clear description
-
----
-
-## License
-
-[Your License Here]
-
----
-
-## Quick Start Checklist
-
-- [ ] Clone repository
-- [ ] Install Node.js 20+
-- [ ] Install PostgreSQL
-- [ ] Create `backend/.env` and `frontend/.env`
-- [ ] Install dependencies in `backend` and `frontend`
-- [ ] Apply database schema with `npm run db:schema`
-- [ ] Start backend with `npm run dev`
-- [ ] Start frontend with `npm run dev`
-- [ ] Open the app in the browser
-- [ ] Complete initial admin setup at `/setup`
-
----
-
-**Last Updated**: April 18, 2026
-**Version**: 1.0.0
+```bash
+node scripts/pm2-cli.mjs restart approval-central --update-env
+```

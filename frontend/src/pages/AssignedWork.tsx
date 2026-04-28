@@ -213,29 +213,89 @@ export default function AssignedWork() {
               No assigned work matches your filters.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <>
+              <div className="space-y-3 p-4 md:hidden">
+                {filteredRows.map((request) => (
+                  <button
+                    key={request.id}
+                    type="button"
+                    className="w-full rounded-xl border bg-card p-4 text-left transition-snappy hover:bg-muted/30"
+                    onClick={() => navigate(`/approvals/${request.id}`)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="whitespace-nowrap text-sm font-semibold text-primary">
+                          {request.request_number}
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-foreground">
+                          {request.approval_types?.name ?? "-"}
+                        </p>
+                      </div>
+                      <StatusBadge status={normalizeWorkStatus(request.work_status)} />
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Submitted By
+                        </p>
+                        <p className="mt-1 text-foreground">
+                          {names[request.initiator_id] ?? "-"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Department
+                        </p>
+                        <p className="mt-1 text-foreground">
+                          {getDepartmentLabel(request)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Assigned On
+                        </p>
+                        <p className="mt-1 text-foreground">
+                          {request.work_assigned_at
+                            ? new Date(request.work_assigned_at).toLocaleDateString()
+                            : "-"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Submitted On
+                        </p>
+                        <p className="mt-1 text-foreground">
+                          {new Date(request.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-[920px] w-full table-fixed text-sm">
                 <thead>
                   <tr className="border-b bg-muted/30">
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[140px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Request No.
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[200px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Request Type
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[220px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Submitted By
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[150px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Department
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[130px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Work Status
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[120px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Assigned On
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th className="w-[120px] whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Submitted On
                     </th>
                   </tr>
@@ -247,34 +307,45 @@ export default function AssignedWork() {
                       className="cursor-pointer transition-snappy hover:bg-muted/30"
                       onClick={() => navigate(`/approvals/${request.id}`)}
                     >
-                      <td className="px-4 py-3 font-medium text-primary">
+                      <td className="px-4 py-3 align-top font-medium text-primary">
+                        <span className="whitespace-nowrap">
                         {request.request_number}
+                        </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-top">
+                        <div className="hyphens-none break-normal">
                         {request.approval_types?.name ?? "-"}
+                        </div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-top">
+                        <div className="hyphens-none break-normal">
                         {names[request.initiator_id] ?? "-"}
+                        </div>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
+                      <td className="px-4 py-3 align-top text-muted-foreground">
                         {getDepartmentLabel(request)}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-top">
                         <StatusBadge status={normalizeWorkStatus(request.work_status)} />
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                      <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+                        <span className="whitespace-nowrap">
                         {request.work_assigned_at
                           ? new Date(request.work_assigned_at).toLocaleDateString()
                           : "-"}
+                        </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                      <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+                        <span className="whitespace-nowrap">
                         {new Date(request.created_at).toLocaleDateString()}
+                        </span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

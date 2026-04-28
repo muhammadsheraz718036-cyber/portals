@@ -1,9 +1,8 @@
 import jwt, { type SignOptions } from "jsonwebtoken";
+import { env } from "../env.js";
 
 function getJwtSecret(): string {
-  const s = process.env.JWT_SECRET;
-  if (!s) throw new Error("JWT_SECRET is required");
-  return s;
+  return env.JWT_SECRET;
 }
 
 export interface JwtPayload {
