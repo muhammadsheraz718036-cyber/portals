@@ -372,8 +372,13 @@ export function AdminUsers() {
                       <PasswordInput
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder={PASSWORD_POLICY_HINT}
+                        placeholder="Enter password"
                       />
+                      {password && !isPasswordPolicyValid(password) && (
+                        <p className="text-xs text-destructive">
+                          {PASSWORD_POLICY_HINT}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -523,8 +528,13 @@ export function AdminUsers() {
                           <PasswordInput
                             value={newPassword}
                             onChange={(e) => setNewPassword(e.target.value)}
-                            placeholder={PASSWORD_POLICY_HINT}
+                            placeholder="Enter new password"
                           />
+                          {newPassword && !isPasswordPolicyValid(newPassword) && (
+                            <p className="text-xs text-destructive">
+                              {PASSWORD_POLICY_HINT}
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>

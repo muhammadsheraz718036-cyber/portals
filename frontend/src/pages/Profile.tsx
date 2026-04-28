@@ -193,8 +193,11 @@ export default function Profile() {
               <PasswordInput
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder={PASSWORD_POLICY_HINT}
+                placeholder="Enter new password"
               />
+              {newPassword && !isPasswordPolicyValid(newPassword) && (
+                <p className="text-xs text-destructive">{PASSWORD_POLICY_HINT}</p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Confirm New Password</Label>

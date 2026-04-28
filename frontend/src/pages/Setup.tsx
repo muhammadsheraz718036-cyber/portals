@@ -102,8 +102,11 @@ export default function Setup() {
               <PasswordInput
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={PASSWORD_POLICY_HINT}
+                placeholder="Enter password"
               />
+              {password && !isPasswordPolicyValid(password) && (
+                <p className="text-xs text-destructive">{PASSWORD_POLICY_HINT}</p>
+              )}
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? (
