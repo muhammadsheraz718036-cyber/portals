@@ -145,7 +145,7 @@ export const useUpdateWorkStatusRequest = () => {
     }: {
       id: string;
       data: ApprovalActionRequest & {
-        status: "assigned" | "in_progress" | "done" | "not_done";
+        status: "pending" | "assigned" | "in_progress" | "done";
       };
     }) => services.approvalRequests.updateWorkStatus(id, data),
     onSuccess: (_, { id }) => {

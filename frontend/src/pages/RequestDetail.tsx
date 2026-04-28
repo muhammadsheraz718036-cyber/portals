@@ -16,6 +16,8 @@ import {
   Download,
   Trash2,
   Paperclip,
+  ChevronsUpDown,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +36,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { useCompany } from "@/contexts/company-hooks";
@@ -55,13 +70,11 @@ import {
 } from "@/hooks/services";
 import { toast } from "sonner";
 import type { ApprovalFormField } from "@/lib/constants";
-import {
-  buildSingleEntryItems,
-  type LineItem,
-} from "@/components/LineItemsManager";
+import { buildSingleEntryItems, type LineItem } from "@/lib/lineItems";
 import type { RequestAttachment, WorkAssigneeOption } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { formatExistingActionLabel } from "@/lib/workflowLabels";
+import { cn } from "@/lib/utils";
 
 const actionIcons: Record<string, React.ReactNode> = {
   Approved: <CheckCircle className="h-5 w-5 text-success" />,
@@ -285,6 +298,21 @@ function formatFieldDisplayValue(field: ApprovalFormField | null, rawValue: unkn
   return value.length > 0 ? value : "-";
 }
 
+function formatWorkStatus(status: string | null | undefined): string {
+  const normalized = status === "not_done" ? "pending" : status || "pending";
+  return normalized
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isRichTextEmpty(value: string): boolean {
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .trim()
+    .length === 0;
+}
+
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -294,10 +322,13 @@ export default function RequestDetail() {
   const [updateComment, setUpdateComment] = useState("");
   const [rejectionComment, setRejectionComment] = useState("");
   const [workCompletionComment, setWorkCompletionComment] = useState("");
+  const [showWorkAssignmentDialog, setShowWorkAssignmentDialog] = useState(false);
+  const [showWorkStatusDialog, setShowWorkStatusDialog] = useState(false);
   const [selectedWorkStatus, setSelectedWorkStatus] = useState<
-    "assigned" | "in_progress" | "done" | "not_done"
+    "pending" | "assigned" | "in_progress" | "done"
   >("assigned");
   const [selectedWorkAssigneeId, setSelectedWorkAssigneeId] = useState("");
+  const [workAssigneeOpen, setWorkAssigneeOpen] = useState(false);
   const [showLetterPreview, setShowLetterPreview] = useState(false);
   const [updatingFormData, setUpdatingFormData] = useState<
     Record<string, unknown>
@@ -347,8 +378,19 @@ export default function RequestDetail() {
   const { data: attachments = [] } = useRequestAttachments(
     supportsAttachments && id ? id : "",
   );
+  const selectedWorkAssignee = useMemo(
+    () =>
+      workAssignees.find(
+        (assignee: WorkAssigneeOption) => assignee.id === selectedWorkAssigneeId,
+      ) ?? null,
+    [selectedWorkAssigneeId, workAssignees],
+  );
 
   const { data: initiatorProfile } = useProfile(request?.initiator_id || "");
+  const requestId = request?.id;
+  const workAssigneeId = request?.work_assignee_id;
+  const workStatus = request?.work_status;
+  const approvalTypeFields = request?.approval_types?.fields;
 
   const [initiatorName, setInitiatorName] = useState("");
   const [initiatorRole, setInitiatorRole] = useState("");
@@ -367,25 +409,23 @@ export default function RequestDetail() {
   }, [request, initiatorProfile]);
 
   useEffect(() => {
-    if (!request) {
+    if (workStatus) {
+      setSelectedWorkStatus(
+        workStatus === "not_done" ? "pending" : workStatus,
+      );
+    } else {
+      setSelectedWorkStatus("assigned");
+    }
+  }, [requestId, workStatus]);
+
+  useEffect(() => {
+    if (!requestId) {
       setSelectedWorkAssigneeId("");
       return;
     }
 
-    setSelectedWorkAssigneeId(
-      request.work_assignee_id ??
-        workAssignees[0]?.id ??
-        "",
-    );
-  }, [request?.id, request?.work_assignee_id, workAssignees]);
-
-  useEffect(() => {
-    if (request?.work_status && request.work_status !== "pending") {
-      setSelectedWorkStatus(request.work_status);
-    } else {
-      setSelectedWorkStatus("assigned");
-    }
-  }, [request?.id, request?.work_status]);
+    setSelectedWorkAssigneeId(workAssigneeId ?? workAssignees[0]?.id ?? "");
+  }, [requestId, workAssigneeId, workAssignees]);
 
   const { settings } = useCompany();
   const companyName = settings?.company_name || "ApprovalHub";
@@ -548,17 +588,26 @@ export default function RequestDetail() {
     }
   };
 
-  const canAssignApprovedWork =
-    !!request &&
-    request.status === "approved" &&
-    !!user &&
-    (profile?.is_admin || request.final_authority_user_id === user.id);
+  const hasAdminLikeWorkAccess =
+    profile?.is_admin ||
+    profile?.permissions?.includes("all") ||
+    profile?.permissions?.includes("manage_approvals");
+  const isWorkDone =
+    request?.work_status === "done" || Boolean(request?.work_completed_at);
 
   const canCompleteApprovedWork =
     !!request &&
     request.status === "approved" &&
     !!user &&
-    (profile?.is_admin || request.work_assignee_id === user.id);
+    (hasAdminLikeWorkAccess ||
+      (!isWorkDone && request.work_assignee_id === user.id));
+
+  const canAssignApprovedWork =
+    !!request &&
+    request.status === "approved" &&
+    !!user &&
+    (hasAdminLikeWorkAccess ||
+      (!isWorkDone && request.final_authority_user_id === user.id));
 
   const handleAssignWork = async () => {
     if (!request || !selectedWorkAssigneeId) return;
@@ -568,6 +617,7 @@ export default function RequestDetail() {
         id: request.id,
         assigneeId: selectedWorkAssigneeId,
       });
+      setShowWorkAssignmentDialog(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to assign approved work");
     } finally {
@@ -583,10 +633,13 @@ export default function RequestDetail() {
         id: request.id,
         data: {
           status: selectedWorkStatus,
-          comment: workCompletionComment.trim() || undefined,
+          comment: isRichTextEmpty(workCompletionComment)
+            ? undefined
+            : workCompletionComment.trim(),
         },
       });
       setWorkCompletionComment("");
+      setShowWorkStatusDialog(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update work status");
     } finally {
@@ -770,10 +823,10 @@ export default function RequestDetail() {
   // Keep this memoized to avoid retriggering effects from new array references.
   const repeatableFields: ApprovalFormField[] = useMemo(
     () =>
-      Array.isArray(request?.approval_types?.fields)
-        ? (request.approval_types!.fields as unknown as ApprovalFormField[])
+      Array.isArray(approvalTypeFields)
+        ? (approvalTypeFields as ApprovalFormField[])
         : [],
-    [request?.approval_types?.fields],
+    [approvalTypeFields],
   );
   const repeatableGroupOrder = useMemo(
     () => getGroupRenderOrder(repeatableFields),
@@ -804,8 +857,14 @@ export default function RequestDetail() {
     setUpdateComment((prev) => (prev ? "" : prev));
   }, [showUpdateForm]);
 
-  const formData = (request?.form_data as Record<string, unknown>) ?? {};
-  const items = Array.isArray(formData.items) ? formData.items : [];
+  const formData = useMemo(
+    () => (request?.form_data as Record<string, unknown>) ?? {},
+    [request?.form_data],
+  );
+  const items = useMemo(
+    () => (Array.isArray(formData.items) ? formData.items : []),
+    [formData.items],
+  );
   const richContent =
     typeof formData.content === "string" ? formData.content : null;
   const preComments =
@@ -1209,6 +1268,45 @@ export default function RequestDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {request.status === "approved" && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowWorkAssignmentDialog(true)}
+                  disabled={actioning || !canAssignApprovedWork}
+                  className="gap-2"
+                  title={
+                    canAssignApprovedWork
+                      ? undefined
+                      : isWorkDone
+                        ? "Completed work assignments can only be changed by an admin"
+                        : "Only the final approving authority or an admin can update the work assignment"
+                  }
+                >
+                  <Edit2 className="h-4 w-4" />
+                  Update Work Assignment
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setShowWorkStatusDialog(true)}
+                  disabled={actioning || !canCompleteApprovedWork}
+                  className="gap-2"
+                  title={
+                    canCompleteApprovedWork
+                      ? undefined
+                      : isWorkDone
+                        ? "Completed work status can only be changed by an admin"
+                        : "Only the assigned worker or an admin can update the work status"
+                  }
+                >
+                  <Edit2 className="h-4 w-4" />
+                  Update Work Status
+                </Button>
+              </>
+            )}
             {canDeleteRequest() && (
               <Button
                 variant="destructive"
@@ -1288,9 +1386,7 @@ export default function RequestDetail() {
                     {request.work_completed_at
                       ? `Completed ${new Date(request.work_completed_at).toLocaleDateString()}`
                       : request.status === "approved"
-                        ? String(request.work_status || "assigned")
-                            .replace(/_/g, " ")
-                            .replace(/\b\w/g, (char) => char.toUpperCase())
+                        ? formatWorkStatus(request.work_status || "assigned")
                         : "Pending approval"}
                   </p>
                 </div>
@@ -1744,109 +1840,6 @@ export default function RequestDetail() {
                 )}
               </div>
 
-              {request.status === "approved" && (
-                <div className="rounded-xl border bg-card/80 p-4 shadow-sm space-y-4">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">
-                      Approved Work Assignment
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      The final approver can reassign this work, and the assigned person can mark it complete when done.
-                    </p>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                        Assigned To
-                      </p>
-                      <Select
-                        value={selectedWorkAssigneeId}
-                        onValueChange={setSelectedWorkAssigneeId}
-                        disabled={!canAssignApprovedWork || workAssignees.length === 0}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select assignee" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {workAssignees.map((assignee: WorkAssigneeOption) => (
-                            <SelectItem key={assignee.id} value={assignee.id}>
-                              {assignee.full_name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">
-                        Current assignee: {request.work_assignee?.full_name || "Not assigned"}
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                        Work Status
-                      </p>
-                      <Select
-                        value={selectedWorkStatus}
-                        onValueChange={(value) =>
-                          setSelectedWorkStatus(
-                            value as "assigned" | "in_progress" | "done" | "not_done",
-                          )
-                        }
-                        disabled={!canCompleteApprovedWork}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="assigned">Assigned</SelectItem>
-                          <SelectItem value="in_progress">In Progress</SelectItem>
-                          <SelectItem value="done">Done</SelectItem>
-                          <SelectItem value="not_done">Not Done</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Textarea
-                        value={workCompletionComment}
-                        onChange={(e) => setWorkCompletionComment(e.target.value)}
-                        placeholder="Optional note for the initiator"
-                        rows={4}
-                        disabled={!canCompleteApprovedWork}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        {request.work_completed_at
-                          ? `Completed by ${request.work_completed_by_profile?.full_name || "assigned worker"} on ${new Date(request.work_completed_at).toLocaleString()}`
-                          : "The initiator will receive an email when this is marked complete."}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    {canAssignApprovedWork && (
-                      <Button
-                        onClick={handleAssignWork}
-                        disabled={actioning || !selectedWorkAssigneeId}
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                      >
-                        {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Assign Work
-                      </Button>
-                    )}
-                    {canCompleteApprovedWork && (
-                      <Button
-                        onClick={handleUpdateWorkStatus}
-                        disabled={actioning}
-                        size="sm"
-                        className="gap-2"
-                      >
-                        {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Update Work Status
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              )}
-
               {shouldShowButtons && (
                 <div className="mt-4 pt-4 border-t space-y-2">
                   <Button
@@ -1927,6 +1920,175 @@ export default function RequestDetail() {
           </Card>
         </div>
       </div>
+
+      <Dialog
+        open={showWorkAssignmentDialog}
+        onOpenChange={setShowWorkAssignmentDialog}
+      >
+        <DialogContent className="w-[95vw] max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Update Work Assignment</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Assigned To
+              </p>
+              <Popover open={workAssigneeOpen} onOpenChange={setWorkAssigneeOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={workAssigneeOpen}
+                    disabled={actioning || workAssignees.length === 0}
+                    className="w-full justify-between font-normal"
+                  >
+                    {selectedWorkAssignee
+                      ? selectedWorkAssignee.full_name
+                      : "Select work assignee"}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[min(32rem,calc(100vw-3rem))] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search by name, role, or department..." />
+                    <CommandList>
+                      <CommandEmpty>No matching assignee found.</CommandEmpty>
+                      <CommandGroup>
+                        {workAssignees.map((assignee: WorkAssigneeOption) => {
+                          const departmentSummary =
+                            assignee.department_names?.length
+                              ? assignee.department_names.join(", ")
+                              : assignee.department_name || "No department";
+                          const roleSummary = assignee.role_names?.length
+                            ? assignee.role_names.join(", ")
+                            : "No role";
+
+                          return (
+                            <CommandItem
+                              key={assignee.id}
+                              value={`${assignee.full_name} ${assignee.email} ${departmentSummary} ${roleSummary}`}
+                              onSelect={() => {
+                                setSelectedWorkAssigneeId(assignee.id);
+                                setWorkAssigneeOpen(false);
+                              }}
+                              className="items-start"
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 mt-0.5 h-4 w-4 shrink-0",
+                                  selectedWorkAssigneeId === assignee.id
+                                    ? "opacity-100"
+                                    : "opacity-0",
+                                )}
+                              />
+                              <div className="flex min-w-0 flex-col">
+                                <span className="truncate">{assignee.full_name}</span>
+                                <span className="truncate text-xs text-muted-foreground">
+                                  {roleSummary} | {departmentSummary}
+                                </span>
+                              </div>
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowWorkAssignmentDialog(false)}
+                disabled={actioning}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleAssignWork}
+                disabled={actioning || !selectedWorkAssigneeId}
+                className="gap-2"
+              >
+                {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Update Assignment
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showWorkStatusDialog} onOpenChange={setShowWorkStatusDialog}>
+        <DialogContent className="w-[95vw] max-w-3xl max-h-[90vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Update Work Status</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Work Status
+              </p>
+              <Select
+                value={selectedWorkStatus}
+                onValueChange={(value) =>
+                  setSelectedWorkStatus(
+                    value as "pending" | "assigned" | "in_progress" | "done",
+                  )
+                }
+                disabled={actioning}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select work status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="assigned">Assigned</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="done">Done</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Comment
+              </p>
+              <RichTextEditor
+                content={workCompletionComment}
+                onChange={setWorkCompletionComment}
+                placeholder="Optional note for the initiator"
+              />
+              <p className="text-xs text-muted-foreground">
+                The initiator will receive this note by email when you update the work status.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowWorkStatusDialog(false)}
+                disabled={actioning}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleUpdateWorkStatus}
+                disabled={actioning || !canCompleteApprovedWork}
+                className="gap-2"
+              >
+                {actioning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Update Work Status
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showLetterPreview} onOpenChange={setShowLetterPreview}>
         <DialogContent className="w-[96vw] max-w-6xl max-h-[92vh] overflow-auto p-4 sm:p-6">

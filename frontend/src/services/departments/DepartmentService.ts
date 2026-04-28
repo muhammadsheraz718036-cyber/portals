@@ -6,6 +6,15 @@ import {
 } from '../types';
 import { api } from '../../lib/api';
 
+export type DepartmentManager = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  email: string;
+  is_active: boolean;
+  assigned_at: string;
+};
+
 export class DepartmentService extends BaseService {
   async list(): Promise<Department[]> {
     return this.handleRequest(() => 
@@ -42,9 +51,9 @@ export class DepartmentService extends BaseService {
     });
   }
 
-  async getManagers(departmentId: string): Promise<any[]> {
+  async getManagers(departmentId: string): Promise<DepartmentManager[]> {
     return this.handleRequest(() => 
-      api.departments.getManagers(departmentId) as Promise<any[]>
+      api.departments.getManagers(departmentId) as Promise<DepartmentManager[]>
     );
   }
 

@@ -224,13 +224,17 @@ export function AdminChains() {
         });
       }
       setDialogOpen(false);
-    } catch {}
+    } catch (error) {
+      console.error("Failed to save approval chain:", error);
+    }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await deleteChainMutation.mutateAsync(id);
-    } catch {}
+    } catch (error) {
+      console.error("Failed to delete approval chain:", error);
+    }
   };
 
   const handleDuplicate = async (chain: Chain) => {
@@ -241,7 +245,9 @@ export function AdminChains() {
         work_assignee_id: chain.work_assignee_id ?? null,
         steps: chain.steps.map((s) => ({ ...s })),
       });
-    } catch {}
+    } catch (error) {
+      console.error("Failed to duplicate approval chain:", error);
+    }
   };
 
   return (

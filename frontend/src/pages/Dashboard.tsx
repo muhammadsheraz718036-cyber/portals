@@ -26,14 +26,7 @@ import {
 import type { RequestStatus } from "@/lib/constants";
 
 type RequestRow = {
-  id: string;
-  request_number: string;
   status: RequestStatus;
-  current_step: number;
-  total_steps: number;
-  created_at: string;
-  initiator_id: string;
-  approval_types: { name: string } | null;
 };
 
 type DashboardCard = {
@@ -119,9 +112,9 @@ export default function Dashboard() {
     const total = requests.length;
     const approved = requests.filter((r) => r.status === "approved").length;
     const rejected = requests.filter((r) => r.status === "rejected").length;
-    const pending = requests.filter(
-      (r) => r.status === "pending" || r.status === "in_progress",
-    ).length;
+    const pending = requests.filter((r) => r.status === "pending").length;
+    const inProgress = requests.filter((r) => r.status === "in_progress").length;
+
     return [
       {
         label: "Total Requests",
@@ -129,7 +122,7 @@ export default function Dashboard() {
         icon: ClipboardList,
         path: "/approvals",
         tone: cardTones.rose,
-        detail: `${pending} open requests`,
+        detail: `${pending + inProgress} active requests`,
       },
       {
         label: "Approved",
@@ -151,9 +144,9 @@ export default function Dashboard() {
         label: "Pending",
         value: pending,
         icon: Clock,
-        path: "/approvals?status=open",
+        path: "/approvals?status=pending",
         tone: cardTones.amber,
-        detail: "Awaiting action",
+        detail: "Awaiting approval",
       },
     ] satisfies DashboardCard[];
   }, [requests]);

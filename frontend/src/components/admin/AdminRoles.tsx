@@ -78,13 +78,17 @@ export function AdminRoles() {
         await createRoleMutation.mutateAsync({ name, description, permissions });
       }
       setDialogOpen(false);
-    } catch {}
+    } catch (error) {
+      console.error("Failed to save role:", error);
+    }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await deleteRoleMutation.mutateAsync(id);
-    } catch {}
+    } catch (error) {
+      console.error("Failed to delete role:", error);
+    }
   };
 
   return (

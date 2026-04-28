@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   ClipboardCheck,
+  BriefcaseBusiness,
   Settings,
   ScrollText,
   LogOut,
@@ -52,6 +53,12 @@ export function AppSidebar() {
       title: "My Approvals",
       url: "/approvals",
       icon: ClipboardCheck,
+      show: true,
+    },
+    {
+      title: "Assigned Work",
+      url: "/assigned-work",
+      icon: BriefcaseBusiness,
       show: true,
     },
     {

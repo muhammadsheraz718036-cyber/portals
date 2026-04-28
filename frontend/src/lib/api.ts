@@ -411,7 +411,7 @@ export const api = {
       }),
     updateWorkStatus: (
       id: string,
-      body: { status: "assigned" | "in_progress" | "done" | "not_done"; comment?: string },
+      body: { status: "pending" | "assigned" | "in_progress" | "done"; comment?: string },
     ) =>
       request("/api/approval-requests/" + id + "/work-status", {
         method: "POST",

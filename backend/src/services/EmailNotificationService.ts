@@ -56,6 +56,59 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function sanitizeRichHtml(value: string): string {
+  const allowedTags = new Set([
+    "p",
+    "br",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "h1",
+    "h2",
+    "h3",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+  ]);
+
+  return value.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, (match, tagName) => {
+    const tag = String(tagName).toLowerCase();
+    if (!allowedTags.has(tag)) return "";
+    return match.startsWith("</") ? `</${tag}>` : `<${tag}>`;
+  });
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h1|h2|h3|tr)>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatCommentHtml(value: string): string {
+  return /<\/?[a-z][\s\S]*>/i.test(value)
+    ? sanitizeRichHtml(value)
+    : escapeHtml(value);
+}
+
 function startCase(value: string): string {
   return value
     .replace(/[_-]+/g, " ")
@@ -348,7 +401,7 @@ function renderHtmlEmail(args: {
                           ([label, value]) => `
                             <tr>
                               <td width="38%" valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background-color:#f9fafb;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;font-weight:bold;color:#374151;">${escapeHtml(label)}</td>
-                              <td valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#111827;white-space:pre-wrap;">${escapeHtml(value)}</td>
+                              <td valign="top" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#111827;white-space:pre-wrap;">${label === "Comment" ? formatCommentHtml(value) : escapeHtml(value)}</td>
                             </tr>`,
                         )
                         .join("")}
@@ -420,7 +473,7 @@ function renderTextEmail(args: {
     `${event.highlightLabel}: ${event.highlightValue}`,
     event.actionLabel ? `Required action: ${event.actionLabel}` : null,
     event.actorName ? `By: ${event.actorName}` : null,
-    event.actorComment ? `Comment: ${event.actorComment}` : null,
+    event.actorComment ? `Comment: ${stripHtml(event.actorComment)}` : null,
     "",
     `Review & Approve: ${requestUrl}`,
     "",

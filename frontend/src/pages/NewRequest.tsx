@@ -24,9 +24,11 @@ import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
 import {
   LineItemsManager,
+} from "@/components/LineItemsManager";
+import {
   buildSingleEntryItems,
   type LineItem,
-} from "@/components/LineItemsManager";
+} from "@/lib/lineItems";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { FileUpload } from "@/components/FileUpload";
 import type { ApprovalFormField } from "@/lib/constants";
@@ -94,7 +96,11 @@ export default function NewRequest() {
   const safePostComments = postComments ? sanitizeHtml(postComments) : "";
 
   // All fields are now repeatable (line items)
-  const repeatableFields = approvalType?.fields ?? [];
+  const approvalTypeFields = approvalType?.fields;
+  const repeatableFields = useMemo(
+    () => approvalTypeFields ?? [],
+    [approvalTypeFields],
+  );
   const repeatableGroupOrder = useMemo(
     () => getGroupRenderOrder(repeatableFields),
     [repeatableFields],

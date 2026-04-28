@@ -83,7 +83,7 @@ export class ApprovalRequestService extends BaseService {
 
   async updateWorkStatus(
     id: string,
-    data: ApprovalActionRequest & { status: "assigned" | "in_progress" | "done" | "not_done" },
+    data: ApprovalActionRequest & { status: "pending" | "assigned" | "in_progress" | "done" },
   ): Promise<ApprovalRequest> {
     return this.handleRequest(() =>
       api.approvalRequests.updateWorkStatus(id, data) as Promise<ApprovalRequest>

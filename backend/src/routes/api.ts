@@ -4226,7 +4226,7 @@ const assignWorkBody = z.object({
 });
 
 const workStatusBody = z.object({
-  status: z.enum(["assigned", "in_progress", "done", "not_done"]),
+  status: z.enum(["pending", "assigned", "in_progress", "done"]),
   comment: z.string().optional(),
 });
 
@@ -4505,6 +4505,9 @@ apiRouter.post(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const isAdmin = req.profile!.is_admin;
+    const permissions = req.profile!.permissions || [];
+    const hasAdminLikeAccess =
+      isAdmin || permissions.includes("all") || permissions.includes("manage_approvals");
 
     const client = await pool.connect();
     try {
@@ -4516,8 +4519,10 @@ apiRouter.post(
         status: string;
         initiator_id: string;
         department_id: string | null;
+        work_status: string | null;
+        work_completed_at: string | null;
       }>(
-        `SELECT id, request_number, status, initiator_id, department_id
+        `SELECT id, request_number, status, initiator_id, department_id, work_status, work_completed_at
            FROM approval_requests
           WHERE id = $1
           FOR UPDATE`,
@@ -4530,9 +4535,18 @@ apiRouter.post(
       if (request.status !== "approved") {
         throw new HttpError(400, "Work can only be assigned after final approval");
       }
+      if (
+        (request.work_status === "done" || request.work_completed_at) &&
+        !hasAdminLikeAccess
+      ) {
+        throw new HttpError(
+          403,
+          "Completed work assignments can only be changed by an admin",
+        );
+      }
 
       const finalAuthorityUserId = await getFinalAuthorityUserId(client, requestId);
-      if (!isAdmin && finalAuthorityUserId !== userId) {
+      if (!hasAdminLikeAccess && finalAuthorityUserId !== userId) {
         throw new HttpError(
           403,
           "Only the final approving authority or an admin can assign the approved work",
@@ -4592,6 +4606,9 @@ apiRouter.post(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
     const isAdmin = req.profile!.is_admin;
+    const permissions = req.profile!.permissions || [];
+    const hasAdminLikeAccess =
+      isAdmin || permissions.includes("all") || permissions.includes("manage_approvals");
 
     const client = await pool.connect();
     try {
@@ -4621,7 +4638,16 @@ apiRouter.post(
       if (!request.work_assignee_id) {
         throw new HttpError(400, "Assign the approved work before updating its status");
       }
-      if (!isAdmin && request.work_assignee_id !== userId) {
+      if (
+        (request.work_status === "done" || request.work_completed_at) &&
+        !hasAdminLikeAccess
+      ) {
+        throw new HttpError(
+          403,
+          "Completed work status can only be changed by an admin",
+        );
+      }
+      if (!hasAdminLikeAccess && request.work_assignee_id !== userId) {
         throw new HttpError(403, "Only the assigned worker can update this work status");
       }
 

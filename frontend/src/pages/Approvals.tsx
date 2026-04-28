@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Search, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -13,6 +13,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DateRangeSelector,
+  type DateRangeValue,
+} from "@/components/DateRangeSelector";
 import { useAuth } from "@/contexts/auth-hooks";
 import {
   useApprovalRequests,
@@ -27,6 +31,7 @@ type RequestRow = {
   id: string;
   request_number: string;
   status: RequestStatus;
+  work_assignee_id?: string | null;
   current_step: number;
   current_step_role: string;
   total_steps: number;
@@ -50,12 +55,12 @@ type TabDefinition = {
 const DEPARTMENT_FALLBACK = "No Department Assigned";
 const STATUS_FILTERS = new Set([
   "all",
-  "open",
   "pending",
   "in_progress",
   "approved",
   "rejected",
 ]);
+const TAB_FILTERS = new Set(["all", "approval", "my", "other"]);
 
 function getDepartmentLabel(request: RequestRow) {
   return request.departments?.name?.trim() || DEPARTMENT_FALLBACK;
@@ -73,9 +78,15 @@ export default function Approvals() {
   const [statusFilter, setStatusFilter] = useState<string>(() =>
     getInitialStatusFilter(searchParams.get("status")),
   );
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const value = searchParams.get("tab");
+    return value && TAB_FILTERS.has(value) ? value : "all";
+  });
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");
-  const [fromDate, setFromDate] = useState(searchParams.get("from") ?? "");
-  const [toDate, setToDate] = useState(searchParams.get("to") ?? "");
+  const [dateRange, setDateRange] = useState<DateRangeValue>({
+    from: searchParams.get("from") ?? "",
+    to: searchParams.get("to") ?? "",
+  });
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
@@ -114,9 +125,7 @@ export default function Approvals() {
       requests.filter((request) => {
         const statusMatches =
           statusFilter === "all" ||
-          (statusFilter === "open"
-            ? request.status === "pending" || request.status === "in_progress"
-            : request.status === statusFilter);
+          request.status === statusFilter;
 
         if (!statusMatches) {
           return false;
@@ -129,7 +138,7 @@ export default function Approvals() {
           return false;
         }
 
-        if (!isWithinDateRange(request.created_at, fromDate, toDate)) {
+        if (!isWithinDateRange(request.created_at, dateRange.from, dateRange.to)) {
           return false;
         }
 
@@ -161,14 +170,13 @@ export default function Approvals() {
       allOther: applyFilters(segregated.allOther),
     };
   }, [
+    dateRange,
     debouncedSearch,
     departmentFilter,
-    fromDate,
     names,
     rows,
     segregated,
     statusFilter,
-    toDate,
   ]);
 
   const tabs = useMemo(() => {
@@ -218,6 +226,19 @@ export default function Approvals() {
     return nextTabs;
   }, [filtered, hasPermission, isAdmin]);
 
+  useEffect(() => {
+    if (tabs.some((tab) => tab.key === activeTab)) {
+      return;
+    }
+
+    setActiveTab("all");
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("tab");
+      return next;
+    });
+  }, [activeTab, setSearchParams, tabs]);
+
   const handleStatusFilterChange = (value: string) => {
     setStatusFilter(value);
     setSearchParams((current) => {
@@ -231,26 +252,35 @@ export default function Approvals() {
     });
   };
 
-  const updateDateParam = (key: "from" | "to", value: string) => {
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
-      if (value) {
-        next.set(key, value);
+      if (value === "all") {
+        next.delete("tab");
       } else {
-        next.delete(key);
+        next.set("tab", value);
       }
       return next;
     });
   };
 
-  const handleFromDateChange = (value: string) => {
-    setFromDate(value);
-    updateDateParam("from", value);
-  };
-
-  const handleToDateChange = (value: string) => {
-    setToDate(value);
-    updateDateParam("to", value);
+  const handleDateRangeChange = (value: DateRangeValue) => {
+    setDateRange(value);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value.from) {
+        next.set("from", value.from);
+      } else {
+        next.delete("from");
+      }
+      if (value.to) {
+        next.set("to", value.to);
+      } else {
+        next.delete("to");
+      }
+      return next;
+    });
   };
 
   const renderTable = (requests: RequestRow[]) => (
@@ -365,12 +395,11 @@ export default function Approvals() {
             </div>
             <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
               <SelectTrigger className="w-[170px]">
-                <SelectValue placeholder="Filter by status" />
+                <SelectValue placeholder="Request status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="open">Pending</SelectItem>
-                <SelectItem value="pending">Pending Only</SelectItem>
+                <SelectItem value="all">All Request Statuses</SelectItem>
+                <SelectItem value="pending">Pending Approval</SelectItem>
                 <SelectItem value="in_progress">In Progress</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
@@ -396,36 +425,14 @@ export default function Approvals() {
                 )}
               </SelectContent>
             </Select>
-            <Input
-              type="date"
-              value={fromDate}
-              onChange={(event) => handleFromDateChange(event.target.value)}
-              className="w-[155px]"
-              aria-label="From date"
+            <DateRangeSelector
+              value={dateRange}
+              onChange={handleDateRangeChange}
             />
-            <Input
-              type="date"
-              value={toDate}
-              onChange={(event) => handleToDateChange(event.target.value)}
-              className="w-[155px]"
-              aria-label="To date"
-            />
-            {(fromDate || toDate) && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  handleFromDateChange("");
-                  handleToDateChange("");
-                }}
-              >
-                Clear Dates
-              </Button>
-            )}
           </div>
         </CardHeader>
         <CardContent className="p-6">
-          <Tabs defaultValue="all" className="w-full">
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <TabsList
               className="grid w-full"
               style={{

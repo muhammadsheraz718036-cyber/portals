@@ -3,7 +3,10 @@ import type { RequestStatus } from "@/lib/constants";
 
 const statusConfig: Record<RequestStatus | string, { label: string; className: string }> = {
   pending: { label: "Pending", className: "bg-warning/10 text-warning border-warning/20" },
+  assigned: { label: "Assigned", className: "bg-blue-500/10 text-blue-700 border-blue-500/20" },
   in_progress: { label: "In Progress", className: "bg-primary/10 text-primary border-primary/20" },
+  done: { label: "Done", className: "bg-success/10 text-success border-success/20" },
+  not_done: { label: "Pending", className: "bg-warning/10 text-warning border-warning/20" },
   approved: { label: "Approved", className: "bg-success/10 text-success border-success/20" },
   rejected: { label: "Rejected", className: "bg-destructive/10 text-destructive border-destructive/20" },
   changes_requested: { label: "Changes Requested", className: "bg-warning/10 text-warning border-warning/20" },

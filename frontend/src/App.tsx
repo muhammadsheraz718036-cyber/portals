@@ -9,6 +9,7 @@ import { CompanyProvider } from "@/contexts/CompanyContext";
 import { AppLayout } from "@/components/AppLayout";
 import Dashboard from "./pages/Dashboard";
 import Approvals from "./pages/Approvals";
+import AssignedWork from "./pages/AssignedWork";
 import RequestDetail from "./pages/RequestDetail";
 import NewRequest from "./pages/NewRequest";
 import Profile from "./pages/Profile";
@@ -71,6 +72,7 @@ function ProtectedRoutes() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/approvals" element={<Approvals />} />
+        <Route path="/assigned-work" element={<AssignedWork />} />
         <Route path="/approvals/new" element={<NewRequest />} />
         <Route path="/approvals/:id" element={<RequestDetail />} />
         <Route path="/profile" element={<Profile />} />
