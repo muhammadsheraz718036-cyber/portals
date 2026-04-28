@@ -11,6 +11,7 @@ import { upload, deleteUploadedFile, validateFileSize, getMimeType, UPLOADS_DIR,
 import path from "path";
 import fs from "fs/promises";
 import { EmailNotificationService } from "../services/EmailNotificationService.js";
+import { attachAuditTrail, ensureAuditLogColumns, getAuditRequestContext, writeAuditLog, } from "../services/AuditService.js";
 export const apiRouter = Router();
 const uploadsRoot = path.resolve(UPLOADS_DIR);
 const emailNotificationService = new EmailNotificationService();
@@ -182,6 +183,29 @@ async function resolveScopeDepartmentId(client, step, request) {
     }
     return null;
 }
+async function resolveDepartmentManagerApprover(client, departmentId, initiatorId) {
+    const { rows } = await client.query(`SELECT p.id
+       FROM department_managers dm
+       JOIN profiles p ON p.id = dm.user_id
+      WHERE dm.department_id = $1
+        AND dm.is_active = true
+        AND p.is_active = true
+        AND p.id <> $2
+      ORDER BY dm.assigned_at ASC, p.created_at ASC
+      LIMIT 1`, [departmentId, initiatorId]);
+    if (rows.length > 0) {
+        return rows[0].id;
+    }
+    const { rows: legacyRows } = await client.query(`SELECT p.id
+       FROM departments d
+       JOIN profiles p ON lower(trim(p.full_name)) = lower(trim(d.head_name))
+      WHERE d.id = $1
+        AND p.is_active = true
+        AND p.id <> $2
+      ORDER BY p.created_at ASC
+      LIMIT 1`, [departmentId, initiatorId]);
+    return legacyRows[0]?.id ?? null;
+}
 async function resolveApprover(client, step, request) {
     if (step.scope_type === "expression" && step.scope_value === "initiator_manager") {
         const { rows } = await client.query(`SELECT p.id
@@ -215,6 +239,17 @@ async function resolveApprover(client, step, request) {
     if ((step.scope_type === "initiator_department" || step.scope_type === "fixed_department") &&
         !scopedDepartmentId) {
         throw new HttpError(400, `Unable to resolve department scope for step "${step.name}"`);
+    }
+    const isDepartmentManagerRole = step.role.trim().toLowerCase() === "department manager" &&
+        (step.scope_type === "initiator_department" ||
+            step.scope_type === "fixed_department" ||
+            step.scope_type === "expression");
+    if (isDepartmentManagerRole && scopedDepartmentId) {
+        const managerId = await resolveDepartmentManagerApprover(client, scopedDepartmentId, request.initiatorId);
+        if (!managerId) {
+            throw new HttpError(400, `No department manager is assigned for department ${scopedDepartmentId}. Configure one in Department Managers before submitting this request.`);
+        }
+        return managerId;
     }
     const params = [step.role, request.initiatorId];
     let departmentClause = "";
@@ -549,13 +584,29 @@ async function getFinalAuthorityUserId(client, requestId) {
 }
 // Helper function to log audit events
 async function logAudit(userId, userName, action, target, details) {
-    try {
-        await pool.query(`INSERT INTO audit_logs (user_id, user_name, action, target, details) VALUES ($1, $2, $3, $4, $5)`, [userId, userName, action, target, details ?? null]);
-    }
-    catch (err) {
-        // Log audit errors to console but don't fail the request
-        console.error("Failed to log audit event:", err);
-    }
+    const upperAction = action.toUpperCase();
+    const category = upperAction.includes("DELETE")
+        ? "DELETE"
+        : upperAction.includes("UPDATE") || upperAction.includes("EDIT")
+            ? "UPDATE"
+            : upperAction.includes("CREATE")
+                ? "CREATE"
+                : upperAction.includes("APPROV") ||
+                    upperAction.includes("REJECT") ||
+                    upperAction.includes("ASSIGN")
+                    ? "WORKFLOW"
+                    : target.toLowerCase().includes("user") || target.toLowerCase().includes("role")
+                        ? "ADMIN"
+                        : "SYSTEM";
+    await writeAuditLog({
+        userId,
+        userName,
+        action,
+        target,
+        details,
+        category,
+        status: "SUCCESS",
+    });
 }
 async function createNotification(client, opts) {
     if (!opts.userId)
@@ -585,6 +636,9 @@ async function getRequestNotificationContext(client, requestId) {
       WHERE ar.id = $1`, [requestId]);
     return rows[0] ?? null;
 }
+apiRouter.use((req, res, next) => {
+    attachAuditTrail(req, res, next);
+});
 async function notifyPendingApprovalAssignees(client, opts) {
     const request = await getRequestNotificationContext(client, opts.requestId);
     if (!request)
@@ -919,16 +973,54 @@ const loginBody = z.object({
 });
 apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
     const body = loginBody.parse(req.body);
+    const auditContext = getAuditRequestContext(req);
     const { rows } = await pool.query(`SELECT u.id, u.password_hash, u.email, p.is_locked, p.failed_login_attempts, p.is_admin
         FROM users u
         JOIN profiles p ON u.id = p.id
         WHERE u.email = $1`, [body.email.toLowerCase()]);
     if (rows.length === 0) {
+        await writeAuditLog({
+            userName: body.email.toLowerCase(),
+            action: "LOGIN_FAILED",
+            target: "Authentication",
+            details: `Login failed for ${body.email.toLowerCase()}: account not found.`,
+            category: "AUTH",
+            status: "FAILURE",
+            entityType: "user_account",
+            ipAddress: auditContext.ipAddress,
+            userAgent: auditContext.userAgent,
+            httpMethod: auditContext.httpMethod,
+            routePath: auditContext.routePath,
+            metadata: {
+                email: body.email.toLowerCase(),
+                reason: "ACCOUNT_NOT_FOUND",
+            },
+        });
         throw new HttpError(401, "Invalid email or password");
     }
     const user = rows[0];
     // Lock after failed attempts applies to non-admin accounts only; admins are never locked.
     if (user.is_locked && !user.is_admin) {
+        await writeAuditLog({
+            userId: user.id,
+            userName: user.email,
+            action: "LOGIN_BLOCKED",
+            target: "Authentication",
+            details: `Login blocked for ${user.email}: account is locked.`,
+            category: "AUTH",
+            status: "FAILURE",
+            entityType: "user_account",
+            entityId: user.id,
+            ipAddress: auditContext.ipAddress,
+            userAgent: auditContext.userAgent,
+            httpMethod: auditContext.httpMethod,
+            routePath: auditContext.routePath,
+            metadata: {
+                email: user.email,
+                reason: "ACCOUNT_LOCKED",
+                failedLoginAttempts: user.failed_login_attempts,
+            },
+        });
         throw new HttpError(423, "Account is locked due to too many failed login attempts. Please contact an administrator.");
     }
     const ok = await verifyPassword(body.password, user.password_hash);
@@ -941,6 +1033,27 @@ apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
           locked_at = CASE WHEN failed_login_attempts + 1 >= 3 THEN now() ELSE locked_at END
          WHERE id = $1`, [user.id]);
         }
+        await writeAuditLog({
+            userId: user.id,
+            userName: user.email,
+            action: "LOGIN_FAILED",
+            target: "Authentication",
+            details: `Login failed for ${user.email}: invalid password.`,
+            category: "AUTH",
+            status: "FAILURE",
+            entityType: "user_account",
+            entityId: user.id,
+            ipAddress: auditContext.ipAddress,
+            userAgent: auditContext.userAgent,
+            httpMethod: auditContext.httpMethod,
+            routePath: auditContext.routePath,
+            metadata: {
+                email: user.email,
+                reason: "INVALID_PASSWORD",
+                failedLoginAttempts: user.failed_login_attempts + (user.is_admin ? 0 : 1),
+                accountLocked: !user.is_admin && user.failed_login_attempts + 1 >= 3,
+            },
+        });
         throw new HttpError(401, "Invalid email or password");
     }
     // Reset failed login attempts on successful login
@@ -956,6 +1069,27 @@ apiRouter.post("/auth/login", asyncHandler(async (req, res) => {
     if (!profile) {
         throw new HttpError(401, "Profile missing");
     }
+    await writeAuditLog({
+        userId: id,
+        userName: profile.full_name,
+        action: "LOGIN_SUCCESS",
+        target: "Authentication",
+        details: `${profile.full_name} signed in successfully.`,
+        category: "AUTH",
+        status: "SUCCESS",
+        entityType: "user_account",
+        entityId: id,
+        ipAddress: auditContext.ipAddress,
+        userAgent: auditContext.userAgent,
+        httpMethod: auditContext.httpMethod,
+        routePath: auditContext.routePath,
+        metadata: {
+            email: user.email,
+            isAdmin: profile.is_admin,
+            departmentId: profile.department_id,
+            roleId: profile.role_id,
+        },
+    });
     res.json({ token, user: { id, email: user.email }, profile });
 }));
 async function ensureCompanySettingsColumns() {
@@ -992,6 +1126,28 @@ apiRouter.get("/auth/me", requireAuth, asyncHandler(async (req, res) => {
     const { rows: u } = await pool.query(`SELECT email FROM users WHERE id = $1`, [id]);
     const profile = await loadProfileById(id);
     res.json({ user: { id, email: u[0]?.email }, profile });
+}));
+apiRouter.post("/auth/logout", requireAuth, asyncHandler(async (req, res) => {
+    const auditContext = getAuditRequestContext(req);
+    await writeAuditLog({
+        userId: req.auth.userId,
+        userName: req.profile.full_name,
+        action: "LOGOUT",
+        target: "Session",
+        details: `${req.profile.full_name} signed out successfully.`,
+        category: "SESSION",
+        status: "SUCCESS",
+        entityType: "user_account",
+        entityId: req.auth.userId,
+        ipAddress: auditContext.ipAddress,
+        userAgent: auditContext.userAgent,
+        httpMethod: auditContext.httpMethod,
+        routePath: auditContext.routePath,
+        metadata: {
+            email: req.profile.email,
+        },
+    });
+    res.json({ success: true });
 }));
 const passwordBody = z.object({
     new_password: z
@@ -3399,7 +3555,26 @@ apiRouter.get("/audit-logs", requireAuth, asyncHandler(async (req, res) => {
     if (!isAdmin && !hasPermission) {
         throw new HttpError(403, "Forbidden");
     }
-    const { rows } = await pool.query(`SELECT * FROM audit_logs ORDER BY created_at DESC`);
+    await ensureAuditLogColumns();
+    const { rows } = await pool.query(`SELECT
+         id,
+         user_id,
+         user_name,
+         action,
+         target,
+         details,
+         category,
+         status,
+         entity_type,
+         entity_id,
+         ip_address,
+         user_agent,
+         http_method,
+         route_path,
+         metadata,
+         created_at
+       FROM audit_logs
+       ORDER BY created_at DESC`);
     res.json(rows);
 }));
 async function loadProfileById(id) {

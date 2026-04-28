@@ -1,10 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { services } from '../../services';
+import { useAuth } from '@/contexts/auth-hooks';
 
 export const useProfiles = () => {
+  const { hasPermission } = useAuth();
+
   return useQuery({
     queryKey: ['profiles'],
     queryFn: () => services.profiles.list(),
+    enabled: hasPermission('manage_users'),
     staleTime: 10 * 60 * 1000, // 10 minutes
   });
 };

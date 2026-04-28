@@ -36,7 +36,6 @@ export const useCreateApprovalRequest = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPROVAL_REQUESTS] });
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTIFICATIONS] });
-      toast.success("Request created successfully");
     },
     onError: (error: Error) => {
       toast.error(error.message || "Failed to create request");

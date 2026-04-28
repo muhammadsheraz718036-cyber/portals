@@ -64,6 +64,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    try {
+      if (getStoredToken()) {
+        await api.auth.logout();
+      }
+    } catch {
+      // Logout audit should not block local sign-out.
+    }
     setStoredToken(null);
     setUser(null);
     setProfile(null);

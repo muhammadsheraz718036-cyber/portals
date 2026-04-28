@@ -125,6 +125,10 @@ export const api = {
           skipAuth: true,
         },
       ),
+    logout: () =>
+      request<{ success: boolean }>("/api/auth/logout", {
+        method: "POST",
+      }),
     me: () => request<{ user: AuthUser; profile: Profile }>("/api/auth/me"),
     updatePassword: (body: {
       new_password: string;
@@ -461,10 +465,20 @@ export const api = {
       request<
         {
           id: string;
+          user_id?: string | null;
           user_name: string;
           action: string;
           target: string;
           details: string | null;
+          category: string;
+          status: string;
+          entity_type?: string | null;
+          entity_id?: string | null;
+          ip_address?: string | null;
+          user_agent?: string | null;
+          http_method?: string | null;
+          route_path?: string | null;
+          metadata?: Record<string, unknown>;
           created_at: string;
         }[]
       >("/api/audit-logs"),

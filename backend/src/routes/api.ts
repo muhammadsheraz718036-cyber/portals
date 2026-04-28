@@ -24,6 +24,12 @@ import {
 import path from "path";
 import fs from "fs/promises";
 import { EmailNotificationService } from "../services/EmailNotificationService.js";
+import {
+  attachAuditTrail,
+  ensureAuditLogColumns,
+  getAuditRequestContext,
+  writeAuditLog,
+} from "../services/AuditService.js";
 
 export const apiRouter = Router();
 const uploadsRoot = path.resolve(UPLOADS_DIR);
@@ -805,15 +811,30 @@ async function logAudit(
   target: string,
   details?: string | null,
 ) {
-  try {
-    await pool.query(
-      `INSERT INTO audit_logs (user_id, user_name, action, target, details) VALUES ($1, $2, $3, $4, $5)`,
-      [userId, userName, action, target, details ?? null],
-    );
-  } catch (err) {
-    // Log audit errors to console but don't fail the request
-    console.error("Failed to log audit event:", err);
-  }
+  const upperAction = action.toUpperCase();
+  const category =
+    upperAction.includes("DELETE")
+      ? "DELETE"
+      : upperAction.includes("UPDATE") || upperAction.includes("EDIT")
+        ? "UPDATE"
+        : upperAction.includes("CREATE")
+          ? "CREATE"
+          : upperAction.includes("APPROV") ||
+              upperAction.includes("REJECT") ||
+              upperAction.includes("ASSIGN")
+            ? "WORKFLOW"
+            : target.toLowerCase().includes("user") || target.toLowerCase().includes("role")
+              ? "ADMIN"
+              : "SYSTEM";
+  await writeAuditLog({
+    userId,
+    userName,
+    action,
+    target,
+    details,
+    category,
+    status: "SUCCESS",
+  });
 }
 
 type NotificationClient = { query: typeof pool.query };
@@ -879,6 +900,10 @@ async function getRequestNotificationContext(
   );
   return rows[0] ?? null;
 }
+
+apiRouter.use((req: AuthedRequest, res, next) => {
+  attachAuditTrail(req, res, next);
+});
 
 async function notifyPendingApprovalAssignees(
   client: NotificationClient,
@@ -1395,6 +1420,7 @@ apiRouter.post(
   "/auth/login",
   asyncHandler(async (req, res) => {
     const body = loginBody.parse(req.body);
+    const auditContext = getAuditRequestContext(req);
     const { rows } = await pool.query<{
       id: string;
       password_hash: string;
@@ -1410,6 +1436,23 @@ apiRouter.post(
       [body.email.toLowerCase()],
     );
     if (rows.length === 0) {
+      await writeAuditLog({
+        userName: body.email.toLowerCase(),
+        action: "LOGIN_FAILED",
+        target: "Authentication",
+        details: `Login failed for ${body.email.toLowerCase()}: account not found.`,
+        category: "AUTH",
+        status: "FAILURE",
+        entityType: "user_account",
+        ipAddress: auditContext.ipAddress,
+        userAgent: auditContext.userAgent,
+        httpMethod: auditContext.httpMethod,
+        routePath: auditContext.routePath,
+        metadata: {
+          email: body.email.toLowerCase(),
+          reason: "ACCOUNT_NOT_FOUND",
+        },
+      });
       throw new HttpError(401, "Invalid email or password");
     }
 
@@ -1417,6 +1460,26 @@ apiRouter.post(
 
     // Lock after failed attempts applies to non-admin accounts only; admins are never locked.
     if (user.is_locked && !user.is_admin) {
+      await writeAuditLog({
+        userId: user.id,
+        userName: user.email,
+        action: "LOGIN_BLOCKED",
+        target: "Authentication",
+        details: `Login blocked for ${user.email}: account is locked.`,
+        category: "AUTH",
+        status: "FAILURE",
+        entityType: "user_account",
+        entityId: user.id,
+        ipAddress: auditContext.ipAddress,
+        userAgent: auditContext.userAgent,
+        httpMethod: auditContext.httpMethod,
+        routePath: auditContext.routePath,
+        metadata: {
+          email: user.email,
+          reason: "ACCOUNT_LOCKED",
+          failedLoginAttempts: user.failed_login_attempts,
+        },
+      });
       throw new HttpError(
         423,
         "Account is locked due to too many failed login attempts. Please contact an administrator.",
@@ -1436,6 +1499,27 @@ apiRouter.post(
           [user.id],
         );
       }
+      await writeAuditLog({
+        userId: user.id,
+        userName: user.email,
+        action: "LOGIN_FAILED",
+        target: "Authentication",
+        details: `Login failed for ${user.email}: invalid password.`,
+        category: "AUTH",
+        status: "FAILURE",
+        entityType: "user_account",
+        entityId: user.id,
+        ipAddress: auditContext.ipAddress,
+        userAgent: auditContext.userAgent,
+        httpMethod: auditContext.httpMethod,
+        routePath: auditContext.routePath,
+        metadata: {
+          email: user.email,
+          reason: "INVALID_PASSWORD",
+          failedLoginAttempts: user.failed_login_attempts + (user.is_admin ? 0 : 1),
+          accountLocked: !user.is_admin && user.failed_login_attempts + 1 >= 3,
+        },
+      });
       throw new HttpError(401, "Invalid email or password");
     }
 
@@ -1456,6 +1540,29 @@ apiRouter.post(
     if (!profile) {
       throw new HttpError(401, "Profile missing");
     }
+
+    await writeAuditLog({
+      userId: id,
+      userName: profile.full_name,
+      action: "LOGIN_SUCCESS",
+      target: "Authentication",
+      details: `${profile.full_name} signed in successfully.`,
+      category: "AUTH",
+      status: "SUCCESS",
+      entityType: "user_account",
+      entityId: id,
+      ipAddress: auditContext.ipAddress,
+      userAgent: auditContext.userAgent,
+      httpMethod: auditContext.httpMethod,
+      routePath: auditContext.routePath,
+      metadata: {
+        email: user.email,
+        isAdmin: profile.is_admin,
+        departmentId: profile.department_id,
+        roleId: profile.role_id,
+      },
+    });
+
     res.json({ token, user: { id, email: user.email }, profile });
   }),
 );
@@ -1511,6 +1618,33 @@ apiRouter.get(
     );
     const profile = await loadProfileById(id);
     res.json({ user: { id, email: u[0]?.email }, profile });
+  }),
+);
+
+apiRouter.post(
+  "/auth/logout",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const auditContext = getAuditRequestContext(req);
+    await writeAuditLog({
+      userId: req.auth!.userId,
+      userName: req.profile!.full_name,
+      action: "LOGOUT",
+      target: "Session",
+      details: `${req.profile!.full_name} signed out successfully.`,
+      category: "SESSION",
+      status: "SUCCESS",
+      entityType: "user_account",
+      entityId: req.auth!.userId,
+      ipAddress: auditContext.ipAddress,
+      userAgent: auditContext.userAgent,
+      httpMethod: auditContext.httpMethod,
+      routePath: auditContext.routePath,
+      metadata: {
+        email: req.profile!.email,
+      },
+    });
+    res.json({ success: true });
   }),
 );
 
@@ -5247,8 +5381,27 @@ apiRouter.get(
       throw new HttpError(403, "Forbidden");
     }
 
+    await ensureAuditLogColumns();
     const { rows } = await pool.query(
-      `SELECT * FROM audit_logs ORDER BY created_at DESC`,
+      `SELECT
+         id,
+         user_id,
+         user_name,
+         action,
+         target,
+         details,
+         category,
+         status,
+         entity_type,
+         entity_id,
+         ip_address,
+         user_agent,
+         http_method,
+         route_path,
+         metadata,
+         created_at
+       FROM audit_logs
+       ORDER BY created_at DESC`,
     );
     res.json(rows);
   }),

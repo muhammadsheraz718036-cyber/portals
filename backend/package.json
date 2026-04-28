@@ -14,6 +14,7 @@
     "pm2:save": "node scripts/pm2-cli.mjs save",
     "pm2:status": "node scripts/pm2-cli.mjs status",
     "pm2:logs": "node scripts/pm2-cli.mjs logs approval-central",
+    "pm2:monit": "node scripts/pm2-cli.mjs monit",
     "db:schema": "tsx scripts/apply-schema.ts",
     "db:migrate": "tsx scripts/run-migrations.ts"
   },

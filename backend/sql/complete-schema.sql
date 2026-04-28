@@ -147,8 +147,28 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   action TEXT NOT NULL,
   target TEXT NOT NULL,
   details TEXT,
+  category TEXT NOT NULL DEFAULT 'SYSTEM',
+  status TEXT NOT NULL DEFAULT 'SUCCESS',
+  entity_type TEXT,
+  entity_id TEXT,
+  ip_address TEXT,
+  user_agent TEXT,
+  http_method TEXT,
+  route_path TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE audit_logs
+  ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'SYSTEM',
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'SUCCESS',
+  ADD COLUMN IF NOT EXISTS entity_type TEXT,
+  ADD COLUMN IF NOT EXISTS entity_id TEXT,
+  ADD COLUMN IF NOT EXISTS ip_address TEXT,
+  ADD COLUMN IF NOT EXISTS user_agent TEXT,
+  ADD COLUMN IF NOT EXISTS http_method TEXT,
+  ADD COLUMN IF NOT EXISTS route_path TEXT,
+  ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -386,6 +406,9 @@ CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(sta
 CREATE INDEX IF NOT EXISTS idx_approval_actions_request ON approval_actions(request_id);
 CREATE INDEX IF NOT EXISTS idx_approval_chains_type ON approval_chains(approval_type_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_category_created ON audit_logs(category, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_status_created ON audit_logs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_created ON audit_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_approval_types_department_id ON approval_types(department_id);

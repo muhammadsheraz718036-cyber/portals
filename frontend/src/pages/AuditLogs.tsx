@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Search, Filter, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -20,12 +21,27 @@ import { useAuditLogs } from "@/hooks/services";
 
 type AuditLogRow = {
   id: string;
+  user_id?: string | null;
   user_name: string;
   action: string;
   target: string;
   details: string | null;
+  category: string;
+  status: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  http_method?: string | null;
+  route_path?: string | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
+
+function formatMetadata(metadata: Record<string, unknown> | undefined) {
+  if (!metadata || Object.keys(metadata).length === 0) return "No additional metadata";
+  return JSON.stringify(metadata, null, 2);
+}
 
 export default function AuditLogs() {
   const { isAdmin, hasPermission } = useAuth();
@@ -44,7 +60,10 @@ export default function AuditLogs() {
     if (
       search &&
       !log.user_name.toLowerCase().includes(search.toLowerCase()) &&
+      !log.category.toLowerCase().includes(search.toLowerCase()) &&
+      !log.status.toLowerCase().includes(search.toLowerCase()) &&
       !log.target.toLowerCase().includes(search.toLowerCase()) &&
+      !(log.route_path ?? "").toLowerCase().includes(search.toLowerCase()) &&
       !d.includes(search.toLowerCase())
     ) {
       return false;
@@ -125,6 +144,12 @@ export default function AuditLogs() {
                     Action
                   </th>
                   <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+                    Category
+                  </th>
+                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
+                    Status
+                  </th>
+                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
                     Target
                   </th>
                   <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
@@ -144,6 +169,14 @@ export default function AuditLogs() {
                     </td>
                     <td className="px-4 py-3 font-medium">{log.user_name}</td>
                     <td className="px-4 py-3">{log.action}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant="outline">{log.category}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={log.status === "FAILURE" ? "destructive" : "secondary"}>
+                        {log.status}
+                      </Badge>
+                    </td>
                     <td className="px-4 py-3 text-primary font-medium">
                       {log.target}
                     </td>
@@ -192,6 +225,24 @@ export default function AuditLogs() {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Category
+                </p>
+                <Badge variant="outline">{selectedLog.category}</Badge>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Status
+                </p>
+                <Badge
+                  variant={
+                    selectedLog.status === "FAILURE" ? "destructive" : "secondary"
+                  }
+                >
+                  {selectedLog.status}
+                </Badge>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
                   Target
                 </p>
                 <p className="font-medium text-primary">{selectedLog.target}</p>
@@ -201,6 +252,42 @@ export default function AuditLogs() {
                   Details
                 </p>
                 <p className="font-medium">{selectedLog.details}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Route
+                </p>
+                <p className="font-medium">
+                  {[selectedLog.http_method, selectedLog.route_path].filter(Boolean).join(" ")}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Source
+                </p>
+                <p className="font-medium break-all">
+                  {selectedLog.ip_address ?? "Unknown IP"}
+                </p>
+                <p className="text-xs text-muted-foreground break-all mt-1">
+                  {selectedLog.user_agent ?? "Unknown user agent"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Entity
+                </p>
+                <p className="font-medium">
+                  {[selectedLog.entity_type, selectedLog.entity_id].filter(Boolean).join(": ") ||
+                    "Not specified"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Metadata
+                </p>
+                <pre className="rounded-md border bg-muted/30 p-3 text-xs whitespace-pre-wrap break-all overflow-x-auto">
+                  {formatMetadata(selectedLog.metadata)}
+                </pre>
               </div>
             </div>
           )}

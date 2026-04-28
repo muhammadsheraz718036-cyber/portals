@@ -23,7 +23,6 @@ export const useUploadRequestAttachments = () => {
       queryClient.invalidateQueries({ queryKey: ['requests', requestId, 'attachments'] });
       queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
       queryClient.invalidateQueries({ queryKey: ['approval-request', requestId] });
-      toast.success('Files uploaded successfully');
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to upload files');

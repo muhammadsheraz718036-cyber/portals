@@ -557,9 +557,7 @@ export default function RequestDetail() {
         id: request.id,
         data: { comment: "" },
       });
-      toast.success("Request approved successfully");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to approve request");
+    } catch {
     } finally {
       setActioning(false);
     }
@@ -580,9 +578,7 @@ export default function RequestDetail() {
         data: { comment: trimmedComment },
       });
       setRejectionComment("");
-      toast.success("Request rejected successfully");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to reject request");
+    } catch {
     } finally {
       setActioning(false);
     }
@@ -618,8 +614,7 @@ export default function RequestDetail() {
         assigneeId: selectedWorkAssigneeId,
       });
       setShowWorkAssignmentDialog(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to assign approved work");
+    } catch {
     } finally {
       setActioning(false);
     }
@@ -640,8 +635,7 @@ export default function RequestDetail() {
       });
       setWorkCompletionComment("");
       setShowWorkStatusDialog(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update work status");
+    } catch {
     } finally {
       setActioning(false);
     }
@@ -670,13 +664,13 @@ export default function RequestDetail() {
       setShowUpdateForm(false);
       setUpdatingFormData({});
       setUpdateComment("");
-      toast.success(
-        canEditAsApprover && !isAdmin
-          ? "Request updated. The edit has been recorded in the timeline."
-          : "Request updated successfully.",
-      );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update request");
+      if (
+        e instanceof Error &&
+        e.message === "Only an admin or the assigned approver can update this request"
+      ) {
+        toast.error(e.message);
+      }
     } finally {
       setActioning(false);
     }
@@ -694,8 +688,7 @@ export default function RequestDetail() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       toast.success(`Downloaded ${attachment.original_filename}`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to download file");
+    } catch {
     }
   };
 
@@ -710,9 +703,7 @@ export default function RequestDetail() {
 
     try {
       await deleteMutation.mutateAsync(attachment.id);
-      toast.success(`Deleted ${attachment.original_filename}`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete file");
+    } catch {
     }
   };
 
@@ -753,8 +744,7 @@ export default function RequestDetail() {
     try {
       await deleteRequestMutation.mutateAsync(request.id);
       navigate("/approvals");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete request");
+    } catch {
     } finally {
       setActioning(false);
     }
@@ -1158,7 +1148,7 @@ export default function RequestDetail() {
                 marginBottom: "0.25rem",
               }}
             >
-              Approval Signatures
+              Approved By
             </p>
             <div className="grid grid-cols-3 gap-x-4 gap-y-1">
               {approvedSignatureActions.map((action) => {

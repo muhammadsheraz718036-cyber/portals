@@ -220,8 +220,7 @@ export default function NewRequest() {
       }
 
       navigate("/approvals");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to submit");
+    } catch {
     }
   };
 
@@ -313,8 +312,7 @@ export default function NewRequest() {
                     <SelectContent>
                       {types.map((type) => (
                         <SelectItem key={type.id} value={type.id}>
-                          {type.name}{" "}
-                          {type.description ? ` - ${type.description}` : ""}
+                          {type.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
