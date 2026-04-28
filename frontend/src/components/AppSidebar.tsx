@@ -4,26 +4,20 @@ import {
   BriefcaseBusiness,
   Settings,
   ScrollText,
-  LogOut,
-  User,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/auth-hooks";
 import { useCompany } from "@/contexts/company-hooks";
-import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
-  SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarFooter,
 } from "@/components/ui/sidebar";
 import { useSidebar } from "@/components/ui/sidebar-hooks";
 
@@ -31,7 +25,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
-  const { profile, isAdmin, hasPermission, signOut } = useAuth();
+  const { isAdmin, hasPermission } = useAuth();
   const { settings } = useCompany();
 
   const companyName = settings?.company_name || "ApprovalHub";
@@ -73,21 +67,7 @@ export function AppSidebar() {
       icon: ScrollText,
       show: hasAuditAccess,
     },
-    {
-      title: "Profile",
-      url: "/profile",
-      icon: User,
-      show: true,
-    },
   ].filter((i) => i.show);
-
-  const initials =
-    profile?.full_name
-      ?.split(" ")
-      .map((n) => n[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2) || "??";
 
   return (
     <Sidebar collapsible="icon" className="border-r-0">
@@ -173,34 +153,6 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-
-      <SidebarFooter className="bg-sidebar border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded bg-sidebar-accent flex items-center justify-center text-xs font-semibold text-sidebar-foreground">
-            {initials}
-          </div>
-          {!collapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">
-                {profile?.full_name || "User"}
-              </p>
-              <p className="text-[11px] text-sidebar-muted truncate">
-                {profile?.email}
-              </p>
-            </div>
-          )}
-          {!collapsed && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={signOut}
-              className="text-sidebar-muted hover:text-black p-1"
-            >
-              <LogOut className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      </SidebarFooter>
     </Sidebar>
   );
 }
