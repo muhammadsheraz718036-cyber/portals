@@ -169,11 +169,16 @@ export default function AuditLogs() {
                     </td>
                     <td className="px-4 py-3 font-medium">{log.user_name}</td>
                     <td className="px-4 py-3">{log.action}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline">{log.category}</Badge>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <Badge variant="outline" className="whitespace-nowrap">
+                        {log.category}
+                      </Badge>
                     </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={log.status === "FAILURE" ? "destructive" : "secondary"}>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <Badge
+                        variant={log.status === "FAILURE" ? "destructive" : "secondary"}
+                        className="whitespace-nowrap"
+                      >
                         {log.status}
                       </Badge>
                     </td>
@@ -227,7 +232,9 @@ export default function AuditLogs() {
                 <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
                   Category
                 </p>
-                <Badge variant="outline">{selectedLog.category}</Badge>
+                <Badge variant="outline" className="whitespace-nowrap">
+                  {selectedLog.category}
+                </Badge>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
@@ -237,6 +244,7 @@ export default function AuditLogs() {
                   variant={
                     selectedLog.status === "FAILURE" ? "destructive" : "secondary"
                   }
+                  className="whitespace-nowrap"
                 >
                   {selectedLog.status}
                 </Badge>

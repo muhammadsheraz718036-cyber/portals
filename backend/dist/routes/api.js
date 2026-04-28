@@ -183,29 +183,6 @@ async function resolveScopeDepartmentId(client, step, request) {
     }
     return null;
 }
-async function resolveDepartmentManagerApprover(client, departmentId, initiatorId) {
-    const { rows } = await client.query(`SELECT p.id
-       FROM department_managers dm
-       JOIN profiles p ON p.id = dm.user_id
-      WHERE dm.department_id = $1
-        AND dm.is_active = true
-        AND p.is_active = true
-        AND p.id <> $2
-      ORDER BY dm.assigned_at ASC, p.created_at ASC
-      LIMIT 1`, [departmentId, initiatorId]);
-    if (rows.length > 0) {
-        return rows[0].id;
-    }
-    const { rows: legacyRows } = await client.query(`SELECT p.id
-       FROM departments d
-       JOIN profiles p ON lower(trim(p.full_name)) = lower(trim(d.head_name))
-      WHERE d.id = $1
-        AND p.is_active = true
-        AND p.id <> $2
-      ORDER BY p.created_at ASC
-      LIMIT 1`, [departmentId, initiatorId]);
-    return legacyRows[0]?.id ?? null;
-}
 async function resolveApprover(client, step, request) {
     if (step.scope_type === "expression" && step.scope_value === "initiator_manager") {
         const { rows } = await client.query(`SELECT p.id
@@ -239,17 +216,6 @@ async function resolveApprover(client, step, request) {
     if ((step.scope_type === "initiator_department" || step.scope_type === "fixed_department") &&
         !scopedDepartmentId) {
         throw new HttpError(400, `Unable to resolve department scope for step "${step.name}"`);
-    }
-    const isDepartmentManagerRole = step.role.trim().toLowerCase() === "department manager" &&
-        (step.scope_type === "initiator_department" ||
-            step.scope_type === "fixed_department" ||
-            step.scope_type === "expression");
-    if (isDepartmentManagerRole && scopedDepartmentId) {
-        const managerId = await resolveDepartmentManagerApprover(client, scopedDepartmentId, request.initiatorId);
-        if (!managerId) {
-            throw new HttpError(400, `No department manager is assigned for department ${scopedDepartmentId}. Configure one in Department Managers before submitting this request.`);
-        }
-        return managerId;
     }
     const params = [step.role, request.initiatorId];
     let departmentClause = "";
