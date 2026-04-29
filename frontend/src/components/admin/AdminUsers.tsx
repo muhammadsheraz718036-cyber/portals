@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/PasswordInput";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -78,6 +79,7 @@ export function AdminUsers() {
   const [isActive, setIsActive] = useState(true);
   const [changePassword, setChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const [userToDelete, setUserToDelete] = useState<Profile | null>(null);
 
   const { data: users = [], isLoading: loading } = useProfiles();
   const { data: departments = [] } = useDepartments();
@@ -275,13 +277,12 @@ export function AdminUsers() {
     }
   };
 
-  const handleDelete = async (userId: string) => {
-    if (!confirm("Are you sure you want to delete this user?")) {
-      return;
-    }
+  const confirmDelete = async () => {
+    if (!userToDelete) return;
     try {
-      await deleteUserMutation.mutateAsync(userId);
+      await deleteUserMutation.mutateAsync(userToDelete.id);
       toast.success("User deleted successfully");
+      setUserToDelete(null);
     } catch (err: unknown) {
       toast.error(
         err instanceof Error ? err.message : "Failed to delete user",
@@ -673,7 +674,7 @@ export function AdminUsers() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleDelete(user.id)}
+                      onClick={() => setUserToDelete(user)}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -689,6 +690,21 @@ export function AdminUsers() {
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={!!userToDelete}
+        title="Delete user?"
+        description={
+          userToDelete
+            ? `This will permanently delete ${userToDelete.full_name}. This action cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete User"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setUserToDelete(null);
+        }}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

@@ -86,6 +86,38 @@ export async function verifyDatabaseReady() {
       ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID
   `);
     await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_original_filename TEXT
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_stored_filename TEXT
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_file_path TEXT
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_file_size_bytes BIGINT
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_mime_type TEXT
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_uploaded_by UUID REFERENCES users(id)
+  `);
+    await pool.query(`
+    ALTER TABLE approval_type_attachments
+      ADD COLUMN IF NOT EXISTS template_uploaded_at TIMESTAMPTZ
+  `);
+    await pool.query(`
     ALTER TABLE approval_chains
       ADD COLUMN IF NOT EXISTS default_work_assignee_id UUID
   `);

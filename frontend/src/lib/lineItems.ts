@@ -1,4 +1,5 @@
 import type { ApprovalFormField } from "@/lib/constants";
+import { emptyValueForField } from "@/lib/formSchema";
 
 export interface LineItem {
   id: string;
@@ -31,7 +32,7 @@ export function buildSingleEntryItems(
     repeatableFields
       .filter((field) => (field.group || "General") === group)
       .forEach((field) => {
-        nextItem[field.name] = existing?.[field.name] ?? "";
+        nextItem[field.name] = existing?.[field.name] ?? emptyValueForField(field);
       });
 
     return nextItem;

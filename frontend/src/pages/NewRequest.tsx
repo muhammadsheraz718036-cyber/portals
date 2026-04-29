@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Send, Loader2 } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Download, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -31,13 +31,21 @@ import {
 } from "@/lib/lineItems";
 import { RichTextEditor } from "@/components/RichTextEditor";
 import { FileUpload } from "@/components/FileUpload";
+import { FilePreviewDialog } from "@/components/FilePreviewDialog";
+import { services } from "@/services";
 import type { ApprovalFormField } from "@/lib/constants";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { formatExistingActionLabel, getScopeLabel } from "@/lib/workflowLabels";
+import { formatFormValue, isFieldRequired, isFieldVisible } from "@/lib/formSchema";
 
 function getGroupRenderOrder(fields: ApprovalFormField[]) {
   return Array.from(new Set(fields.map((field) => field.group || "General")));
 }
+
+type PreviewFile = {
+  fileName: string;
+  blob: Blob;
+};
 
 export default function NewRequest() {
   const navigate = useNavigate();
@@ -49,6 +57,7 @@ export default function NewRequest() {
   const [items, setItems] = useState<LineItem[]>([]);
   const [preComments, setPreComments] = useState<string>("");
   const [postComments, setPostComments] = useState<string>("");
+  const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
   const [attachmentFiles, setAttachmentFiles] = useState<
     Record<string, File[]>
   >({});
@@ -124,6 +133,49 @@ export default function NewRequest() {
 
   const companyName = settings?.company_name || "COMPANY NAME";
 
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadTemplate = async (
+    attachmentId: string,
+    filename: string,
+  ) => {
+    try {
+      const blob = await services.approvalTypes.downloadTemplateFile(attachmentId);
+      downloadBlob(blob, filename);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to download template",
+      );
+    }
+  };
+
+  const handlePreviewTemplate = async (
+    attachmentId: string,
+    filename: string,
+  ) => {
+    try {
+      const blob = await services.approvalTypes.previewTemplateFile(attachmentId);
+      setPreviewFile({ fileName: filename, blob });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to load preview",
+      );
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedType || !chain) {
@@ -150,13 +202,21 @@ export default function NewRequest() {
     if (repeatableFields.some((f) => f.required)) {
       for (const item of items) {
         // Get fields applicable to this item's group
+        const itemGroup = String(item.__group || "General");
+        const formDataForConditions = { ...formValues, items };
         const itemFields = repeatableFields.filter(
-          (field) => (field.group || "General") === (item.__group || "General"),
+          (field) =>
+            (field.group || "General") === itemGroup &&
+            isFieldVisible(field, formDataForConditions, itemGroup),
         );
         const missingItemFields = itemFields.filter(
-          (field) =>
-            field.required &&
-            (!item[field.name] || String(item[field.name]).trim() === ""),
+          (field) => {
+            if (!isFieldRequired(field, formDataForConditions, itemGroup)) return false;
+            const value = item[field.name];
+            if (field.type === "checkbox") return value !== true && value !== "true";
+            if (field.type === "multiselect") return !Array.isArray(value) || value.length === 0;
+            return !value || String(value).trim() === "";
+          },
         );
         if (missingItemFields.length > 0) {
           toast.error(
@@ -220,7 +280,10 @@ export default function NewRequest() {
       }
 
       navigate("/approvals");
-    } catch {
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to submit request",
+      );
     }
   };
 
@@ -403,26 +466,85 @@ export default function NewRequest() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {attachmentConfigs.map((config) => (
-                      <FileUpload
-                        key={config.field_name}
-                        fieldName={config.field_name}
-                        label={config.label}
-                        required={config.required}
-                        maxFiles={config.max_files}
-                        maxSizeMB={config.max_file_size_mb}
-                        allowedExtensions={config.allowed_extensions}
-                        value={attachmentFiles[config.field_name] || []}
-                        onChange={(files) =>
-                          setAttachmentFiles((prev) => ({
-                            ...prev,
-                            [config.field_name]: files,
-                          }))
-                        }
-                      />
+                      <div key={config.field_name} className="space-y-3">
+                        {config.template_original_filename && (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 p-3">
+                            <div>
+                              <p className="text-sm font-medium">
+                                Template: {config.template_original_filename}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Download this file, complete it if needed, then upload it below.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() =>
+                                  handlePreviewTemplate(
+                                    config.id,
+                                    config.template_original_filename!,
+                                  )
+                                }
+                              >
+                                <Eye className="h-4 w-4" />
+                                Preview
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() =>
+                                  handleDownloadTemplate(
+                                    config.id,
+                                    config.template_original_filename!,
+                                  )
+                                }
+                              >
+                                <Download className="h-4 w-4" />
+                                Download
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        <FileUpload
+                          fieldName={config.field_name}
+                          label={config.label}
+                          required={config.required}
+                          maxFiles={config.max_files}
+                          maxSizeMB={config.max_file_size_mb}
+                          allowedExtensions={config.allowed_extensions}
+                          value={attachmentFiles[config.field_name] || []}
+                          onChange={(files) =>
+                            setAttachmentFiles((prev) => ({
+                              ...prev,
+                              [config.field_name]: files,
+                            }))
+                          }
+                        />
+                      </div>
                     ))}
                   </CardContent>
                 </Card>
               )}
+
+              <FilePreviewDialog
+                open={!!previewFile}
+                fileName={previewFile?.fileName ?? ""}
+                blob={previewFile?.blob ?? null}
+                onOpenChange={(open) => {
+                  if (!open) setPreviewFile(null);
+                }}
+                onDownload={
+                  previewFile
+                    ? () => downloadBlob(previewFile.blob, previewFile.fileName)
+                    : undefined
+                }
+              />
 
             {/* Post-Comments (Closing Remarks) */}
               {repeatableFields.length > 0 && (
@@ -535,7 +657,10 @@ export default function NewRequest() {
                           <div className="space-y-4">
                             {repeatableGroupOrder.map((group) => {
                               const groupFields = repeatableFields.filter(
-                                (f) => (f.group || "General") === group,
+                                (f) =>
+                                  (f.group || "General") === group &&
+                                  !f.print_hidden &&
+                                  isFieldVisible(f, { ...formValues, items }, group),
                               );
                               const groupItems = items.filter(
                                 (item) =>
@@ -565,7 +690,7 @@ export default function NewRequest() {
                                                 key={`${group}-${field.name}-header`}
                                                 className="border text-xs border-foreground bg-muted font-semibold text-center"
                                               >
-                                                {field.label || field.name}
+                                                {field.print_label || field.label || field.name}
                                               </th>
                                             ))}
                                           </tr>
@@ -575,20 +700,12 @@ export default function NewRequest() {
                                             (item, idx: number) => (
                                               <tr key={idx}>
                                                 {groupFields.map((field) => {
-                                                  const val = item[field.name];
-                                                  let displayValue = val ?? "—";
-
-                                              if (field.type === "checkbox") {
-                                                displayValue =
-                                                  val === "true" ? "Yes" : "—";
-                                              }
-
                                               return (
                                                 <td
                                                   key={`${idx}-${field.name}`}
                                                   className="border border-foreground p-2 text-center"
                                                 >
-                                                  {displayValue}
+                                                  {formatFormValue(field, item[field.name])}
                                                 </td>
                                               );
                                             })}

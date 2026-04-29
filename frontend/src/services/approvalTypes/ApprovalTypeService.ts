@@ -108,4 +108,83 @@ export class ApprovalTypeService extends BaseService {
       ),
     );
   }
+
+  async uploadTemplateFile(
+    approvalTypeId: string,
+    attachmentId: string,
+    file: File,
+  ): Promise<ApprovalTypeAttachment> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    return this.handleRequest(() =>
+      fetch(
+        `/api/approval-types/${approvalTypeId}/attachments/${attachmentId}/template`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("ac_token")}`,
+          },
+          body: formData,
+        },
+      ).then(async (res) => {
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          throw new Error(data?.error || data?.message || "Template upload failed");
+        }
+        return data as ApprovalTypeAttachment;
+      }),
+    );
+  }
+
+  async deleteTemplateFile(
+    approvalTypeId: string,
+    attachmentId: string,
+  ): Promise<void> {
+    return this.handleRequest(() =>
+      request(
+        `/api/approval-types/${approvalTypeId}/attachments/${attachmentId}/template`,
+        { method: "DELETE" },
+      ),
+    );
+  }
+
+  async downloadTemplateFile(attachmentId: string): Promise<Blob> {
+    return this.handleRequest(() =>
+      fetch(`/api/approval-type-attachments/${attachmentId}/template/download`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("ac_token")}`,
+        },
+      }).then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          const data = text ? JSON.parse(text) : null;
+          throw new Error(data?.error || data?.message || "Template download failed");
+        }
+        return res.blob();
+      }),
+    );
+  }
+
+  async previewTemplateFile(attachmentId: string): Promise<Blob> {
+    return this.handleRequest(() =>
+      fetch(`/api/approval-type-attachments/${attachmentId}/template/preview`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("ac_token")}`,
+        },
+      }).then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          const data = text ? JSON.parse(text) : null;
+          throw new Error(data?.error || data?.message || "Template preview failed");
+        }
+        return res.blob();
+      }),
+    );
+  }
+
+  getTemplateDownloadUrl(attachmentId: string): string {
+    return `/api/approval-type-attachments/${attachmentId}/template/download`;
+  }
 }

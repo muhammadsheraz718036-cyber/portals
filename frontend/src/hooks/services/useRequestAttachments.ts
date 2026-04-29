@@ -39,6 +39,15 @@ export const useDownloadAttachment = () => {
   });
 };
 
+export const usePreviewAttachment = () => {
+  return useMutation({
+    mutationFn: (attachmentId: string) => services.requestAttachments.previewFile(attachmentId),
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to preview file');
+    },
+  });
+};
+
 export const useDeleteRequestAttachment = () => {
   const queryClient = useQueryClient();
   

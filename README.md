@@ -45,8 +45,9 @@ Development:
 Production:
 
 - backend serves both the frontend and API
-- the app is exposed from one Node process on the port in `backend/.env`
-- current production-style setup in this repo uses port `8080`
+- the app is exposed from one Node process on `PORT`
+- hosted platforms can inject `PORT`; VPS/PM2 deployments can set `PORT=8080`
+- the startup log prints the URL to open
 
 ## Install
 
@@ -73,6 +74,7 @@ DATABASE_URL=postgresql://postgres:password@localhost:5432/approval_center
 JWT_SECRET=replace-with-a-long-random-string
 PORT=3001
 NODE_ENV=development
+HOST=0.0.0.0
 APP_BASE_URL=http://localhost:8080
 CORS_ORIGIN=http://localhost:8080
 TRUST_PROXY=false
@@ -83,10 +85,11 @@ Example production config:
 ```env
 DATABASE_URL=postgresql://postgres:password@db-host:5432/approval_center
 JWT_SECRET=replace-with-a-strong-secret-32-characters-or-more
-PORT=8080
 NODE_ENV=production
-APP_BASE_URL=http://10.1.20.194:8080
-CORS_ORIGIN=http://10.1.20.194:8080
+HOST=0.0.0.0
+PORT=8080
+APP_BASE_URL=https://approvals.yourcompany.com
+CORS_ORIGIN=https://approvals.yourcompany.com
 TRUST_PROXY=true
 UPLOAD_DIR=storage/uploads
 PG_SSL=false
@@ -106,7 +109,9 @@ Important:
 
 - `JWT_SECRET` must be strong in production.
 - If your database password contains special characters like `@`, `:`, or `/`, URL-encode the password in `DATABASE_URL`.
-- `APP_BASE_URL` must match the real browser URL used by users.
+- `APP_BASE_URL` should match the real browser URL used by users. The app can auto-detect common platform URL variables such as `PUBLIC_URL`, `RENDER_EXTERNAL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `VERCEL_URL`, `FLY_APP_NAME`, and GitHub Codespaces forwarding variables.
+- `CORS_ORIGIN` can be left empty for same-origin deployments. Set it only when another frontend origin must call this backend.
+- `HOST=0.0.0.0` is recommended for deployed environments.
 - `TRUST_PROXY=true` is recommended when Node is behind a reverse proxy.
 
 ### Frontend
@@ -196,13 +201,15 @@ npm run build
 npm start
 ```
 
-Open the app on the port configured in `backend/.env`.
+Open the URL printed by the startup log.
 
 Example:
 
 ```text
-http://10.1.20.194:8080
+Open app: https://approvals.yourcompany.com
 ```
+
+If the log shows a localhost URL on a deployed server, set `APP_BASE_URL` to your real public URL and restart the app.
 
 ## Run in Production With PM2
 
@@ -219,7 +226,7 @@ Useful PM2 commands:
 ```bash
 npm run pm2:status
 npm run pm2:logs
-node scripts/pm2-cli.mjs restart approval-central --update-env
+npm run pm2:restart
 node scripts/pm2-cli.mjs stop approval-central
 ```
 
@@ -227,7 +234,26 @@ Notes:
 
 - PM2 is installed locally in `backend`
 - PM2 uses `backend/.pm2/` as its home directory in this project
-- if you change `backend/.env`, restart with `--update-env`
+- if you change `backend/.env`, run `npm run pm2:restart`
+
+## Public URL Behavior
+
+The backend serves the React app and API from the same origin. At startup it chooses the public URL in this order:
+
+1. `APP_BASE_URL`
+2. `PUBLIC_URL`
+3. common platform variables such as `RENDER_EXTERNAL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `VERCEL_URL`, `FLY_APP_NAME`, and GitHub Codespaces forwarding variables
+4. `http://localhost:<PORT>` as a local fallback
+
+For a VPS, private server, or custom domain, set:
+
+```env
+APP_BASE_URL=https://your-domain.example
+CORS_ORIGIN=https://your-domain.example
+TRUST_PROXY=true
+```
+
+For platforms that provide a public URL automatically, you can usually leave `APP_BASE_URL` empty and read the printed `Open app:` line.
 
 ## Production Topology
 
@@ -354,7 +380,7 @@ Examples:
 
 ```text
 http://localhost:3001/health
-http://10.1.20.194:8080/health
+https://approvals.yourcompany.com/health
 ```
 
 ## Deployment Checklist
@@ -364,7 +390,7 @@ http://10.1.20.194:8080/health
 - PostgreSQL is reachable from the app server
 - `npm run build` completed successfully
 - `npm run db:schema` or `npm run db:migrate` completed successfully
-- the public URL matches `APP_BASE_URL`
+- the startup log prints the public URL you expect, or `APP_BASE_URL` is set to it
 - if using a reverse proxy, it forwards traffic to the correct Node port
 - TLS/HTTPS is terminated at the proxy or load balancer if needed
 - `backend/storage/uploads` is included in backup strategy
@@ -375,10 +401,12 @@ http://10.1.20.194:8080/health
 ### App does not open on the expected URL
 
 - make sure `PORT` in `backend/.env` matches the URL you are opening
+- check the startup log for `Open app: ...`
+- if a deployed server prints a localhost URL, set `APP_BASE_URL` to the real public URL
 - if using PM2 after changing `.env`, run:
 
 ```bash
-node scripts/pm2-cli.mjs restart approval-central --update-env
+npm run pm2:restart
 ```
 
 ### Database connection fails

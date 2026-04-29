@@ -220,6 +220,7 @@ export const api = {
       pre_salutation?: string | null;
       post_salutation?: string | null;
       allow_attachments?: boolean;
+      attachment_fields?: unknown[];
       department_id?: string | null;
     }) =>
       request("/api/approval-types", {
@@ -236,6 +237,7 @@ export const api = {
         pre_salutation?: string | null;
         post_salutation?: string | null;
         allow_attachments?: boolean;
+        attachment_fields?: unknown[];
         department_id?: string | null;
       },
     ) =>

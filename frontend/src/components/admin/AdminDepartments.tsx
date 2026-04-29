@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useDepartments, useCreateDepartment, useUpdateDepartment, useDeleteDepartment } from "@/hooks/services";
 import { toast } from "sonner";
 
@@ -16,6 +17,7 @@ interface Department {
 export function AdminDepartments() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDept, setEditDept] = useState<Department | null>(null);
+  const [departmentToDelete, setDepartmentToDelete] = useState<Department | null>(null);
   const [name, setName] = useState("");
 
   const { data: departments = [], isLoading: loading } = useDepartments();
@@ -48,11 +50,12 @@ export function AdminDepartments() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this department?")) return;
+  const confirmDelete = async () => {
+    if (!departmentToDelete) return;
     try {
-      await deleteMutation.mutateAsync(id);
+      await deleteMutation.mutateAsync(departmentToDelete.id);
       toast.success("Deleted");
+      setDepartmentToDelete(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }
@@ -88,7 +91,7 @@ export function AdminDepartments() {
                   </div>
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(dept)}><Edit className="h-3.5 w-3.5" /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(dept.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => setDepartmentToDelete(dept)} className="text-destructive hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></Button>
                   </div>
                 </div>
               </CardContent>
@@ -97,6 +100,21 @@ export function AdminDepartments() {
           {departments.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No departments yet.</p>}
         </div>
       )}
+      <ConfirmDialog
+        open={!!departmentToDelete}
+        title="Delete department?"
+        description={
+          departmentToDelete
+            ? `This will permanently delete ${departmentToDelete.name}. This action cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete Department"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setDepartmentToDelete(null);
+        }}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

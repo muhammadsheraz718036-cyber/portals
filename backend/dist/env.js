@@ -17,10 +17,12 @@ for (const envPath of [
 const envSchema = z
     .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
+    HOST: z.string().trim().default("0.0.0.0"),
     PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     DATABASE_URL: z.string().trim().min(1, "DATABASE_URL is required"),
     JWT_SECRET: z.string().trim().min(1, "JWT_SECRET is required"),
     APP_BASE_URL: z.string().trim().optional(),
+    PUBLIC_URL: z.string().trim().optional(),
     CORS_ORIGIN: z.string().trim().optional(),
     TRUST_PROXY: z
         .union([z.literal("true"), z.literal("false")])
@@ -56,13 +58,6 @@ const envSchema = z
             message: "JWT_SECRET must be at least 32 characters in production.",
         });
     }
-    if (raw.NODE_ENV === "production" && !raw.APP_BASE_URL?.trim()) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["APP_BASE_URL"],
-            message: "APP_BASE_URL is required in production.",
-        });
-    }
     const smtpConfigured = Boolean(raw.SMTP_HOST || raw.SMTP_PORT || raw.SMTP_USER || raw.SMTP_PASS || raw.SMTP_FROM);
     if (smtpConfigured) {
         for (const field of ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM"]) {
@@ -85,11 +80,65 @@ if (!parsedEnv.success) {
     }
     process.exit(1);
 }
-const appBaseUrl = parsedEnv.data.APP_BASE_URL?.replace(/\/+$/, "");
-const corsOrigins = (parsedEnv.data.CORS_ORIGIN?.trim() || appBaseUrl || "")
+function normalizeBaseUrl(url) {
+    const trimmed = url?.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    const withProtocol = /^https?:\/\//i.test(trimmed)
+        ? trimmed
+        : `https://${trimmed}`;
+    return withProtocol.replace(/\/+$/, "");
+}
+function detectPlatformBaseUrl(port) {
+    const env = process.env;
+    const directUrl = env.PUBLIC_URL ||
+        env.RENDER_EXTERNAL_URL ||
+        env.RAILWAY_STATIC_URL ||
+        env.CYCLIC_URL ||
+        env.REPLIT_DEV_DOMAIN;
+    if (directUrl) {
+        return normalizeBaseUrl(directUrl);
+    }
+    if (env.RAILWAY_PUBLIC_DOMAIN) {
+        return normalizeBaseUrl(env.RAILWAY_PUBLIC_DOMAIN);
+    }
+    if (env.VERCEL_URL) {
+        return normalizeBaseUrl(env.VERCEL_URL);
+    }
+    if (env.FLY_APP_NAME) {
+        return normalizeBaseUrl(`${env.FLY_APP_NAME}.fly.dev`);
+    }
+    if (env.CODESPACE_NAME && env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN) {
+        return normalizeBaseUrl(`${env.CODESPACE_NAME}-${port}.${env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}`);
+    }
+    return undefined;
+}
+function isLocalBaseUrl(url) {
+    if (!url) {
+        return false;
+    }
+    try {
+        const parsed = new URL(url);
+        return ["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname);
+    }
+    catch {
+        return false;
+    }
+}
+const localBaseUrl = `http://localhost:${parsedEnv.data.PORT}`;
+const detectedBaseUrl = detectPlatformBaseUrl(parsedEnv.data.PORT);
+const configuredBaseUrl = normalizeBaseUrl(parsedEnv.data.APP_BASE_URL);
+const configuredPublicUrl = normalizeBaseUrl(parsedEnv.data.PUBLIC_URL);
+const appBaseUrl = configuredPublicUrl ||
+    (isLocalBaseUrl(configuredBaseUrl) && detectedBaseUrl
+        ? detectedBaseUrl
+        : configuredBaseUrl) ||
+    detectedBaseUrl;
+const corsOrigins = (parsedEnv.data.CORS_ORIGIN?.trim() || appBaseUrl || localBaseUrl)
     .split(",")
-    .map((origin) => origin.trim().replace(/\/+$/, ""))
-    .filter(Boolean);
+    .map((origin) => normalizeBaseUrl(origin))
+    .filter((origin) => Boolean(origin));
 const uploadDir = parsedEnv.data.UPLOAD_DIR
     ? isAbsolute(parsedEnv.data.UPLOAD_DIR)
         ? parsedEnv.data.UPLOAD_DIR
@@ -98,6 +147,9 @@ const uploadDir = parsedEnv.data.UPLOAD_DIR
 export const env = {
     ...parsedEnv.data,
     APP_BASE_URL: appBaseUrl,
+    DETECTED_BASE_URL: detectedBaseUrl,
+    LOCAL_BASE_URL: localBaseUrl,
+    DISPLAY_BASE_URL: appBaseUrl || localBaseUrl,
     CORS_ORIGINS: corsOrigins,
     EMAIL_NOTIFICATIONS_ENABLED: parsedEnv.data.EMAIL_NOTIFICATIONS_ENABLED === "true",
     SMTP_SECURE: parsedEnv.data.SMTP_SECURE === undefined

@@ -88,6 +88,7 @@ export interface CreateApprovalTypeRequest {
   pre_salutation?: string | null;
   post_salutation?: string | null;
   allow_attachments?: boolean;
+  attachment_fields?: CreateApprovalTypeAttachmentRequest[];
   department_id?: string | null;
 }
 
@@ -99,6 +100,7 @@ export interface UpdateApprovalTypeRequest {
   pre_salutation?: string | null;
   post_salutation?: string | null;
   allow_attachments?: boolean;
+  attachment_fields?: Array<CreateApprovalTypeAttachmentRequest & { id?: string }>;
   department_id?: string | null;
 }
 
@@ -111,6 +113,11 @@ export interface ApprovalTypeAttachment {
   max_file_size_mb: number;
   allowed_extensions: string[];
   max_files: number;
+  template_original_filename?: string | null;
+  template_stored_filename?: string | null;
+  template_file_size_bytes?: number | null;
+  template_mime_type?: string | null;
+  template_uploaded_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }

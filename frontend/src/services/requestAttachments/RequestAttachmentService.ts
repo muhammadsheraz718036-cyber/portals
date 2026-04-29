@@ -52,6 +52,23 @@ export class RequestAttachmentService extends BaseService {
     );
   }
 
+  async previewFile(attachmentId: string): Promise<Blob> {
+    return this.handleRequest(() =>
+      fetch(`/api/attachments/${attachmentId}/preview`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('ac_token')}`,
+        }
+      }).then(res => {
+        if (!res.ok) {
+          return res.text().then(text => {
+            throw new Error(text || 'Preview failed');
+          });
+        }
+        return res.blob();
+      })
+    );
+  }
+
   async deleteAttachment(attachmentId: string): Promise<void> {
     return this.handleRequest(() => 
       request(`/api/attachments/${attachmentId}`, {

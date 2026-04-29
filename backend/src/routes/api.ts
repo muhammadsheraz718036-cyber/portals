@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { HttpError } from "../httpError.js";
@@ -39,11 +39,552 @@ function sanitizeDownloadFilename(filename: string): string {
   return filename.replace(/[\r\n"]/g, "_");
 }
 
+async function sendPreviewFile(
+  filePath: string,
+  originalFilename: string,
+  mimeType: string | null | undefined,
+  res: Response,
+): Promise<void> {
+  const ext = path.extname(originalFilename).toLowerCase();
+  if (ext === ".doc") {
+    const WordExtractor = (await import("word-extractor")).default;
+    const extractor = new WordExtractor();
+    const document = await extractor.extract(filePath);
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(document.getBody());
+    return;
+  }
+
+  const safeFilename = sanitizeDownloadFilename(originalFilename);
+  res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
+  res.setHeader("Content-Type", mimeType || "application/octet-stream");
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      console.error("Error sending preview file:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to preview file" });
+      }
+    }
+  });
+}
+
+function filenamePart(value: string | null | undefined, fallback: string): string {
+  const cleaned = (value || fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+function timestampForFilename(date = new Date()): string {
+  return date.toISOString().replace(/[-:.]/g, "").replace(/Z$/, "Z");
+}
+
+async function renameUploadedFile(
+  file: Express.Multer.File,
+  desiredBaseName: string,
+): Promise<Express.Multer.File> {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const storedFilename = `${filenamePart(desiredBaseName, "attachment")}${ext}`;
+  const nextPath = path.join(UPLOADS_DIR, storedFilename);
+  await fs.rename(file.path, nextPath);
+  file.filename = storedFilename;
+  file.path = nextPath;
+  return file;
+}
+
 function isFileInsideUploads(filePath: string): boolean {
   const resolved = path.resolve(filePath);
   return (
     resolved === uploadsRoot || resolved.startsWith(`${uploadsRoot}${path.sep}`)
   );
+}
+
+const allowedApprovalFieldTypes = [
+  "text",
+  "number",
+  "email",
+  "textarea",
+  "date",
+  "time",
+  "datetime",
+  "phone",
+  "url",
+  "currency",
+  "select",
+  "multiselect",
+  "radio",
+  "checkbox",
+  "yes_no",
+] as const;
+
+const allowedAttachmentExtensions = [
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "jpg",
+  "jpeg",
+  "png",
+] as const;
+
+const fieldConditionSchema = z.object({
+  field: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_]+$/),
+  operator: z.enum([
+    "equals",
+    "not_equals",
+    "contains",
+    "greater_than",
+    "less_than",
+    "empty",
+    "not_empty",
+  ]),
+  value: z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(z.string()),
+    z.null(),
+  ]).optional(),
+});
+
+const approvalTypeFieldSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_]+$/),
+    label: z.string().trim().min(1).max(160),
+    type: z.enum(allowedApprovalFieldTypes),
+    required: z.boolean().default(false),
+    options: z.array(z.string().trim().min(1).max(120)).optional(),
+    group: z.string().trim().min(1).max(120).optional(),
+    description: z.string().trim().max(500).optional(),
+    order: z.number().int().optional(),
+    action: z.string().trim().max(120).optional(),
+    placeholder: z.string().trim().max(160).optional(),
+    help_text: z.string().trim().max(500).optional(),
+    default_value: z.string().trim().max(500).optional(),
+    width: z.enum(["third", "half", "full"]).optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    min_length: z.number().int().min(0).optional(),
+    max_length: z.number().int().min(0).optional(),
+    pattern: z.string().trim().max(500).optional(),
+    print_hidden: z.boolean().optional(),
+    print_label: z.string().trim().max(160).optional(),
+    visible_when: fieldConditionSchema.nullable().optional(),
+    required_when: fieldConditionSchema.nullable().optional(),
+  })
+  .superRefine((field, ctx) => {
+    if ((field.type === "select" || field.type === "multiselect" || field.type === "radio") && (!field.options || field.options.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["options"],
+        message: "Options are required for select, multi-select, and radio fields.",
+      });
+    }
+    if (field.min !== undefined && field.max !== undefined && field.min > field.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["min"],
+        message: "Minimum cannot be greater than maximum.",
+      });
+    }
+    if (
+      field.min_length !== undefined &&
+      field.max_length !== undefined &&
+      field.min_length > field.max_length
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["min_length"],
+        message: "Minimum length cannot be greater than maximum length.",
+      });
+    }
+    if (field.pattern) {
+      try {
+        new RegExp(field.pattern);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["pattern"],
+          message: "Regex pattern is invalid.",
+        });
+      }
+    }
+  });
+
+const approvalTypeFieldsSchema = z
+  .array(approvalTypeFieldSchema)
+  .superRefine((fields, ctx) => {
+    const seen = new Set<string>();
+    fields.forEach((field, index) => {
+      const key = field.name.toLowerCase();
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "name"],
+          message: "Field names must be unique.",
+        });
+      }
+      seen.add(key);
+    });
+    const names = new Set(fields.map((field) => field.name));
+    fields.forEach((field, index) => {
+      for (const conditionKey of ["visible_when", "required_when"] as const) {
+        const condition = field[conditionKey];
+        if (!condition?.field) continue;
+        if (condition.field === field.name) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, conditionKey, "field"],
+            message: "A field cannot depend on itself.",
+          });
+        }
+        if (!names.has(condition.field)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, conditionKey, "field"],
+            message: "Condition references an unknown field.",
+          });
+        }
+      }
+    });
+  });
+
+const approvalTypeAttachmentSchema = z
+  .object({
+    id: z.string().uuid().optional(),
+    field_name: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_]+$/),
+    label: z.string().trim().min(1).max(160),
+    required: z.boolean().default(false),
+    max_file_size_mb: z.number().int().min(1).max(100).default(10),
+    allowed_extensions: z
+      .array(z.enum(allowedAttachmentExtensions))
+      .min(1)
+      .default(["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]),
+    max_files: z.number().int().min(1).max(10).default(1),
+  });
+
+const approvalTypeAttachmentsSchema = z
+  .array(approvalTypeAttachmentSchema)
+  .superRefine((attachments, ctx) => {
+    const seen = new Set<string>();
+    attachments.forEach((attachment, index) => {
+      const key = attachment.field_name.toLowerCase();
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "field_name"],
+          message: "Attachment field names must be unique.",
+        });
+      }
+      seen.add(key);
+    });
+  });
+
+type ApprovalTypeField = z.infer<typeof approvalTypeFieldSchema>;
+type ApprovalTypeAttachmentInput = z.infer<typeof approvalTypeAttachmentSchema>;
+type FieldCondition = z.infer<typeof fieldConditionSchema>;
+
+async function syncApprovalTypeAttachments(
+  client: { query: typeof pool.query },
+  approvalTypeId: string,
+  attachments: ApprovalTypeAttachmentInput[],
+): Promise<void> {
+  const keepIds: string[] = [];
+  const keepFieldNames: string[] = [];
+
+  for (const attachment of attachments) {
+    if (attachment.id) {
+      const { rows } = await client.query<{ id: string }>(
+        `UPDATE approval_type_attachments
+            SET field_name = $1,
+                label = $2,
+                required = $3,
+                max_file_size_mb = $4,
+                allowed_extensions = $5,
+                max_files = $6,
+                is_active = true,
+                updated_at = now()
+          WHERE id = $7 AND approval_type_id = $8
+          RETURNING id`,
+        [
+          attachment.field_name,
+          attachment.label,
+          attachment.required,
+          attachment.max_file_size_mb,
+          attachment.allowed_extensions,
+          attachment.max_files,
+          attachment.id,
+          approvalTypeId,
+        ],
+      );
+      if (rows.length > 0) {
+        keepIds.push(rows[0].id);
+        keepFieldNames.push(attachment.field_name);
+        continue;
+      }
+    }
+
+    const existingByName = await client.query<{ id: string }>(
+      `UPDATE approval_type_attachments
+          SET label = $1,
+              required = $2,
+              max_file_size_mb = $3,
+              allowed_extensions = $4,
+              max_files = $5,
+              is_active = true,
+              updated_at = now()
+        WHERE approval_type_id = $6 AND field_name = $7
+        RETURNING id`,
+      [
+        attachment.label,
+        attachment.required,
+        attachment.max_file_size_mb,
+        attachment.allowed_extensions,
+        attachment.max_files,
+        approvalTypeId,
+        attachment.field_name,
+      ],
+    );
+    if (existingByName.rows.length > 0) {
+      keepIds.push(existingByName.rows[0].id);
+      keepFieldNames.push(attachment.field_name);
+      continue;
+    }
+
+    const { rows } = await client.query<{ id: string }>(
+      `INSERT INTO approval_type_attachments
+         (approval_type_id, field_name, label, required, max_file_size_mb, allowed_extensions, max_files, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+       RETURNING id`,
+      [
+        approvalTypeId,
+        attachment.field_name,
+        attachment.label,
+        attachment.required,
+        attachment.max_file_size_mb,
+        attachment.allowed_extensions,
+        attachment.max_files,
+      ],
+    );
+    keepIds.push(rows[0].id);
+    keepFieldNames.push(attachment.field_name);
+  }
+
+  await client.query(
+    `UPDATE approval_type_attachments
+        SET is_active = false, updated_at = now()
+      WHERE approval_type_id = $1
+        AND NOT (id = ANY($2::uuid[]) OR field_name = ANY($3::text[]))`,
+    [approvalTypeId, keepIds, keepFieldNames],
+  );
+}
+
+function getBackendFieldValue(
+  formData: Record<string, unknown>,
+  fieldName: string,
+  group?: string,
+): unknown {
+  const items = Array.isArray(formData.items)
+    ? (formData.items as Record<string, unknown>[])
+    : [];
+  const item = items.find(
+    (entry) => String(entry.__group || "General") === (group || "General"),
+  );
+  return item?.[fieldName] ?? formData[fieldName];
+}
+
+function evaluateBackendCondition(
+  rule: FieldCondition | null | undefined,
+  formData: Record<string, unknown>,
+  group?: string,
+): boolean {
+  if (!rule?.field || !rule.operator) return true;
+
+  const value = getBackendFieldValue(formData, rule.field, group);
+  const isEmpty =
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0);
+
+  if (rule.operator === "empty") return isEmpty;
+  if (rule.operator === "not_empty") return !isEmpty;
+
+  const expected = rule.value;
+  if (rule.operator === "contains") {
+    if (Array.isArray(value)) return value.map(String).includes(String(expected ?? ""));
+    return String(value ?? "").includes(String(expected ?? ""));
+  }
+
+  if (rule.operator === "greater_than" || rule.operator === "less_than") {
+    const actualNumber = Number(value);
+    const expectedNumber = Number(expected);
+    if (!Number.isFinite(actualNumber) || !Number.isFinite(expectedNumber)) return false;
+    return rule.operator === "greater_than"
+      ? actualNumber > expectedNumber
+      : actualNumber < expectedNumber;
+  }
+
+  const equals = Array.isArray(value)
+    ? value.map(String).includes(String(expected ?? ""))
+    : String(value ?? "") === String(expected ?? "");
+
+  return rule.operator === "equals" ? equals : !equals;
+}
+
+function isBackendFieldVisible(
+  field: ApprovalTypeField,
+  formData: Record<string, unknown>,
+  group?: string,
+): boolean {
+  return evaluateBackendCondition(field.visible_when, formData, group);
+}
+
+function isBackendFieldRequired(
+  field: ApprovalTypeField,
+  formData: Record<string, unknown>,
+  group?: string,
+): boolean {
+  if (!isBackendFieldVisible(field, formData, group)) return false;
+  return Boolean(
+    field.required ||
+      (field.required_when?.field &&
+        evaluateBackendCondition(field.required_when, formData, group)),
+  );
+}
+
+function validateRequestFormData(
+  fields: ApprovalTypeField[],
+  formData: Record<string, unknown>,
+): void {
+  const items = Array.isArray(formData.items)
+    ? (formData.items as Record<string, unknown>[])
+    : [];
+
+  for (const field of fields) {
+    const group = field.group || "General";
+    if (!isBackendFieldVisible(field, formData, group)) {
+      continue;
+    }
+    const groupItems = items.filter(
+      (item) => String(item.__group || "General") === group,
+    );
+    const values = groupItems.length > 0
+      ? groupItems.map((item) => item[field.name])
+      : [formData[field.name]];
+
+    const hasValue = values.some((value) => {
+      if (field.type === "checkbox") {
+        return value === true || value === "true";
+      }
+      if (field.type === "multiselect") {
+        return Array.isArray(value) && value.length > 0;
+      }
+      return value !== undefined && value !== null && String(value).trim() !== "";
+    });
+
+    if (isBackendFieldRequired(field, formData, group) && !hasValue) {
+      throw new HttpError(400, `Required field missing: ${field.label}`);
+    }
+
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      if (field.type === "multiselect") {
+        if (!Array.isArray(value)) {
+          throw new HttpError(400, `${field.label} must be a list of values`);
+        }
+        const invalid = value.find((item) => !field.options?.includes(String(item)));
+        if (invalid !== undefined) {
+          throw new HttpError(400, `${field.label} has an invalid option`);
+        }
+        continue;
+      }
+
+      const stringValue = String(value);
+      if (
+        (field.type === "select" || field.type === "radio") &&
+        field.options &&
+        !field.options.includes(stringValue)
+      ) {
+        throw new HttpError(400, `${field.label} has an invalid option`);
+      }
+      if (field.type === "yes_no" && !["yes", "no"].includes(stringValue)) {
+        throw new HttpError(400, `${field.label} must be yes or no`);
+      }
+      if ((field.type === "number" || field.type === "currency") && Number.isNaN(Number(value))) {
+        throw new HttpError(400, `${field.label} must be a number`);
+      }
+      const numericValue = Number(value);
+      if ((field.type === "number" || field.type === "currency") && field.min !== undefined && numericValue < field.min) {
+        throw new HttpError(400, `${field.label} must be at least ${field.min}`);
+      }
+      if ((field.type === "number" || field.type === "currency") && field.max !== undefined && numericValue > field.max) {
+        throw new HttpError(400, `${field.label} must be at most ${field.max}`);
+      }
+      if (field.min_length !== undefined && stringValue.length < field.min_length) {
+        throw new HttpError(400, `${field.label} must be at least ${field.min_length} characters`);
+      }
+      if (field.max_length !== undefined && stringValue.length > field.max_length) {
+        throw new HttpError(400, `${field.label} must be at most ${field.max_length} characters`);
+      }
+      if (field.pattern && !new RegExp(field.pattern).test(stringValue)) {
+        throw new HttpError(400, `${field.label} format is invalid`);
+      }
+    }
+  }
+}
+
+async function assertCanAccessRequestFiles(
+  requestId: string,
+  userId: string,
+  profile: AuthedRequest["profile"],
+): Promise<void> {
+  const permissions = profile?.permissions || [];
+  const isAdmin = profile?.is_admin === true || permissions.includes("all");
+
+  const { rows } = await pool.query<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM approval_requests ar
+        WHERE ar.id = $1
+          AND (
+            $3::boolean
+            OR ar.initiator_id = $2
+            OR ar.work_assignee_id = $2
+            OR (
+              $4::boolean
+              AND ar.department_id IN (
+                SELECT department_id FROM profiles WHERE id = $2
+                UNION
+                SELECT department_id FROM user_departments WHERE user_id = $2
+                UNION
+                SELECT department_id FROM department_managers
+                 WHERE user_id = $2 AND is_active = true
+              )
+            )
+            OR EXISTS (
+              SELECT 1 FROM approval_actions aa
+               WHERE aa.request_id = ar.id
+                 AND (aa.approver_user_id = $2 OR aa.acted_by = $2)
+            )
+          )
+     ) AS ok`,
+    [
+      requestId,
+      userId,
+      isAdmin,
+      permissions.includes("view_department_requests") ||
+        permissions.includes("view_all_requests"),
+    ],
+  );
+
+  if (!rows[0]?.ok) {
+    throw new HttpError(403, "You do not have access to these attachments");
+  }
 }
 
 async function signatureFileToDataUrl(file: Express.Multer.File): Promise<string> {
@@ -2325,30 +2866,49 @@ apiRouter.post(
 
     const body = z
       .object({
-        name: z.string().min(1),
+        name: z.string().trim().min(1),
         description: z.string().optional(),
-        fields: z.array(z.any()),
+        fields: approvalTypeFieldsSchema,
         page_layout: z.enum(["portrait", "landscape"]).optional(),
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().default(false),
+        attachment_fields: approvalTypeAttachmentsSchema.optional(),
         department_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
-    const { rows } = await pool.query(
-      `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [
-        body.name.trim(),
-        body.description ?? "",
-        JSON.stringify(body.fields),
-        body.page_layout ?? "portrait",
-        body.pre_salutation ?? null,
-        body.post_salutation ?? null,
-        body.allow_attachments,
-        body.department_id ?? null,
-        req.auth!.userId,
-      ],
-    );
+
+    const attachmentFields = body.allow_attachments
+      ? body.attachment_fields ?? []
+      : [];
+
+    const client = await pool.connect();
+    let createdType: Record<string, unknown>;
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `INSERT INTO approval_types (name, description, fields, page_layout, pre_salutation, post_salutation, allow_attachments, department_id, created_by) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          body.name.trim(),
+          body.description ?? "",
+          JSON.stringify(body.fields),
+          body.page_layout ?? "portrait",
+          body.pre_salutation ?? null,
+          body.post_salutation ?? null,
+          body.allow_attachments,
+          body.department_id ?? null,
+          req.auth!.userId,
+        ],
+      );
+      createdType = rows[0];
+      await syncApprovalTypeAttachments(client, rows[0].id, attachmentFields);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     // Log audit event
     await logAudit(
@@ -2359,7 +2919,7 @@ apiRouter.post(
       `Created approval type: ${body.name}`,
     );
 
-    res.status(201).json(rows[0]);
+    res.status(201).json(createdType);
   }),
 );
 
@@ -2379,16 +2939,20 @@ apiRouter.patch(
 
     const body = z
       .object({
-        name: z.string().min(1).optional(),
+        name: z.string().trim().min(1).optional(),
         description: z.string().optional(),
-        fields: z.array(z.any()).optional(),
+        fields: approvalTypeFieldsSchema.optional(),
         page_layout: z.enum(["portrait", "landscape"]).optional(),
         pre_salutation: z.string().nullable().optional(),
         post_salutation: z.string().nullable().optional(),
         allow_attachments: z.boolean().optional(),
+        attachment_fields: approvalTypeAttachmentsSchema.optional(),
         department_id: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
+    const attachmentFields = body.allow_attachments === false
+      ? []
+      : body.attachment_fields;
     const parts: string[] = [];
     const vals: unknown[] = [];
     let n = 1;
@@ -2424,14 +2988,45 @@ apiRouter.patch(
       parts.push(`department_id = $${n++}`);
       vals.push(body.department_id);
     }
-    if (parts.length === 0) throw new HttpError(400, "No fields to update");
+    if (attachmentFields !== undefined && body.allow_attachments === undefined) {
+      parts.push(`allow_attachments = $${n++}`);
+      vals.push(attachmentFields.length > 0);
+    }
+    if (parts.length === 0 && attachmentFields === undefined) {
+      throw new HttpError(400, "No fields to update");
+    }
     parts.push(`updated_at = now()`);
     vals.push(req.params.id);
-    const { rows } = await pool.query(
-      `UPDATE approval_types SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new HttpError(404, "Not found");
+
+    const client = await pool.connect();
+    let updatedType: Record<string, unknown>;
+    try {
+      await client.query("BEGIN");
+      let rows: Record<string, unknown>[];
+      if (parts.length > 1) {
+        const result = await client.query(
+          `UPDATE approval_types SET ${parts.join(", ")} WHERE id = $${n} RETURNING *`,
+          vals,
+        );
+        rows = result.rows;
+      } else {
+        const result = await client.query(`SELECT * FROM approval_types WHERE id = $1`, [
+          req.params.id,
+        ]);
+        rows = result.rows;
+      }
+      if (rows.length === 0) throw new HttpError(404, "Not found");
+      if (attachmentFields !== undefined) {
+        await syncApprovalTypeAttachments(client, req.params.id, attachmentFields);
+      }
+      await client.query("COMMIT");
+      updatedType = rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     // Log audit event
     const changes: string[] = [];
@@ -2445,15 +3040,16 @@ apiRouter.patch(
       changes.push(`pre_salutation updated`);
     if (body.post_salutation !== undefined)
       changes.push(`post_salutation updated`);
+    if (attachmentFields !== undefined) changes.push(`attachment fields updated`);
     await logAudit(
       req.auth!.userId,
       req.profile!.full_name,
       "UPDATE",
       "Approval Type",
-      `Updated approval type ${rows[0].name}: ${changes.join(", ")}`,
+      `Updated approval type ${updatedType.name}: ${changes.join(", ")}`,
     );
 
-    res.json(rows[0]);
+    res.json(updatedType);
   }),
 );
 
@@ -2476,6 +3072,17 @@ apiRouter.delete(
       [req.params.id],
     );
     const approvalTypeName = approvalType[0]?.name || "Unknown";
+
+    const { rows: usage } = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM approval_requests WHERE approval_type_id = $1`,
+      [req.params.id],
+    );
+    if (usage[0]?.count > 0) {
+      throw new HttpError(
+        400,
+        "This approval type has existing requests and cannot be deleted.",
+      );
+    }
 
     const r = await pool.query(`DELETE FROM approval_types WHERE id = $1`, [
       req.params.id,
@@ -2512,7 +3119,7 @@ apiRouter.get(
     }
 
     const { rows } = await pool.query(
-      `SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 ORDER BY field_name`,
+      `SELECT * FROM approval_type_attachments WHERE approval_type_id = $1 AND is_active = true ORDER BY field_name`,
       [req.params.id],
     );
     res.json(rows);
@@ -2535,14 +3142,15 @@ apiRouter.post(
 
     const body = z
       .object({
-        field_name: z.string().min(1),
-        label: z.string().min(1),
+        field_name: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_]+$/),
+        label: z.string().trim().min(1).max(160),
         required: z.boolean().default(false),
-        max_file_size_mb: z.number().min(1).max(100).default(10),
+        max_file_size_mb: z.number().int().min(1).max(100).default(10),
         allowed_extensions: z
-          .array(z.string())
+          .array(z.enum(allowedAttachmentExtensions))
+          .min(1)
           .default(["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]),
-        max_files: z.number().min(1).max(10).default(1),
+        max_files: z.number().int().min(1).max(10).default(1),
       })
       .parse(req.body);
 
@@ -2597,9 +3205,9 @@ apiRouter.patch(
       .object({
         label: z.string().min(1).optional(),
         required: z.boolean().optional(),
-        max_file_size_mb: z.number().min(1).max(100).optional(),
-        allowed_extensions: z.array(z.string()).optional(),
-        max_files: z.number().min(1).max(10).optional(),
+        max_file_size_mb: z.number().int().min(1).max(100).optional(),
+        allowed_extensions: z.array(z.enum(allowedAttachmentExtensions)).min(1).optional(),
+        max_files: z.number().int().min(1).max(10).optional(),
       })
       .parse(req.body);
 
@@ -2664,16 +3272,28 @@ apiRouter.delete(
     );
     const attachmentLabel = attachment[0]?.label || "Unknown";
 
-    const r = await pool.query(
-      `DELETE FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
-      [req.params.id, req.params.typeId],
+    const { rows: usage } = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM request_attachments WHERE approval_type_attachment_id = $1`,
+      [req.params.id],
     );
+
+    const r = usage[0]?.count > 0
+      ? await pool.query(
+          `UPDATE approval_type_attachments
+              SET is_active = false, updated_at = now()
+            WHERE id = $1 AND approval_type_id = $2`,
+          [req.params.id, req.params.typeId],
+        )
+      : await pool.query(
+          `DELETE FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
+          [req.params.id, req.params.typeId],
+        );
 
     if (r.rowCount === 0) throw new HttpError(404, "Not found");
 
     // Check if this was the last attachment field for this approval type
     const { rows: remaining } = await pool.query(
-      `SELECT COUNT(*)::int as count FROM approval_type_attachments WHERE approval_type_id = $1`,
+      `SELECT COUNT(*)::int as count FROM approval_type_attachments WHERE approval_type_id = $1 AND is_active = true`,
       [req.params.typeId],
     );
 
@@ -2697,11 +3317,265 @@ apiRouter.delete(
   }),
 );
 
+apiRouter.post(
+  "/approval-types/:typeId/attachments/:id/template",
+  requireAuth,
+  upload.single("file"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const file = req.file as Express.Multer.File | undefined;
+    if (!file) {
+      throw new HttpError(400, "No template file uploaded");
+    }
+
+    const { rows: configs } = await pool.query(
+      `SELECT * FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
+      [req.params.id, req.params.typeId],
+    );
+    if (configs.length === 0) {
+      await deleteUploadedFile(file.path);
+      throw new HttpError(404, "Attachment field not found");
+    }
+
+    const config = configs[0];
+    try {
+      if (!validateFileSize(file.size, config.max_file_size_mb)) {
+        throw new HttpError(
+          400,
+          `Template file exceeds maximum size of ${config.max_file_size_mb}MB`,
+        );
+      }
+      const ext = path.extname(file.originalname).toLowerCase().slice(1);
+      if (!config.allowed_extensions.includes(ext)) {
+        throw new HttpError(
+          400,
+          `Template file type .${ext} is not allowed for this field`,
+        );
+      }
+
+      const renamed = await renameUploadedFile(
+        file,
+        `template_${config.field_name}_${timestampForFilename()}`,
+      );
+
+      if (config.template_file_path && isFileInsideUploads(config.template_file_path)) {
+        await deleteUploadedFile(config.template_file_path);
+      }
+
+      const { rows } = await pool.query(
+        `UPDATE approval_type_attachments
+            SET template_original_filename = $1,
+                template_stored_filename = $2,
+                template_file_path = $3,
+                template_file_size_bytes = $4,
+                template_mime_type = $5,
+                template_uploaded_by = $6,
+                template_uploaded_at = now(),
+                updated_at = now()
+          WHERE id = $7 AND approval_type_id = $8
+          RETURNING *`,
+        [
+          file.originalname,
+          renamed.filename,
+          renamed.path,
+          renamed.size,
+          renamed.mimetype || getMimeType(renamed.filename),
+          req.auth!.userId,
+          req.params.id,
+          req.params.typeId,
+        ],
+      );
+
+      res.json(rows[0]);
+    } catch (error) {
+      await deleteUploadedFile(file.path);
+      throw error;
+    }
+  }),
+);
+
+apiRouter.delete(
+  "/approval-types/:typeId/attachments/:id/template",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const isAdmin = req.profile?.is_admin;
+    const hasPermission =
+      req.profile?.permissions?.includes("manage_approval_types") ||
+      req.profile?.permissions?.includes("all");
+
+    if (!isAdmin && !hasPermission) {
+      throw new HttpError(403, "Forbidden");
+    }
+
+    const { rows } = await pool.query(
+      `SELECT template_file_path FROM approval_type_attachments WHERE id = $1 AND approval_type_id = $2`,
+      [req.params.id, req.params.typeId],
+    );
+    if (rows.length === 0) {
+      throw new HttpError(404, "Attachment field not found");
+    }
+
+    const templatePath = rows[0].template_file_path;
+    if (templatePath && isFileInsideUploads(templatePath)) {
+      await deleteUploadedFile(templatePath);
+    }
+
+    await pool.query(
+      `UPDATE approval_type_attachments
+          SET template_original_filename = null,
+              template_stored_filename = null,
+              template_file_path = null,
+              template_file_size_bytes = null,
+              template_mime_type = null,
+              template_uploaded_by = null,
+              template_uploaded_at = null,
+              updated_at = now()
+        WHERE id = $1 AND approval_type_id = $2`,
+      [req.params.id, req.params.typeId],
+    );
+
+    res.status(204).end();
+  }),
+);
+
+apiRouter.get(
+  "/approval-type-attachments/:id/template/download",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const { rows } = await pool.query(
+      `SELECT ata.*, at.department_id
+         FROM approval_type_attachments ata
+         JOIN approval_types at ON at.id = ata.approval_type_id
+        WHERE ata.id = $1 AND ata.template_file_path IS NOT NULL`,
+      [req.params.id],
+    );
+    if (rows.length === 0) {
+      throw new HttpError(404, "Template file not found");
+    }
+
+    const attachment = rows[0];
+    const permissions = req.profile?.permissions || [];
+    const canManage =
+      req.profile?.is_admin ||
+      permissions.includes("manage_approval_types") ||
+      permissions.includes("all");
+    const canInitiate = permissions.includes("initiate_request");
+    if (!canManage && !canInitiate) {
+      throw new HttpError(403, "Forbidden");
+    }
+    if (!canManage && attachment.department_id) {
+      const { rows: deptAccess } = await pool.query<{ ok: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM profiles p
+            WHERE p.id = $1
+              AND (
+                p.department_id = $2
+                OR EXISTS (
+                  SELECT 1 FROM user_departments ud
+                   WHERE ud.user_id = $1 AND ud.department_id = $2
+                )
+              )
+         ) AS ok`,
+        [req.auth!.userId, attachment.department_id],
+      );
+      if (!deptAccess[0]?.ok) {
+        throw new HttpError(403, "Forbidden");
+      }
+    }
+
+    if (!isFileInsideUploads(attachment.template_file_path)) {
+      throw new HttpError(400, "Invalid template file path");
+    }
+
+    const safeFilename = sanitizeDownloadFilename(
+      attachment.template_original_filename || attachment.template_stored_filename,
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    res.setHeader("Content-Type", attachment.template_mime_type || "application/octet-stream");
+    res.sendFile(attachment.template_file_path, (err) => {
+      if (err) {
+        console.error("Error sending template file:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to download template file" });
+        }
+      }
+    });
+  }),
+);
+
+apiRouter.get(
+  "/approval-type-attachments/:id/template/preview",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const { rows } = await pool.query(
+      `SELECT ata.*, at.department_id
+         FROM approval_type_attachments ata
+         JOIN approval_types at ON at.id = ata.approval_type_id
+        WHERE ata.id = $1 AND ata.template_file_path IS NOT NULL`,
+      [req.params.id],
+    );
+    if (rows.length === 0) {
+      throw new HttpError(404, "Template file not found");
+    }
+
+    const attachment = rows[0];
+    const permissions = req.profile?.permissions || [];
+    const canManage =
+      req.profile?.is_admin ||
+      permissions.includes("manage_approval_types") ||
+      permissions.includes("all");
+    const canInitiate = permissions.includes("initiate_request");
+    if (!canManage && !canInitiate) {
+      throw new HttpError(403, "Forbidden");
+    }
+    if (!canManage && attachment.department_id) {
+      const { rows: deptAccess } = await pool.query<{ ok: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM profiles p
+            WHERE p.id = $1
+              AND (
+                p.department_id = $2
+                OR EXISTS (
+                  SELECT 1 FROM user_departments ud
+                   WHERE ud.user_id = $1 AND ud.department_id = $2
+                )
+              )
+         ) AS ok`,
+        [req.auth!.userId, attachment.department_id],
+      );
+      if (!deptAccess[0]?.ok) {
+        throw new HttpError(403, "Forbidden");
+      }
+    }
+
+    if (!isFileInsideUploads(attachment.template_file_path)) {
+      throw new HttpError(400, "Invalid template file path");
+    }
+
+    await sendPreviewFile(
+      attachment.template_file_path,
+      attachment.template_original_filename || attachment.template_stored_filename,
+      attachment.template_mime_type,
+      res,
+    );
+  }),
+);
+
 // File upload endpoint for requests
 apiRouter.post(
   "/requests/:id/attachments",
   requireAuth,
-  upload.array("files", 5), // Allow up to 5 files
+  upload.array("files", 10),
   asyncHandler(async (req: AuthedRequest, res) => {
     const requestId = req.params.id;
     const fieldName = req.body.field_name;
@@ -2717,9 +3591,15 @@ apiRouter.post(
 
     // Get the request and verify user has access
     const { rows: requests } = await pool.query(
-      `SELECT ar.*, at.allow_attachments FROM approval_requests ar 
-       JOIN approval_types at ON ar.approval_type_id = at.id 
-       WHERE ar.id = $1`,
+      `SELECT ar.*,
+              at.allow_attachments,
+              ip.full_name AS initiator_name,
+              d.name AS department_name
+         FROM approval_requests ar
+         JOIN approval_types at ON ar.approval_type_id = at.id
+         LEFT JOIN profiles ip ON ip.id = ar.initiator_id
+         LEFT JOIN departments d ON d.id = ar.department_id
+        WHERE ar.id = $1`,
       [requestId],
     );
 
@@ -2757,6 +3637,9 @@ apiRouter.post(
     }
 
     const config = attachmentConfig[0];
+    if (config.is_active === false) {
+      throw new HttpError(400, "This attachment field is no longer active");
+    }
 
     // Validate file count
     if (files.length > config.max_files) {
@@ -2786,7 +3669,18 @@ apiRouter.post(
 
       // Insert file records into database
       const insertedFiles = [];
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
+        const renamed = await renameUploadedFile(
+          file,
+          [
+            filenamePart(request.request_number || request.id, "request"),
+            filenamePart(request.initiator_name, "user"),
+            filenamePart(request.department_name, "department"),
+            timestampForFilename(),
+            filenamePart(fieldName, "attachment"),
+            index + 1,
+          ].join("_"),
+        );
         const { rows: inserted } = await pool.query(
           `INSERT INTO request_attachments (request_id, approval_type_attachment_id, field_name, original_filename, stored_filename, file_path, file_size_bytes, mime_type, uploaded_by) 
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
@@ -2795,10 +3689,10 @@ apiRouter.post(
             config.id,
             fieldName,
             file.originalname,
-            file.filename,
-            file.path,
-            file.size,
-            file.mimetype || getMimeType(file.filename),
+            renamed.filename,
+            renamed.path,
+            renamed.size,
+            renamed.mimetype || getMimeType(renamed.filename),
             userId,
           ],
         );
@@ -2837,26 +3731,7 @@ apiRouter.get(
     const requestId = req.params.id;
     const userId = req.auth!.userId;
 
-    // Get the request and verify user has access
-    const { rows: requests } = await pool.query(
-      `SELECT * FROM approval_requests WHERE id = $1`,
-      [requestId],
-    );
-
-    if (requests.length === 0) {
-      throw new HttpError(404, "Request not found");
-    }
-
-    const request = requests[0];
-    const isAdmin = req.profile?.is_admin;
-
-    // Check if user can view attachments (initiator or admin)
-    if (request.initiator_id !== userId && !isAdmin) {
-      throw new HttpError(
-        403,
-        "You can only view attachments for your own requests",
-      );
-    }
+    await assertCanAccessRequestFiles(requestId, userId, req.profile);
 
     const { rows } = await pool.query(
       `SELECT ra.*, ata.label as field_label FROM request_attachments ra 
@@ -2890,22 +3765,16 @@ apiRouter.get(
     }
 
     const attachment = attachments[0];
-    const isAdmin = req.profile?.is_admin;
-
-    // Check if user can download attachment (initiator or admin)
-    if (attachment.initiator_id !== userId && !isAdmin) {
-      throw new HttpError(
-        403,
-        "You can only download attachments for your own requests",
-      );
-    }
+    await assertCanAccessRequestFiles(attachment.request_id, userId, req.profile);
 
     if (!isFileInsideUploads(attachment.file_path)) {
       throw new HttpError(400, "Invalid attachment file path");
     }
 
     // Set headers for file download
-    const safeFilename = sanitizeDownloadFilename(attachment.original_filename);
+    const safeFilename = sanitizeDownloadFilename(
+      attachment.stored_filename || attachment.original_filename,
+    );
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${safeFilename}"`,
@@ -2921,6 +3790,40 @@ apiRouter.get(
         }
       }
     });
+  }),
+);
+
+apiRouter.get(
+  "/attachments/:id/preview",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const attachmentId = req.params.id;
+    const userId = req.auth!.userId;
+
+    const { rows: attachments } = await pool.query(
+      `SELECT ra.*, ar.initiator_id FROM request_attachments ra
+       JOIN approval_requests ar ON ra.request_id = ar.id
+       WHERE ra.id = $1`,
+      [attachmentId],
+    );
+
+    if (attachments.length === 0) {
+      throw new HttpError(404, "Attachment not found");
+    }
+
+    const attachment = attachments[0];
+    await assertCanAccessRequestFiles(attachment.request_id, userId, req.profile);
+
+    if (!isFileInsideUploads(attachment.file_path)) {
+      throw new HttpError(400, "Invalid attachment file path");
+    }
+
+    await sendPreviewFile(
+      attachment.file_path,
+      attachment.original_filename || attachment.stored_filename,
+      attachment.mime_type,
+      res,
+    );
   }),
 );
 
@@ -4380,31 +5283,46 @@ apiRouter.post(
       throw new HttpError(400, "Approval chain is required");
     }
 
-    const { rows: typeRows } = await pool.query<{ department_id: string | null }>(
-      `SELECT department_id FROM approval_types WHERE id = $1`,
+    const { rows: typeRows } = await pool.query<{
+      department_id: string | null;
+      fields: unknown;
+    }>(
+      `SELECT department_id, fields FROM approval_types WHERE id = $1`,
       [body.approval_type_id],
     );
     if (typeRows.length === 0) {
       throw new HttpError(404, "Approval type not found");
     }
+    const approvalTypeFields = approvalTypeFieldsSchema.parse(
+      Array.isArray(typeRows[0].fields)
+        ? typeRows[0].fields
+        : typeof typeRows[0].fields === "string"
+          ? JSON.parse(typeRows[0].fields)
+          : [],
+    );
+    validateRequestFormData(approvalTypeFields, body.form_data);
 
     const profileDepartmentId = req.profile?.department_id ?? null;
-    const selectedDeptId = canChooseDepartment
-      ? body.department_id ?? profileDepartmentId
-      : profileDepartmentId;
+    const selectedDeptId = body.department_id ?? profileDepartmentId;
 
-    if (
-      !canChooseDepartment &&
-      body.department_id !== undefined &&
-      body.department_id !== profileDepartmentId
-    ) {
-      throw new HttpError(
-        403,
-        "You can only create requests for your own department",
+    if (!canChooseDepartment && body.department_id && body.department_id !== profileDepartmentId) {
+      const { rows: departmentAccess } = await pool.query<{ ok: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM user_departments
+            WHERE user_id = $1 AND department_id = $2
+         ) AS ok`,
+        [uid, body.department_id],
       );
+      if (!departmentAccess[0]?.ok) {
+        throw new HttpError(
+          403,
+          "You can only create requests for your assigned departments",
+        );
+      }
     }
 
-    const requestDeptId = selectedDeptId ?? profileDepartmentId ?? null;
+    const requestDeptId = selectedDeptId ?? null;
 
     if (!requestDeptId) {
       throw new HttpError(
@@ -4417,11 +5335,11 @@ apiRouter.post(
     let chainSteps: WorkflowStepDefinition[] = [];
     if (body.approval_chain_id) {
       const { rows: chainRows } = await pool.query<{ steps: unknown }>(
-        `SELECT steps FROM approval_chains WHERE id = $1`,
-        [body.approval_chain_id],
+        `SELECT steps FROM approval_chains WHERE id = $1 AND approval_type_id = $2`,
+        [body.approval_chain_id, body.approval_type_id],
       );
       if (chainRows.length === 0) {
-        throw new HttpError(404, "Approval chain not found");
+        throw new HttpError(404, "Approval chain not found for this approval type");
       }
       const raw = chainRows[0].steps;
       chainSteps = normalizeWorkflowSteps(

@@ -11,6 +11,7 @@
     "package:frontend": "node scripts/copy-frontend-dist.mjs",
     "start": "node dist/index.js",
     "pm2:start": "node scripts/pm2-cli.mjs start ecosystem.config.cjs",
+    "pm2:restart": "node scripts/pm2-cli.mjs restart approval-central --update-env",
     "pm2:save": "node scripts/pm2-cli.mjs save",
     "pm2:status": "node scripts/pm2-cli.mjs status",
     "pm2:logs": "node scripts/pm2-cli.mjs logs approval-central",
@@ -30,6 +31,7 @@
     "nodemailer": "^8.0.5",
     "pg": "^8.13.0",
     "uuid": "^14.0.0",
+    "word-extractor": "^1.0.4",
     "zod": "^3.25.76"
   },
   "devDependencies": {

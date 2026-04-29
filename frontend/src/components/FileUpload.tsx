@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Upload, X, File, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -32,6 +32,10 @@ export function FileUpload({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setFiles(value);
+  }, [value]);
 
   const validateFile = (file: File): string | null => {
     // Check file size
@@ -163,6 +167,7 @@ export function FileUpload({
               <p className="text-sm text-muted-foreground">
                 Drag and drop files here, or{' '}
                 <Button
+                  type="button"
                   variant="link"
                   className="p-0 h-auto text-blue-600"
                   onClick={openFileDialog}
@@ -195,6 +200,7 @@ export function FileUpload({
                 </div>
               </div>
               <Button
+                type="button"
                 variant="ghost"
                 size="sm"
                 onClick={() => removeFile(index)}

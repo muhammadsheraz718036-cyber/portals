@@ -207,9 +207,26 @@ CREATE TABLE IF NOT EXISTS approval_type_attachments (
   max_file_size_mb INTEGER NOT NULL DEFAULT 10,
   allowed_extensions TEXT[] DEFAULT '{pdf,doc,docx,xls,xlsx,jpg,jpeg,png}',
   max_files INTEGER NOT NULL DEFAULT 1,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  template_original_filename TEXT,
+  template_stored_filename TEXT,
+  template_file_path TEXT,
+  template_file_size_bytes BIGINT,
+  template_mime_type TEXT,
+  template_uploaded_by UUID REFERENCES users(id),
+  template_uploaded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_original_filename TEXT;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_stored_filename TEXT;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_file_path TEXT;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_file_size_bytes BIGINT;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_mime_type TEXT;
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_uploaded_by UUID REFERENCES users(id);
+ALTER TABLE approval_type_attachments ADD COLUMN IF NOT EXISTS template_uploaded_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS request_attachments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

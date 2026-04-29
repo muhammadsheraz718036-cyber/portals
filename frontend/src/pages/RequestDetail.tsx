@@ -51,6 +51,8 @@ import {
 } from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/RichTextEditor";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { FilePreviewDialog } from "@/components/FilePreviewDialog";
 import { useCompany } from "@/contexts/company-hooks";
 import { useAuth } from "@/contexts/auth-hooks";
 import {
@@ -65,6 +67,7 @@ import {
   useResolveRequestNumber,
   useRequestAttachments,
   useDownloadAttachment,
+  usePreviewAttachment,
   useDeleteRequestAttachment,
   useWorkAssignees,
 } from "@/hooks/services";
@@ -75,6 +78,13 @@ import type { RequestAttachment, WorkAssigneeOption } from "@/services/types";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { formatExistingActionLabel } from "@/lib/workflowLabels";
 import { cn } from "@/lib/utils";
+import {
+  fieldGridClass,
+  formatFormValue,
+  inputTypeForField,
+  isFieldRequired,
+  isFieldVisible,
+} from "@/lib/formSchema";
 
 const actionIcons: Record<string, React.ReactNode> = {
   Approved: <CheckCircle className="h-5 w-5 text-success" />,
@@ -85,6 +95,11 @@ const actionIcons: Record<string, React.ReactNode> = {
   Edited: <Edit2 className="h-5 w-5 text-primary" />,
   ChangesRequested: <AlertCircle className="h-5 w-5 text-warning" />,
   Resubmitted: <RefreshCw className="h-5 w-5 text-primary" />,
+};
+
+type PreviewFile = {
+  fileName: string;
+  blob: Blob;
 };
 
 function iconKeyForAction(status: string): keyof typeof actionIcons {
@@ -286,16 +301,7 @@ function getGroupRenderOrder(fields: ApprovalFormField[]) {
 }
 
 function formatFieldDisplayValue(field: ApprovalFormField | null, rawValue: unknown): string {
-  if (field?.type === "checkbox") {
-    return rawValue === "true" ? "Yes" : "No";
-  }
-
-  if (rawValue === undefined || rawValue === null) {
-    return "-";
-  }
-
-  const value = String(rawValue).trim();
-  return value.length > 0 ? value : "-";
+  return formatFormValue(field, rawValue).replace("—", "-");
 }
 
 function formatWorkStatus(status: string | null | undefined): string {
@@ -330,6 +336,11 @@ export default function RequestDetail() {
   const [selectedWorkAssigneeId, setSelectedWorkAssigneeId] = useState("");
   const [workAssigneeOpen, setWorkAssigneeOpen] = useState(false);
   const [showLetterPreview, setShowLetterPreview] = useState(false);
+  const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
+  const [attachmentToDelete, setAttachmentToDelete] =
+    useState<RequestAttachment | null>(null);
+  const [showDeleteRequestConfirm, setShowDeleteRequestConfirm] =
+    useState(false);
   const [updatingFormData, setUpdatingFormData] = useState<
     Record<string, unknown>
   >({});
@@ -350,6 +361,7 @@ export default function RequestDetail() {
   } = useApprovalRequest(id || "");
   
   const downloadMutation = useDownloadAttachment();
+  const previewMutation = usePreviewAttachment();
   const deleteMutation = useDeleteRequestAttachment();
 
   const request = requestData?.request as RequestRow | undefined;
@@ -557,7 +569,8 @@ export default function RequestDetail() {
         id: request.id,
         data: { comment: "" },
       });
-    } catch {
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to approve request");
     } finally {
       setActioning(false);
     }
@@ -578,7 +591,8 @@ export default function RequestDetail() {
         data: { comment: trimmedComment },
       });
       setRejectionComment("");
-    } catch {
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reject request");
     } finally {
       setActioning(false);
     }
@@ -614,7 +628,8 @@ export default function RequestDetail() {
         assigneeId: selectedWorkAssigneeId,
       });
       setShowWorkAssignmentDialog(false);
-    } catch {
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to assign work");
     } finally {
       setActioning(false);
     }
@@ -635,7 +650,10 @@ export default function RequestDetail() {
       });
       setWorkCompletionComment("");
       setShowWorkStatusDialog(false);
-    } catch {
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update work status",
+      );
     } finally {
       setActioning(false);
     }
@@ -676,34 +694,46 @@ export default function RequestDetail() {
     }
   };
 
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
   const handleDownloadFile = async (attachment: RequestAttachment) => {
     try {
       const blob = await downloadMutation.mutateAsync(attachment.id);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = attachment.original_filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      downloadBlob(blob, attachment.original_filename);
       toast.success(`Downloaded ${attachment.original_filename}`);
-    } catch {
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to download file");
     }
   };
 
-  const handleDeleteFile = async (attachment: RequestAttachment) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete ${attachment.original_filename}?`,
-      )
-    ) {
-      return;
-    }
-
+  const handlePreviewFile = async (attachment: RequestAttachment) => {
     try {
-      await deleteMutation.mutateAsync(attachment.id);
-    } catch {
+      const blob = await previewMutation.mutateAsync(attachment.id);
+      setPreviewFile({
+        fileName: attachment.original_filename,
+        blob,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load preview");
+    }
+  };
+
+  const confirmDeleteFile = async () => {
+    if (!attachmentToDelete) return;
+    try {
+      await deleteMutation.mutateAsync(attachmentToDelete.id);
+      setAttachmentToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete attachment");
     }
   };
 
@@ -732,19 +762,12 @@ export default function RequestDetail() {
 
   const handleDeleteRequest = async () => {
     if (!request) return;
-    if (
-      !confirm(
-        `Are you sure you want to delete request ${request.request_number}? This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-
     setActioning(true);
     try {
       await deleteRequestMutation.mutateAsync(request.id);
       navigate("/approvals");
-    } catch {
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete request");
     } finally {
       setActioning(false);
     }
@@ -897,6 +920,9 @@ export default function RequestDetail() {
         <Textarea
           value={stringValue}
           onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder || field.label}
+          minLength={field.min_length}
+          maxLength={field.max_length}
           rows={3}
         />
       );
@@ -919,6 +945,25 @@ export default function RequestDetail() {
       );
     }
 
+    if (field.type === "multiselect" && field.options) {
+      return (
+        <select
+          multiple
+          value={Array.isArray(value) ? value.map(String) : []}
+          onChange={(e) =>
+            onChange(Array.from(e.target.selectedOptions).map((option) => option.value))
+          }
+          className="min-h-[96px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        >
+          {field.options.map((option) => (
+            <option key={`${keyPrefix}-${option}`} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
     if (field.type === "checkbox") {
       return (
         <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
@@ -932,10 +977,11 @@ export default function RequestDetail() {
       );
     }
 
-    if (field.type === "radio" && field.options) {
+    if ((field.type === "radio" && field.options) || field.type === "yes_no") {
+      const options = field.type === "yes_no" ? ["yes", "no"] : field.options ?? [];
       return (
         <div className="flex flex-wrap gap-3 rounded-md border border-border px-3 py-2">
-          {field.options.map((option) => (
+          {options.map((option) => (
             <label key={`${keyPrefix}-${option}`} className="flex items-center gap-2 text-sm">
               <input
                 type="radio"
@@ -944,7 +990,7 @@ export default function RequestDetail() {
                 checked={stringValue === option}
                 onChange={(e) => onChange(e.target.value)}
               />
-              <span>{option}</span>
+              <span>{field.type === "yes_no" ? option.toUpperCase() : option}</span>
             </label>
           ))}
         </div>
@@ -953,11 +999,16 @@ export default function RequestDetail() {
 
     return (
       <input
-        type={field.type === "email" || field.type === "number" || field.type === "date" ? field.type : "text"}
+        type={inputTypeForField(field)}
         value={stringValue}
         onChange={(e) => onChange(e.target.value)}
+        min={field.min}
+        max={field.max}
+        minLength={field.min_length}
+        maxLength={field.max_length}
+        pattern={field.pattern}
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        placeholder={field.label}
+        placeholder={field.placeholder || field.label}
       />
     );
   };
@@ -1044,7 +1095,10 @@ export default function RequestDetail() {
                 <div className="space-y-4">
                   {repeatableGroupOrder.map((group) => {
                       const groupFields = repeatableFields.filter(
-                        (f) => (f.group || "General") === group,
+                        (f) =>
+                          (f.group || "General") === group &&
+                          !f.print_hidden &&
+                          isFieldVisible(f, formData, group),
                       );
                       const groupItems = normalizedItems.filter(
                         (item: LineItem) =>
@@ -1074,7 +1128,7 @@ export default function RequestDetail() {
                                       key={`${group}-${field.name}-header`}
                                       className="border text-xs border-foreground bg-muted font-semibold text-center"
                                     >
-                                      {field.label || field.name}
+                                      {field.print_label || field.label || field.name}
                                     </th>
                                   ))}
                                 </tr>
@@ -1087,7 +1141,7 @@ export default function RequestDetail() {
                                         key={`${idx}-${field.name}`}
                                         className="border border-foreground p-2 text-center"
                                       >
-                                        {item[field.name] ?? "—"}
+                                        {formatFormValue(field, item[field.name])}
                                       </td>
                                     ))}
                                   </tr>
@@ -1301,7 +1355,7 @@ export default function RequestDetail() {
               <Button
                 variant="destructive"
                 size="sm"
-                onClick={handleDeleteRequest}
+                onClick={() => setShowDeleteRequestConfirm(true)}
                 className="gap-2"
                 disabled={actioning}
               >
@@ -1431,7 +1485,13 @@ export default function RequestDetail() {
                   <div className="space-y-5">
                     {repeatableGroupOrder.map((group) => {
                       const groupFields = repeatableFields.filter(
-                        (field) => (field.group || "General") === group,
+                        (field) =>
+                          (field.group || "General") === group &&
+                          isFieldVisible(
+                            field,
+                            showUpdateForm ? updatingFormData : formData,
+                            group,
+                          ),
                       );
                       const groupItems = (showUpdateForm ? editableItems : normalizedItems).filter(
                         (item) => String(item.__group || "General") === group,
@@ -1463,10 +1523,14 @@ export default function RequestDetail() {
                               {groupFields.map((field) => (
                                 <div
                                   key={`${group}-${field.name}-mapped`}
-                                  className="space-y-2 rounded-lg border bg-muted/10 p-3"
+                                  className={`space-y-2 rounded-lg border bg-muted/10 p-3 ${fieldGridClass(field)}`}
                                 >
                                   <p className="text-xs uppercase tracking-wide text-muted-foreground">
                                     {field.label || field.name}
+                                    {showUpdateForm &&
+                                      isFieldRequired(field, updatingFormData, group) && (
+                                        <span className="ml-1 text-destructive">*</span>
+                                      )}
                                   </p>
                                   {showUpdateForm ? (
                                     renderEditableField(
@@ -1487,6 +1551,11 @@ export default function RequestDetail() {
                                   ) : (
                                     <p className="text-sm font-medium text-foreground">
                                       {formatFieldDisplayValue(field, groupItem[field.name])}
+                                    </p>
+                                  )}
+                                  {field.help_text && showUpdateForm && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {field.help_text}
                                     </p>
                                   )}
                                 </div>
@@ -1648,6 +1717,13 @@ export default function RequestDetail() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          onClick={() => handlePreviewFile(attachment)}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleDownloadFile(attachment)}
                           className="text-blue-600 hover:text-blue-700"
                         >
@@ -1657,7 +1733,7 @@ export default function RequestDetail() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDeleteFile(attachment)}
+                            onClick={() => setAttachmentToDelete(attachment)}
                             className="text-red-600 hover:text-red-700"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -2101,6 +2177,47 @@ export default function RequestDetail() {
           </div>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={!!attachmentToDelete}
+        title="Delete attachment?"
+        description={
+          attachmentToDelete
+            ? `This will permanently delete ${attachmentToDelete.original_filename}.`
+            : ""
+        }
+        confirmLabel="Delete Attachment"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setAttachmentToDelete(null);
+        }}
+        onConfirm={confirmDeleteFile}
+      />
+      <ConfirmDialog
+        open={showDeleteRequestConfirm}
+        title="Delete request?"
+        description={
+          request
+            ? `This will permanently delete request ${request.request_number}. This action cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete Request"
+        destructive
+        onOpenChange={setShowDeleteRequestConfirm}
+        onConfirm={handleDeleteRequest}
+      />
+      <FilePreviewDialog
+        open={!!previewFile}
+        fileName={previewFile?.fileName ?? ""}
+        blob={previewFile?.blob ?? null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewFile(null);
+        }}
+        onDownload={
+          previewFile
+            ? () => downloadBlob(previewFile.blob, previewFile.fileName)
+            : undefined
+        }
+      />
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import {
   Trash2,
   GripVertical,
   Copy,
+  Download,
   Paperclip,
   Check,
   X,
@@ -41,7 +42,10 @@ import {
   useDeleteApprovalType,
   useDepartments,
 } from "@/hooks/services";
+import { services } from "@/services";
 import { toast } from "sonner";
+import { CONDITION_OPERATORS, FIELD_WIDTHS, FORM_FIELD_TYPES, optionNeedsOptions } from "@/lib/formSchema";
+import type { FieldConditionRule } from "@/lib/constants";
 
 type Field = {
   name: string;
@@ -53,6 +57,19 @@ type Field = {
   description?: string;
   order?: number;
   action?: string;
+  placeholder?: string;
+  help_text?: string;
+  default_value?: string;
+  width?: "third" | "half" | "full";
+  min?: number;
+  max?: number;
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
+  print_hidden?: boolean;
+  print_label?: string;
+  visible_when?: FieldConditionRule | null;
+  required_when?: FieldConditionRule | null;
 };
 
 type AttachmentField = {
@@ -63,6 +80,10 @@ type AttachmentField = {
   max_file_size_mb: number;
   allowed_extensions: string[];
   max_files: number;
+  template_original_filename?: string | null;
+  template_file_size_bytes?: number | null;
+  templateFile?: File | null;
+  removeTemplate?: boolean;
 };
 
 type PageLayout = "portrait" | "landscape";
@@ -79,6 +100,43 @@ interface ApprovalType {
   department_id?: string | null;
 }
 
+function sanitizeIdentifier(value: string) {
+  return (value || "field")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "") || "field";
+}
+
+function clampInt(value: number, min: number, max: number, fallback: number) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function formatBytes(bytes?: number | null) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function updateCondition(
+  current: FieldConditionRule | null | undefined,
+  updates: Partial<FieldConditionRule>,
+): FieldConditionRule {
+  return {
+    field: current?.field || "",
+    operator: current?.operator || "equals",
+    value: current?.value ?? "",
+    ...updates,
+  };
+}
+
 export function AdminApprovalTypes() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editType, setEditType] = useState<ApprovalType | null>(null);
@@ -90,6 +148,7 @@ export function AdminApprovalTypes() {
   const [attachmentFields, setAttachmentFields] = useState<AttachmentField[]>(
     [],
   );
+  const [isLoadingAttachments, setIsLoadingAttachments] = useState(false);
   const [activeTab, setActiveTab] = useState("fields");
   const [draggedFieldIdx, setDraggedFieldIdx] = useState<number | null>(null);
   const [groups, setGroups] = useState<string[]>(["General"]); // Default group
@@ -125,7 +184,7 @@ export function AdminApprovalTypes() {
     setActiveTab("fields");
     setDialogOpen(true);
   };
-  const openEdit = (t: ApprovalType) => {
+  const openEdit = async (t: ApprovalType) => {
     setEditType(t);
     setName(t.name);
     setDescription(t.description);
@@ -144,7 +203,37 @@ export function AdminApprovalTypes() {
     setEditingGroupName(null);
     setEditingGroupValue("");
     setActiveTab("fields");
+    setAttachmentFields([]);
     setDialogOpen(true);
+    if (t.allow_attachments) {
+      setIsLoadingAttachments(true);
+      try {
+        const attachments = await services.approvalTypes.getAttachments(t.id);
+        setAttachmentFields(
+          attachments.map((attachment) => ({
+            id: attachment.id,
+            field_name: attachment.field_name,
+            label: attachment.label,
+            required: attachment.required,
+            max_file_size_mb: attachment.max_file_size_mb,
+            allowed_extensions: attachment.allowed_extensions,
+            max_files: attachment.max_files,
+            template_original_filename: attachment.template_original_filename,
+            template_file_size_bytes: attachment.template_file_size_bytes,
+            templateFile: null,
+            removeTemplate: false,
+          })),
+        );
+      } catch (e) {
+        toast.error(
+          e instanceof Error
+            ? e.message
+            : "Failed to load attachment fields",
+        );
+      } finally {
+        setIsLoadingAttachments(false);
+      }
+    }
   };
 
   const addField = () =>
@@ -156,6 +245,7 @@ export function AdminApprovalTypes() {
         type: "text",
         required: false,
         group: groups[0] || "General",
+        width: "half",
       },
     ]);
   const updateField = (idx: number, updates: Partial<Field>) =>
@@ -290,7 +380,56 @@ export function AdminApprovalTypes() {
   };
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      toast.error("Approval type name is required");
+      return;
+    }
+    if (fields.some((field) => !field.label.trim())) {
+      toast.error("Every form field needs a label");
+      setActiveTab("fields");
+      return;
+    }
+    if (fields.some((field) => optionNeedsOptions(field.type) && (!field.options || field.options.filter(Boolean).length === 0))) {
+      toast.error("Select, multi-select, and radio fields need at least one option");
+      setActiveTab("fields");
+      return;
+    }
+
+    const cleanAttachmentFields = allowAttachments
+      ? attachmentFields.map((field, idx) => ({
+          ...field,
+          field_name: sanitizeIdentifier(field.field_name || field.label || `attachment_${idx}`),
+          label: field.label.trim(),
+          max_file_size_mb: clampInt(field.max_file_size_mb, 1, 100, 10),
+          max_files: clampInt(field.max_files, 1, 10, 1),
+          allowed_extensions: Array.from(new Set(field.allowed_extensions)),
+          template_original_filename: field.template_original_filename,
+          template_file_size_bytes: field.template_file_size_bytes,
+          templateFile: field.templateFile ?? null,
+          removeTemplate: field.removeTemplate ?? false,
+        }))
+      : [];
+
+    if (cleanAttachmentFields.some((field) => !field.label)) {
+      toast.error("Every attachment field needs a display label");
+      setActiveTab("attachments");
+      return;
+    }
+    if (cleanAttachmentFields.some((field) => field.allowed_extensions.length === 0)) {
+      toast.error("Every attachment field needs at least one allowed file type");
+      setActiveTab("attachments");
+      return;
+    }
+    const attachmentNames = new Set<string>();
+    for (const field of cleanAttachmentFields) {
+      if (attachmentNames.has(field.field_name)) {
+        toast.error("Attachment field names must be unique");
+        setActiveTab("attachments");
+        return;
+      }
+      attachmentNames.add(field.field_name);
+    }
+
     // Field values are stored by `name` in the form_data object.
     // If multiple fields end up with the same/empty name (e.g. empty labels),
     // typing in one field will appear in others. Ensure unique, non-empty names.
@@ -302,11 +441,7 @@ export function AdminApprovalTypes() {
         : f.name;
 
       // Keep only safe chars; normalize underscores.
-      const sanitized = (baseFromLabel || `field_${idx}`)
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "");
+      const sanitized = sanitizeIdentifier(baseFromLabel || `field_${idx}`);
 
       const candidate = sanitized || f.name || `field_${idx}`;
       let unique = candidate;
@@ -316,12 +451,32 @@ export function AdminApprovalTypes() {
       }
       usedNames.add(unique);
 
-      return { ...f, name: unique };
+      return {
+        ...f,
+        label: rawLabel,
+        name: unique,
+        options: f.options?.map((option) => option.trim()).filter(Boolean),
+        group: f.group?.trim() || "General",
+        placeholder: f.placeholder?.trim() || undefined,
+        help_text: f.help_text?.trim() || undefined,
+        default_value: f.default_value?.trim() || undefined,
+        width: f.width || "half",
+        min: f.min,
+        max: f.max,
+        min_length: f.min_length,
+        max_length: f.max_length,
+        pattern: f.pattern?.trim() || undefined,
+        print_hidden: f.print_hidden || undefined,
+        print_label: f.print_label?.trim() || undefined,
+        visible_when: f.visible_when?.field ? f.visible_when : undefined,
+        required_when: f.required_when?.field ? f.required_when : undefined,
+      };
     });
 
     try {
+      let savedType: ApprovalType;
       if (editType) {
-        await updateMutation.mutateAsync({
+        savedType = await updateMutation.mutateAsync({
           id: editType.id,
           data: {
             name,
@@ -331,12 +486,13 @@ export function AdminApprovalTypes() {
             pre_salutation: preSalutation || null,
             post_salutation: postSalutation || null,
             allow_attachments: allowAttachments,
+            attachment_fields: cleanAttachmentFields.map(({ templateFile, removeTemplate, ...field }) => field),
             department_id: departmentId,
           },
         });
         toast.success("Updated");
       } else {
-        await createMutation.mutateAsync({
+        savedType = await createMutation.mutateAsync({
           name,
           description,
           fields: cleanFields,
@@ -344,9 +500,33 @@ export function AdminApprovalTypes() {
           pre_salutation: preSalutation || null,
           post_salutation: postSalutation || null,
           allow_attachments: allowAttachments,
+          attachment_fields: cleanAttachmentFields.map(({ templateFile, removeTemplate, ...field }) => field),
           department_id: departmentId,
         });
         toast.success("Created");
+      }
+
+      if (allowAttachments) {
+        const savedAttachments = await services.approvalTypes.getAttachments(savedType.id);
+        for (const field of cleanAttachmentFields) {
+          const savedAttachment = savedAttachments.find(
+            (attachment) => attachment.field_name === field.field_name,
+          );
+          if (!savedAttachment) continue;
+          if (field.removeTemplate && savedAttachment.template_original_filename) {
+            await services.approvalTypes.deleteTemplateFile(
+              savedType.id,
+              savedAttachment.id,
+            );
+          }
+          if (field.templateFile) {
+            await services.approvalTypes.uploadTemplateFile(
+              savedType.id,
+              savedAttachment.id,
+              field.templateFile,
+            );
+          }
+        }
       }
       setDialogOpen(false);
     } catch (e) {
@@ -365,6 +545,9 @@ export function AdminApprovalTypes() {
 
   const handleDuplicate = async (type: ApprovalType) => {
     try {
+      const attachmentFieldsToCopy = type.allow_attachments
+        ? await services.approvalTypes.getAttachments(type.id)
+        : [];
       await createMutation.mutateAsync({
         name: `${type.name} (Copy)`,
         description: type.description,
@@ -372,7 +555,16 @@ export function AdminApprovalTypes() {
         page_layout: type.page_layout,
         pre_salutation: type.pre_salutation,
         post_salutation: type.post_salutation,
-        allow_attachments: type.allow_attachments,
+        allow_attachments: attachmentFieldsToCopy.length > 0,
+        attachment_fields: attachmentFieldsToCopy.map((field) => ({
+          field_name: field.field_name,
+          label: field.label,
+          required: field.required,
+          max_file_size_mb: field.max_file_size_mb,
+          allowed_extensions: field.allowed_extensions,
+          max_files: field.max_files,
+        })),
+        department_id: type.department_id ?? null,
       });
       toast.success("Approval type duplicated");
     } catch (e) {
@@ -681,37 +873,24 @@ export function AdminApprovalTypes() {
                                   <Select
                                     value={field.type}
                                     onValueChange={(v) =>
-                                      updateField(actualIndex, { type: v })
+                                      updateField(actualIndex, {
+                                        type: v,
+                                        options: optionNeedsOptions(v) ? field.options : undefined,
+                                      })
                                     }
                                   >
                                     <SelectTrigger className="text-sm">
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="text">Text</SelectItem>
-                                      <SelectItem value="number">
-                                        Number
-                                      </SelectItem>
-                                      <SelectItem value="email">
-                                        Email
-                                      </SelectItem>
-                                      <SelectItem value="textarea">
-                                        Textarea
-                                      </SelectItem>
-                                      <SelectItem value="date">Date</SelectItem>
-                                      <SelectItem value="select">
-                                        Select Dropdown
-                                      </SelectItem>
-                                      <SelectItem value="radio">
-                                        Radio Buttons
-                                      </SelectItem>
-                                      <SelectItem value="checkbox">
-                                        Checkbox
-                                      </SelectItem>
+                                      {FORM_FIELD_TYPES.map((type) => (
+                                        <SelectItem key={type} value={type}>
+                                          {type.replace("_", " ")}
+                                        </SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select>
-                                  {(field.type === "select" ||
-                                    field.type === "radio") && (
+                                  {optionNeedsOptions(field.type) && (
                                     <Input
                                       className="col-span-3 text-sm"
                                       placeholder="Options (comma separated)"
@@ -725,6 +904,267 @@ export function AdminApprovalTypes() {
                                       }
                                     />
                                   )}
+                                  <Input
+                                    className="text-sm"
+                                    placeholder="Placeholder"
+                                    value={field.placeholder || ""}
+                                    onChange={(e) =>
+                                      updateField(actualIndex, {
+                                        placeholder: e.target.value,
+                                      })
+                                    }
+                                  />
+                                  <Input
+                                    className="text-sm"
+                                    placeholder="Help text"
+                                    value={field.help_text || ""}
+                                    onChange={(e) =>
+                                      updateField(actualIndex, {
+                                        help_text: e.target.value,
+                                      })
+                                    }
+                                  />
+                                  <Input
+                                    className="text-sm"
+                                    placeholder="Default value"
+                                    value={field.default_value || ""}
+                                    onChange={(e) =>
+                                      updateField(actualIndex, {
+                                        default_value: e.target.value,
+                                      })
+                                    }
+                                  />
+                                  <Select
+                                    value={field.width || "half"}
+                                    onValueChange={(v) =>
+                                      updateField(actualIndex, {
+                                        width: v as Field["width"],
+                                      })
+                                    }
+                                  >
+                                    <SelectTrigger className="text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {FIELD_WIDTHS.map((width) => (
+                                        <SelectItem key={width} value={width}>
+                                          {width}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {(field.type === "number" || field.type === "currency") && (
+                                    <>
+                                      <Input
+                                        type="number"
+                                        className="text-sm"
+                                        placeholder="Min"
+                                        value={field.min ?? ""}
+                                        onChange={(e) =>
+                                          updateField(actualIndex, {
+                                            min: e.target.value === "" ? undefined : Number(e.target.value),
+                                          })
+                                        }
+                                      />
+                                      <Input
+                                        type="number"
+                                        className="text-sm"
+                                        placeholder="Max"
+                                        value={field.max ?? ""}
+                                        onChange={(e) =>
+                                          updateField(actualIndex, {
+                                            max: e.target.value === "" ? undefined : Number(e.target.value),
+                                          })
+                                        }
+                                      />
+                                    </>
+                                  )}
+                                  {["text", "email", "textarea", "phone", "url"].includes(field.type) && (
+                                    <>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        className="text-sm"
+                                        placeholder="Min length"
+                                        value={field.min_length ?? ""}
+                                        onChange={(e) =>
+                                          updateField(actualIndex, {
+                                            min_length: e.target.value === "" ? undefined : Number(e.target.value),
+                                          })
+                                        }
+                                      />
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        className="text-sm"
+                                        placeholder="Max length"
+                                        value={field.max_length ?? ""}
+                                        onChange={(e) =>
+                                          updateField(actualIndex, {
+                                            max_length: e.target.value === "" ? undefined : Number(e.target.value),
+                                          })
+                                        }
+                                      />
+                                      <Input
+                                        className="text-sm"
+                                        placeholder="Regex pattern"
+                                        value={field.pattern || ""}
+                                        onChange={(e) =>
+                                          updateField(actualIndex, {
+                                            pattern: e.target.value,
+                                          })
+                                        }
+                                      />
+                                    </>
+                                  )}
+                                  <Input
+                                    className="text-sm"
+                                    placeholder="Print label override"
+                                    value={field.print_label || ""}
+                                    onChange={(e) =>
+                                      updateField(actualIndex, {
+                                        print_label: e.target.value,
+                                      })
+                                    }
+                                  />
+                                  <div className="col-span-3 grid gap-2 rounded-md border bg-background/70 p-2 md:grid-cols-4">
+                                    <div className="text-xs font-medium text-muted-foreground md:pt-2">
+                                      Visible when
+                                    </div>
+                                    <Select
+                                      value={field.visible_when?.field || "always"}
+                                      onValueChange={(v) =>
+                                        updateField(actualIndex, {
+                                          visible_when:
+                                            v === "always"
+                                              ? undefined
+                                              : updateCondition(field.visible_when, { field: v }),
+                                        })
+                                      }
+                                    >
+                                      <SelectTrigger className="text-sm">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="always">Always visible</SelectItem>
+                                        {fields
+                                          .filter((_, i) => i !== actualIndex)
+                                          .map((candidate) => (
+                                            <SelectItem key={candidate.name} value={candidate.name}>
+                                              {candidate.label || candidate.name}
+                                            </SelectItem>
+                                          ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Select
+                                      value={field.visible_when?.operator || "equals"}
+                                      disabled={!field.visible_when?.field}
+                                      onValueChange={(v) =>
+                                        updateField(actualIndex, {
+                                          visible_when: updateCondition(field.visible_when, {
+                                            operator: v as FieldConditionRule["operator"],
+                                          }),
+                                        })
+                                      }
+                                    >
+                                      <SelectTrigger className="text-sm">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {CONDITION_OPERATORS.map((op) => (
+                                          <SelectItem key={op} value={op}>
+                                            {op.replace("_", " ")}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Input
+                                      className="text-sm"
+                                      placeholder="Value"
+                                      disabled={
+                                        !field.visible_when?.field ||
+                                        field.visible_when.operator === "empty" ||
+                                        field.visible_when.operator === "not_empty"
+                                      }
+                                      value={String(field.visible_when?.value ?? "")}
+                                      onChange={(e) =>
+                                        updateField(actualIndex, {
+                                          visible_when: updateCondition(field.visible_when, {
+                                            value: e.target.value,
+                                          }),
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="col-span-3 grid gap-2 rounded-md border bg-background/70 p-2 md:grid-cols-4">
+                                    <div className="text-xs font-medium text-muted-foreground md:pt-2">
+                                      Required when
+                                    </div>
+                                    <Select
+                                      value={field.required_when?.field || "never"}
+                                      onValueChange={(v) =>
+                                        updateField(actualIndex, {
+                                          required_when:
+                                            v === "never"
+                                              ? undefined
+                                              : updateCondition(field.required_when, { field: v }),
+                                        })
+                                      }
+                                    >
+                                      <SelectTrigger className="text-sm">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="never">No condition</SelectItem>
+                                        {fields
+                                          .filter((_, i) => i !== actualIndex)
+                                          .map((candidate) => (
+                                            <SelectItem key={candidate.name} value={candidate.name}>
+                                              {candidate.label || candidate.name}
+                                            </SelectItem>
+                                          ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Select
+                                      value={field.required_when?.operator || "equals"}
+                                      disabled={!field.required_when?.field}
+                                      onValueChange={(v) =>
+                                        updateField(actualIndex, {
+                                          required_when: updateCondition(field.required_when, {
+                                            operator: v as FieldConditionRule["operator"],
+                                          }),
+                                        })
+                                      }
+                                    >
+                                      <SelectTrigger className="text-sm">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {CONDITION_OPERATORS.map((op) => (
+                                          <SelectItem key={op} value={op}>
+                                            {op.replace("_", " ")}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Input
+                                      className="text-sm"
+                                      placeholder="Value"
+                                      disabled={
+                                        !field.required_when?.field ||
+                                        field.required_when.operator === "empty" ||
+                                        field.required_when.operator === "not_empty"
+                                      }
+                                      value={String(field.required_when?.value ?? "")}
+                                      onChange={(e) =>
+                                        updateField(actualIndex, {
+                                          required_when: updateCondition(field.required_when, {
+                                            value: e.target.value,
+                                          }),
+                                        })
+                                      }
+                                    />
+                                  </div>
                                   <div className="col-span-3 flex gap-4">
                                     <label className="flex items-center gap-1.5">
                                       <CheckboxInput
@@ -737,6 +1177,19 @@ export function AdminApprovalTypes() {
                                       />
                                       <span className="text-xs text-muted-foreground">
                                         Required
+                                      </span>
+                                    </label>
+                                    <label className="flex items-center gap-1.5">
+                                      <CheckboxInput
+                                        checked={field.print_hidden || false}
+                                        onCheckedChange={(c) =>
+                                          updateField(actualIndex, {
+                                            print_hidden: !!c,
+                                          })
+                                        }
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        Hide in print
                                       </span>
                                     </label>
                                   </div>
@@ -793,6 +1246,12 @@ export function AdminApprovalTypes() {
                         configure attachment fields
                       </p>
                     </div>
+                  ) : isLoadingAttachments ? (
+                    <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
+                      <p className="text-muted-foreground">
+                        Loading attachment fields...
+                      </p>
+                    </div>
                   ) : attachmentFields.length === 0 ? (
                     <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
                       <Paperclip className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -800,8 +1259,8 @@ export function AdminApprovalTypes() {
                         No attachment fields configured
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        Click "Add Attachment Field" to create your first file
-                        upload field
+                        Attachment fields are optional. Add one only when this
+                        request type should collect files.
                       </p>
                     </div>
                   ) : (
@@ -947,6 +1406,69 @@ export function AdminApprovalTypes() {
                                   </div>
                                 ))}
                               </div>
+                            </div>
+
+                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                              <Label>Admin Template File (Optional)</Label>
+                              <p className="text-xs text-muted-foreground">
+                                Users can download this file while filling the form, complete it, and upload it back with the request.
+                              </p>
+                              <Input
+                                type="file"
+                                accept={field.allowed_extensions.map((ext) => `.${ext}`).join(",")}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0] ?? null;
+                                  updateAttachmentField(idx, {
+                                    templateFile: file,
+                                    removeTemplate: file ? false : field.removeTemplate,
+                                  });
+                                }}
+                              />
+                              {(field.templateFile ||
+                                (field.template_original_filename && !field.removeTemplate)) && (
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <span className="font-medium">
+                                    {field.templateFile?.name ||
+                                      field.template_original_filename}
+                                  </span>
+                                  <span className="text-muted-foreground">
+                                    {field.templateFile
+                                      ? formatBytes(field.templateFile.size)
+                                      : formatBytes(field.template_file_size_bytes)}
+                                  </span>
+                                  {field.id && field.template_original_filename && !field.removeTemplate && (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 gap-1"
+                                      onClick={() => {
+                                        window.open(
+                                          services.approvalTypes.getTemplateDownloadUrl(field.id!),
+                                          "_blank",
+                                        );
+                                      }}
+                                    >
+                                      <Download className="h-3.5 w-3.5" />
+                                      Download
+                                    </Button>
+                                  )}
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-destructive hover:text-destructive"
+                                    onClick={() =>
+                                      updateAttachmentField(idx, {
+                                        templateFile: null,
+                                        removeTemplate: true,
+                                      })
+                                    }
+                                  >
+                                    Remove template
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </Card>

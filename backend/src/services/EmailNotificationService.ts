@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { pool } from "../db.js";
+import { env } from "../env.js";
 
 type Recipient = {
   email: string;
@@ -171,12 +172,7 @@ function formatStatusLabel(status: string): string {
 }
 
 function buildRequestUrl(requestId: string): string {
-  const baseUrl = (
-    process.env.APP_BASE_URL ||
-    `http://localhost:${process.env.PORT || "4000"}`
-  ).replace(/\/+$/, "");
-
-  return `${baseUrl}/approvals/${requestId}`;
+  return `${env.DISPLAY_BASE_URL}/approvals/${requestId}`;
 }
 
 function formatDateTime(value: string | null | undefined): string {

@@ -21,6 +21,7 @@ async function main() {
     await verifyDatabaseReady();
     const app = express();
     const port = env.PORT;
+    const host = env.HOST;
     app.disable("x-powered-by");
     app.set("trust proxy", env.TRUST_PROXY);
     const allowedOrigins = [
@@ -63,6 +64,7 @@ async function main() {
             ok: true,
             service: "approval-central-api",
             environment: env.NODE_ENV,
+            publicUrl: env.APP_BASE_URL,
             uptimeSeconds: Math.round(process.uptime()),
         });
     });
@@ -138,10 +140,14 @@ async function main() {
                 : "Internal server error",
         });
     });
-    const server = app.listen(port, "0.0.0.0", () => {
-        console.log(`approval-central-api listening on http://0.0.0.0:${port}`);
-        if (env.APP_BASE_URL) {
-            console.log(`Public base URL: ${env.APP_BASE_URL}`);
+    const server = app.listen(port, host, () => {
+        console.log(`approval-central-api listening on http://${host}:${port}`);
+        console.log(`Open app: ${env.DISPLAY_BASE_URL}`);
+        if (env.DETECTED_BASE_URL && env.DETECTED_BASE_URL === env.APP_BASE_URL) {
+            console.log(`Detected public URL from deployment environment: ${env.DETECTED_BASE_URL}`);
+        }
+        if (env.NODE_ENV === "production" && !env.APP_BASE_URL) {
+            console.warn("APP_BASE_URL was not set and no deployment public URL was detected. Set APP_BASE_URL to the real public URL for email links and external access.");
         }
     });
     server.keepAliveTimeout = 65000;

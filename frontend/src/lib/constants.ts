@@ -77,6 +77,34 @@ export type ApprovalFormField = {
   required: boolean;
   options?: string[];
   group?: string; // Field group for organizing into separate sections
+  placeholder?: string;
+  help_text?: string;
+  default_value?: string;
+  width?: "third" | "half" | "full";
+  min?: number;
+  max?: number;
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
+  print_hidden?: boolean;
+  print_label?: string;
+  visible_when?: FieldConditionRule | null;
+  required_when?: FieldConditionRule | null;
+};
+
+export type FieldConditionOperator =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "greater_than"
+  | "less_than"
+  | "empty"
+  | "not_empty";
+
+export type FieldConditionRule = {
+  field: string;
+  operator: FieldConditionOperator;
+  value?: string | number | boolean | string[] | null;
 };
 
 export type ApprovalTypeRow = {

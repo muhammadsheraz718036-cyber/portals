@@ -17,6 +17,12 @@ import {
   getGroups,
   type LineItem,
 } from "@/lib/lineItems";
+import {
+  fieldGridClass,
+  inputTypeForField,
+  isFieldRequired,
+  isFieldVisible,
+} from "@/lib/formSchema";
 
 interface LineItemsManagerProps {
   items: LineItem[];
@@ -73,13 +79,23 @@ export function LineItemsManager({
   ) => {
     const value = item[field.name] ?? "";
     const stringValue = String(value || "");
+    const commonInputProps = {
+      placeholder: field.placeholder || field.label,
+      min: field.min,
+      max: field.max,
+      minLength: field.min_length,
+      maxLength: field.max_length,
+      pattern: field.pattern,
+    };
 
     switch (field.type) {
+      case "currency":
       case "number":
         return (
           <Input
             type="number"
-            min="0"
+            min={field.min ?? 0}
+            max={field.max}
             step="0.01"
             inputMode="decimal"
             value={stringValue}
@@ -101,11 +117,17 @@ export function LineItemsManager({
         );
 
       case "date":
+      case "time":
+      case "datetime":
+      case "email":
+      case "url":
+      case "phone":
         return (
           <Input
-            type="date"
+            type={inputTypeForField(field)}
             value={stringValue}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
+            {...commonInputProps}
             className="h-10 w-full border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         );
@@ -129,11 +151,36 @@ export function LineItemsManager({
           </Select>
         );
 
+      case "multiselect":
+        return (
+          <select
+            multiple
+            value={Array.isArray(value) ? value.map(String) : []}
+            onChange={(e) =>
+              updateItem(
+                itemId,
+                field.name,
+                Array.from(e.target.selectedOptions).map((option) => option.value),
+              )
+            }
+            className="min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-primary/30"
+          >
+            {field.options?.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        );
+
       case "textarea":
         return (
           <Textarea
             value={String(value)}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
+            placeholder={field.placeholder || field.label}
+            minLength={field.min_length}
+            maxLength={field.max_length}
             className="min-h-[88px] border border-input bg-background px-3 py-2 focus-visible:ring-2 focus-visible:ring-primary/30"
             rows={2}
           />
@@ -152,9 +199,11 @@ export function LineItemsManager({
         );
 
       case "radio":
+      case "yes_no":
+        const options = field.type === "yes_no" ? ["yes", "no"] : field.options ?? [];
         return (
           <div className="flex flex-wrap gap-2">
-            {field.options?.map((option) => (
+            {options.map((option) => (
               <div key={option} className="flex items-center space-x-1">
                 <input
                   type="radio"
@@ -171,7 +220,7 @@ export function LineItemsManager({
                   htmlFor={`${itemId}_${field.name}_${option}`}
                   className="text-xs cursor-pointer"
                 >
-                  {option}
+                  {field.type === "yes_no" ? option.toUpperCase() : option}
                 </Label>
               </div>
             ))}
@@ -181,9 +230,10 @@ export function LineItemsManager({
       default:
         return (
           <Input
-            type="text"
+            type={inputTypeForField(field)}
             value={String(value)}
             onChange={(e) => updateItem(itemId, field.name, e.target.value)}
+            {...commonInputProps}
             className="h-10 w-full border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         );
@@ -206,7 +256,9 @@ export function LineItemsManager({
           <div className="space-y-6">
             {groups.map((group) => {
               const groupFields = repeatableFields.filter(
-                (field) => (field.group || "General") === group,
+                (field) =>
+                  (field.group || "General") === group &&
+                  isFieldVisible(field, { items: normalizedItems }, group),
               );
               const groupItems = normalizedItems.filter(
                 (item) => String(item.__group || "General") === group,
@@ -228,22 +280,25 @@ export function LineItemsManager({
                       {groupFields.map((field) => (
                         <div
                           key={`${groupItem.id}-${field.name}`}
-                          className={`space-y-2 rounded-lg bg-background/70 p-3 ${
-                            field.type === "textarea" ? "sm:col-span-2" : ""
-                          }`}
+                          className={`space-y-2 rounded-lg bg-background/70 p-3 ${fieldGridClass(field)}`}
                         >
                           <Label
                             htmlFor={`${groupItem.id}-${field.name}`}
                             className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                           >
                             {field.label}
-                            {field.required && (
+                            {isFieldRequired(field, { items: normalizedItems }, group) && (
                               <span className="ml-1 text-destructive">*</span>
                             )}
                           </Label>
                           <div id={`${groupItem.id}-${field.name}`}>
                             {renderFieldInput(field, groupItem, groupItem.id)}
                           </div>
+                          {field.help_text && (
+                            <p className="text-xs text-muted-foreground">
+                              {field.help_text}
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>

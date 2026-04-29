@@ -141,9 +141,6 @@ export default function AuditLogs() {
                     User
                   </th>
                   <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
-                    Action
-                  </th>
-                  <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
                     Category
                   </th>
                   <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide whitespace-nowrap">
@@ -168,7 +165,6 @@ export default function AuditLogs() {
                       {new Date(log.created_at).toLocaleString()}
                     </td>
                     <td className="px-4 py-3 font-medium">{log.user_name}</td>
-                    <td className="px-4 py-3">{log.action}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <Badge variant="outline" className="whitespace-nowrap">
                         {log.category}
@@ -202,12 +198,12 @@ export default function AuditLogs() {
       </Card>
 
       <Sheet open={!!selectedLog} onOpenChange={() => setSelectedLog(null)}>
-        <SheetContent className="animate-slide-in-right">
+        <SheetContent className="flex max-h-screen flex-col overflow-hidden animate-slide-in-right">
           <SheetHeader>
             <SheetTitle>Log Detail</SheetTitle>
           </SheetHeader>
           {selectedLog && (
-            <div className="mt-6 space-y-4 text-sm">
+            <div className="mt-6 flex-1 space-y-4 overflow-y-auto pr-2 text-sm">
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
                   Timestamp
